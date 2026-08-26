@@ -59,9 +59,19 @@ bump_version() {
 VERSION="$(bump_version)"
 LDFLAGS="-X omniharness/internal/version.Version=$VERSION -X omniharness/internal/version.Commit=release"
 
+# The package ships a win32-x64 binary; go build targets the host by default,
+# so the platform must be explicit — CI runs on Linux and would otherwise
+# publish a Linux ELF binary named .exe.
 TARGET="npm/vendor/win32-x64/omniharness.exe"
 mkdir -p "$(dirname "$TARGET")"
-go build -ldflags "$LDFLAGS" -o "$TARGET" ./cmd/omniharness
+GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o "$TARGET" ./cmd/omniharness
+
+# Sanity check: a Windows PE executable must start with "MZ". Never publish a
+# wrong-platform binary.
+if [[ "$(head -c 2 "$TARGET")" != "MZ" ]]; then
+  echo "error: built binary is not a Windows PE executable" >&2
+  exit 1
+fi
 echo "Built omniharness-cli v$VERSION (win32-x64) -> $TARGET"
 
 echo "Verifying: go vet ./... && go test -count=1 ./..."
