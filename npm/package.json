@@ -1,6 +1,6 @@
 {
   "name": "omniharness-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OmniHarness — local-first agent orchestration harness for OmniRoute. Analyzes tasks, selects strategies and models, drives agents, repairs failures, and learns from outcomes.",
   "license": "UNLICENSED",
   "bin": {

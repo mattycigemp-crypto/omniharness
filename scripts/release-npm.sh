@@ -24,7 +24,7 @@ if [[ -n "$VERSION" ]]; then
     j.version = '$VERSION';
     fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
   "
-  LDFLAGS="-X omniharness/internal/version.Version=$VERSION"
+  LDFLAGS="-X omniharness/internal/version.Version=$VERSION -X omniharness/internal/version.Commit=release"
 else
   VERSION="$(node -e "console.log(require('./npm/package.json').version)")"
 fi
