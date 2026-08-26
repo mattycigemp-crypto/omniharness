@@ -180,6 +180,12 @@ is only ever held in memory and sent in the request header; it is redacted from
 every error message, masked to `key_<last4>` in `doctor`, and never written to
 config files, sessions, telemetry, or logs.
 
+**Global setup is one command.** `source scripts/env.sh` puts the Go toolchain
+and the built `bin/omniharness` on PATH (from any directory) and defaults
+`OMNIROUTE_URL` when unset; it never sets the API key. For every new terminal,
+add that source line to `~/.bashrc` — the script itself never edits your
+profile.
+
 Launching the harness (`omniharness` or `omniharness start`) is a single
 command: when no key is configured it prompts interactively — `Paste your key
 (sk-…):` — accepts the pasted value for the session (never persisted), and
