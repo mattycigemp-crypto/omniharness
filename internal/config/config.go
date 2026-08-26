@@ -44,7 +44,7 @@ type MCServer struct {
 // OmniRoute configures the gateway connection.
 type OmniRoute struct {
 	// Endpoint is the base URL of the OmniRoute server, e.g.
-	// http://127.0.0.1:20131
+	// http://127.0.0.1:20128
 	Endpoint string `toml:"endpoint"`
 	// Timeout bounds a single model request.
 	Timeout time.Duration `toml:"timeout"`
@@ -128,17 +128,21 @@ func Default() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
 		OmniRoute: OmniRoute{
-			Endpoint: "http://127.0.0.1:20131",
+			Endpoint: "http://127.0.0.1:20128",
 			Timeout:  120 * time.Second,
 		},
 		Models: Models{
-			Default: "cursor/claude-sonnet-5-max",
+			// OmniRoute's auto/* combos route to whatever provider is actually
+			// provisioned, so they work out of the box on any instance. Explicit
+			// provider-pinned ids (e.g. cursor/claude-…) only work when that
+			// provider is configured and funded.
+			Default: "auto/best-coding",
 			Capabilities: map[string]string{
-				"reasoning":    "cursor/claude-opus-4-8-thinking-xhigh",
-				"fast":         "openai/gpt-5.4",
+				"reasoning":    "auto/best-reasoning",
+				"fast":         "auto/best-fast",
 				"cheap":        "",
 				"long-context": "",
-				"coding":       "cursor/claude-sonnet-5-max",
+				"coding":       "auto/best-coding",
 				"vision":       "",
 				"research":     "",
 				"review":       "",

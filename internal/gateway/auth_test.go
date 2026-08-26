@@ -143,6 +143,25 @@ func TestDiagnoseDistinguishesStates(t *testing.T) {
 			t.Fatalf("state = %s (%s)", d.State, d.Detail)
 		}
 	})
+	t.Run("ws-only listener (426)", func(t *testing.T) {
+		// OmniRoute's WebSocket-only port answers 426 "Use WebSocket." to plain
+		// HTTP. Diagnose must classify this as misconfigured and point at the
+		// HTTP API port, without leaking any credential.
+		fake := testutil.NewFakeOmniRoute(t)
+		fake.UpgradeRequired = true
+		fake.RequireAPIKey = testKey
+		c := fake.ClientWithKey(testKey)
+		d := c.Diagnose(context.Background())
+		if d.State != gateway.AuthMisconfigured {
+			t.Fatalf("state = %s (%s)", d.State, d.Detail)
+		}
+		if !strings.Contains(d.Detail, "20128") || !strings.Contains(d.Detail, "WebSocket") {
+			t.Fatalf("detail = %q, want a WebSocket/port hint", d.Detail)
+		}
+		if strings.Contains(d.Detail, testKey) {
+			t.Fatalf("detail leaked the key: %q", d.Detail)
+		}
+	})
 	t.Run("unreachable", func(t *testing.T) {
 		// A server that is immediately closed: connections are refused.
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))

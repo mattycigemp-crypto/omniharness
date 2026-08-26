@@ -52,6 +52,9 @@ type FakeOmniRoute struct {
 	BounceAuthHeader bool
 	// AuthHeaders records the Authorization header of every client request.
 	AuthHeaders []string
+	// UpgradeRequired, when set, makes /v1/models answer 426 "Use WebSocket."
+	// exactly like OmniRoute's WebSocket-only listener.
+	UpgradeRequired bool
 }
 
 // NewFakeOmniRoute starts the fake server.
@@ -61,6 +64,13 @@ func NewFakeOmniRoute(t *testing.T, steps ...FakeStep) *FakeOmniRoute {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 		f.recordAuth(r)
+		if f.UpgradeRequired {
+			// Mirrors OmniRoute's WebSocket-only listener: plain HTTP gets 426.
+			w.WriteHeader(426)
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"error":"upgrade_required","message":"Use WebSocket."}`)
+			return
+		}
 		if !f.authOK(r) {
 			f.writeAuthError(w, r)
 			return
@@ -139,8 +149,12 @@ func NewFakeOmniRoute(t *testing.T, steps ...FakeStep) *FakeOmniRoute {
 			http.Error(w, "unavailable", 502)
 			return
 		}
+		// Mirrors the real OmniRoute shape: {"connections":[{id, provider,
+		// authType, isActive, testStatus}]}.
 		json.NewEncoder(w).Encode(map[string]any{
-			"providers": []map[string]any{{"id": "fake", "name": "fake-provider", "status": "ok"}},
+			"connections": []map[string]any{
+				{"id": "conn-fake", "provider": "fake-provider", "authType": "key", "isActive": true, "testStatus": "active"},
+			},
 		})
 	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })

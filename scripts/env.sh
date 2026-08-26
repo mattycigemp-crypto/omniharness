@@ -9,7 +9,7 @@
 #   2. The omniharness binary directory (bin/) on PATH, so `omniharness`
 #      resolves from any directory. After pulling new code, rebuild with:
 #        go build -o bin/omniharness.exe ./cmd/omniharness
-#   3. OMNIROUTE_URL defaulting to http://127.0.0.1:20131 (only when unset).
+#   3. OMNIROUTE_URL defaulting to http://127.0.0.1:20128 (only when unset).
 #
 # OMNIROUTE_API_KEY is intentionally NOT set here. Provide it when needed:
 #
@@ -39,5 +39,5 @@ _add_path "$REPO_ROOT/bin"
 
 # Optional convenience default; never overrides an explicit user value.
 if [[ -z "${OMNIROUTE_URL:-}" ]]; then
-  export OMNIROUTE_URL="http://127.0.0.1:20131"
+  export OMNIROUTE_URL="http://127.0.0.1:20128"
 fi

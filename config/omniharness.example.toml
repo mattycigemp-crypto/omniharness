@@ -5,12 +5,12 @@
 # plus environment overrides.
 #
 # OmniRoute connection:
-#   - endpoint: base URL of the OmniRoute gateway (default http://127.0.0.1:20131)
+#   - endpoint: base URL of the OmniRoute HTTP API (default http://127.0.0.1:20128)
 #   - timeout:  per-request bound for a single model call
 #   - api_key:  OPTIONAL. Prefer the environment variable instead — a key
 #               written here sits in plaintext on disk. The recommended way:
 #
-#                   export OMNIROUTE_URL=http://127.0.0.1:20131
+#                   export OMNIROUTE_URL=http://127.0.0.1:20128
 #                   export OMNIROUTE_API_KEY=sk-…    # OmniRoute API key
 #
 #   OmniHarness authenticates to OmniRoute with `Authorization: Bearer <key>`
@@ -19,19 +19,22 @@
 #   its last 4 characters (key_<last4>) and the auth verdict.
 
 [omniroute]
-endpoint = "http://127.0.0.1:20131"
+endpoint = "http://127.0.0.1:20128"
 timeout = "120s"
 # api_key = ""   # prefer OMNIROUTE_API_KEY
 
+# OmniRoute's auto/* combos route to whatever provider is actually
+# provisioned, so they work on any instance. Explicit provider-pinned ids
+# (e.g. cursor/claude-…) only work when that provider is configured+funded.
 [models]
-default = "cursor/claude-sonnet-5-max"
+default = "auto/best-coding"
 
 [models.capabilities]
-reasoning = "cursor/claude-opus-4-8-thinking-xhigh"
-fast = "openai/gpt-5.4"
+reasoning = "auto/best-reasoning"
+fast = "auto/best-fast"
 cheap = ""
 long-context = ""
-coding = "cursor/claude-sonnet-5-max"
+coding = "auto/best-coding"
 vision = ""
 research = ""
 review = ""

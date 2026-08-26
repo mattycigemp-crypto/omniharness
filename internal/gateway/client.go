@@ -296,6 +296,12 @@ func (c *Client) Diagnose(ctx context.Context) Diagnosis {
 			d.State = AuthRejected
 			d.Detail = "API key rejected by server"
 		}
+	case resp.StatusCode == 426: // Upgrade Required
+		// OmniRoute listens with a WebSocket-only front door (returns 426
+		// "Use WebSocket" to plain HTTP) alongside the HTTP API port. This is
+		// almost always a wrong port, not a broken server.
+		d.State = AuthMisconfigured
+		d.Detail = "endpoint answered 426 Upgrade Required (WebSocket-only listener); point OMNIROUTE_URL at the HTTP API port (default http://127.0.0.1:20128)"
 	default:
 		d.State = AuthMisconfigured
 		d.Detail = fmt.Sprintf("reachable; /v1/models returned HTTP %d", resp.StatusCode)
@@ -339,11 +345,37 @@ func (c *Client) ListProviders(ctx context.Context) ([]Provider, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, c.errf(Classify(resp.StatusCode), resp.StatusCode, "list providers")
 	}
+	// OmniRoute returns {"connections":[{id, provider, authType, isActive,
+	// testStatus, providerSpecificData…}]}. We decode only the fields we
+	// display; anything else (including provider credentials embedded in
+	// providerSpecificData) is dropped.
 	var out struct {
-		Providers []Provider `json:"providers"`
+		Connections []struct {
+			ID         string `json:"id"`
+			Name       string `json:"provider"`
+			AuthType   string `json:"authType"`
+			IsActive   bool   `json:"isActive"`
+			TestStatus string `json:"testStatus"`
+		} `json:"connections"`
 	}
-	if err := json.Unmarshal(raw, &out); err == nil && len(out.Providers) > 0 {
-		return out.Providers, nil
+	if err := json.Unmarshal(raw, &out); err == nil && len(out.Connections) > 0 {
+		providers := make([]Provider, 0, len(out.Connections))
+		for _, c := range out.Connections {
+			status := "inactive"
+			if c.IsActive {
+				status = "active"
+			}
+			if c.TestStatus != "" {
+				status = c.TestStatus
+			}
+			providers = append(providers, Provider{
+				ID:      c.ID,
+				Name:    c.Name,
+				Channel: c.AuthType,
+				Status:  status,
+			})
+		}
+		return providers, nil
 	}
 	// Some deployments return a bare array.
 	var arr []Provider

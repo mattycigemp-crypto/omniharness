@@ -31,7 +31,7 @@ The harness treats the **current working directory** as the workspace.
 
 | Variable | Meaning |
 |---|---|
-| `OMNIROUTE_URL` | OmniRoute endpoint (default `http://127.0.0.1:20131`) |
+| `OMNIROUTE_URL` | OmniRoute endpoint (default `http://127.0.0.1:20128`, the HTTP API port) |
 | `OMNIROUTE_API_KEY` | OmniRoute API key — `Authorization: Bearer <key>` on every request |
 
 If `OMNIROUTE_API_KEY` is unset, the harness asks you to paste the key on

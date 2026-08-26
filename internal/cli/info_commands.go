@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -38,6 +39,10 @@ func newModelsCmd() *cobra.Command {
 			defer cancel()
 			providers, err := rt.Gateway.ListProviders(ctx)
 			if err != nil {
+				var ge *gateway.Error
+				if errors.As(err, &ge) && ge.Kind == gateway.KindAuth {
+					return fmt.Errorf("list providers requires an OmniRoute API key; set OMNIROUTE_API_KEY (see `omniharness doctor`)")
+				}
 				return fmt.Errorf("list providers: %w", err)
 			}
 			fmt.Printf("OmniRoute endpoint: %s\n", cfg.OmniRoute.Endpoint)
@@ -128,7 +133,10 @@ func newDoctorCmd() *cobra.Command {
 				defer rt.Close()
 			}
 
-			ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+			// OmniRoute's /v1/models can take tens of seconds to rebuild its
+			// catalog after idle (observed >25s), so give the probe real budget
+			// instead of misreporting a live server as unreachable.
+			ctx, cancel := context.WithTimeout(cmd.Context(), 45*time.Second)
 			defer cancel()
 			diag := rt.Gateway.Diagnose(ctx)
 

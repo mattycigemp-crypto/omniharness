@@ -71,7 +71,10 @@ func TestServerCrashFailsCallCleanly(t *testing.T) {
 	if !pythonAvailable() {
 		t.Skip("python not available")
 	}
-	// A server that exits immediately after initialize — a crash mid-conversation.
+	// A server that survives the handshake and crashes on the first tool call
+	// — a crash mid-conversation. (Exiting right after initialize would race
+	// the client's notifications/initialized write against the process death
+	// and make Start nondeterministic.)
 	crash := `
 import json, sys
 for line in sys.stdin:
@@ -82,6 +85,7 @@ for line in sys.stdin:
     if msg.get("method") == "initialize":
         sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"protocolVersion": "2025-03-26", "capabilities": {}, "serverInfo": {"name": "crashy", "version": "1"}}}) + "\n")
         sys.stdout.flush()
+    else:
         raise SystemExit(1)
 `
 	script := t.TempDir() + "/crash_mcp.py"

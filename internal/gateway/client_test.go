@@ -170,7 +170,7 @@ func TestListProvidersAndModels(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/providers":
 			json.NewEncoder(w).Encode(map[string]any{
-				"providers": []map[string]any{{"id": "p1", "name": "cursor"}},
+				"connections": []map[string]any{{"id": "p1", "provider": "cursor", "authType": "key", "isActive": true, "testStatus": "active"}},
 			})
 		case "/api/providers/p1/models":
 			json.NewEncoder(w).Encode(map[string]any{

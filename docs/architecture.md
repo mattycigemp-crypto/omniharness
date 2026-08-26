@@ -9,7 +9,8 @@ Status: **Phase 0 complete; implementation in progress**
 - OmniRoute exists as a **local runtime** at `~/.omniroute`:
   - `storage.sqlite` (encrypted at rest), `call_logs/<date>/*.json`, `logs/application/app.log`
   - HTTP routing/proxy server (Anthropic-style + OpenAI-style endpoints), dashboard WS on
-    `127.0.0.1:20131/20132` (was not running at inspection time)
+    `127.0.0.1:20128` HTTP API / `20131` WebSocket-only listener / `20132` live
+    channel (server was not running at inspection time)
 - The integration surface was reverse-engineered from 261 real call logs:
 
 | Endpoint | Method | Purpose |
@@ -171,7 +172,7 @@ verified directly against the installed OmniRoute server source
 Configuration (never committed, never printed):
 
 ```sh
-export OMNIROUTE_URL=http://127.0.0.1:20131
+export OMNIROUTE_URL=http://127.0.0.1:20128
 export OMNIROUTE_API_KEY=sk-…   # the OmniRoute API key
 ```
 
@@ -239,7 +240,42 @@ endpoint that misbehaves.
   exactly one session.
 - **`serve /health`** reports the real version and an auth-state diagnosis.
 
-## 9. Anti-goals (v1)
+## 9. Live integration verification (real OmniRoute, authenticated)
+
+Verified against the running OmniRoute instance (`omniroute serve`, port map
+below) with a real model inference:
+
+- **Port map (same server process):** `20128` = HTTP API (`/v1/models` → 200,
+  chat completions work); `20131` = WebSocket-only listener that answers `426
+  Upgrade Required {"error":"upgrade_required","message":"Use WebSocket."}` to
+  plain HTTP; `20132` = live dashboard channel. `OMNIROUTE_URL` must point at
+  `20128`; the gateway now classifies a 426 as a WebSocket-only listener and
+  prints that hint instead of "misconfigured".
+- **Streaming:** OmniRoute streams by default. The gateway always sends
+  `"stream":false` (the agent already did), so responses decode as plain JSON.
+- **Anonymous local mode:** with `REQUIRE_API_KEY` off, `/v1/models` and
+  chat completions work with no key (`doctor` reports `auth not required`).
+  `/api/providers` still requires a key → `models` errors with a hint to set
+  `OMNIROUTE_API_KEY`.
+- **Real inference:** `auto/best-fast` → `gemini-3.1-flash-lite` (streamed),
+  `auto/best-coding` → `aion-labs/aion-3.0-mini` → answered `PONG` end to end
+  through the harness (`run` → analyze → strategy → agent → model → verify →
+  persisted `task.completed`). `cursor/*` models exist in the catalog but do
+  not route on this instance (provider not provisioned); `openai/gpt-5.4`
+  routes but is out of credits (429 — surfaced as a typed provider error).
+- **Config defaults now use `auto/best-*`** so fresh installs work on any
+  instance; the home config (`~/.omniharness.toml`) was migrated from
+  `cursor/…` + `openai/gpt-5.4`.
+- **`/api/providers`** returns `{"connections":[{id, provider, authType,
+  isActive, testStatus, providerSpecificData…}]}` (not a bare array). The
+  decoder maps only display fields — provider credentials embedded in
+  `providerSpecificData` are dropped, never echoed. Per-provider models take
+  the connection UUID.
+- **Doctor probe budget** raised 10s → 45s: `/v1/models` can take >25s to
+  rebuild the 5,886-model catalog after idle, which previously misreported a
+  live server as unreachable.
+
+## 10. Anti-goals (v1)
 
 No Kubernetes, microservices, remote DBs, message brokers, web frontends, Electron,
 vector databases, or "AI frameworks". Local-first, native, single binary.
