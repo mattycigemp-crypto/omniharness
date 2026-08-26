@@ -47,8 +47,11 @@ func newUpdateCmd() *cobra.Command {
 
 // installedFromNpm reports whether an executable path lives inside the npm
 // package's vendor directory (true) or is a source/dev build (false).
+// Backslashes are normalized explicitly because filepath.ToSlash only converts
+// the host OS separator — a Windows path would slip through on Linux CI.
 func installedFromNpm(exePath string) bool {
-	return strings.Contains(filepath.ToSlash(exePath), npmVendorMarker)
+	norm := strings.ReplaceAll(exePath, "\\", "/")
+	return strings.Contains(norm, npmVendorMarker)
 }
 
 // compareVersions compares dotted numeric versions ("1.2.3" vs "1.10.0");
