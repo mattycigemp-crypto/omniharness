@@ -11,18 +11,27 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $sh = Join-Path $repoRoot 'scripts\release-npm.sh'
 
-# Locate a bash to run the script with.
-$bash = $null
-if (Get-Command bash -ErrorAction SilentlyContinue) {
-    $bash = (Get-Command bash).Source
-} elseif (Test-Path "$env:ProgramFiles\Git\bin\bash.exe") {
-    $bash = "$env:ProgramFiles\Git\bin\bash.exe"
-} elseif (Test-Path "${env:ProgramFiles(x86)}\Git\bin\bash.exe") {
-    $bash = "${env:ProgramFiles(x86)}\Git\bin\bash.exe"
+# Locate a bash to run the script with. Prefer Git Bash's own bash.exe (it
+# accepts Windows paths); fall back to a PATH `bash` only when it is not the
+# WSL shim (C:\Windows\System32\bash.exe), which cannot run Windows paths.
+$candidates = @()
+foreach ($p in @(
+    "$env:ProgramFiles\Git\bin\bash.exe",
+    "${env:ProgramFiles(x86)}\Git\bin\bash.exe",
+    "$env:LOCALAPPDATA\Programs\Git\bin\bash.exe"
+)) {
+    if (Test-Path $p) { $candidates += $p }
 }
-if (-not $bash) {
+if (-not $candidates) {
+    $cmd = Get-Command bash -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source -notlike 'C:\Windows\System32\*') {
+        $candidates += $cmd.Source
+    }
+}
+if (-not $candidates) {
     Write-Error "Git Bash not found. Install Git for Windows, or run scripts\release-npm.sh from a Git Bash terminal."
 }
+$bash = $candidates[0]
 
 Write-Host "Running $sh via $bash"
 & $bash $sh @args
