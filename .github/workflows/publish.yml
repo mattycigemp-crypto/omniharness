@@ -1,0 +1,42 @@
+name: Publish
+
+# Auto-publish omniharness-cli on every push to main using npm trusted
+# publishing (OIDC). No npm token is stored anywhere: the workflow's
+# id-token: write permission lets npm mint a short-lived, workflow-scoped
+# credential, and npm attaches provenance automatically.
+#
+# One-time setup (npmjs.com, owner-only):
+#   Package settings (omniharness-cli) -> Settings -> Trusted publishing
+#   -> GitHub Actions -> user "mattycigemp-crypto", repo "omniharness",
+#   workflow filename "publish.yml", allowed action "npm publish".
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write # required for OIDC trusted publishing
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.27"
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false # never cache in release builds
+
+      # Bump the version, verify (vet + full test suite), build, and publish.
+      # npm CLI detects the OIDC environment and authenticates via trusted
+      # publishing without any token.
+      - name: Bump, verify and publish
+        run: bash scripts/release-npm.sh

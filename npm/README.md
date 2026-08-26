@@ -44,5 +44,10 @@ config, sessions, logs, or telemetry. The key is redacted from all output;
 
 - Only `win32-x64` is shipped in this version; other platforms can be added by
   building the Go binary and publishing a new release.
-- The source repository is the OmniHarness project; build with
-  `scripts/release-npm.sh` and publish with `npm publish`.
+- Publishing is automatic: every push to `main` on GitHub runs
+  `.github/workflows/publish.yml`, which bumps the version, verifies
+  (vet + tests), builds, and publishes via **npm trusted publishing (OIDC)**
+  — no npm token is stored anywhere, and provenance is attached automatically.
+  Locally, `scripts/release-npm.sh` (or `scripts\release-npm.ps1`) does the
+  same; add `--dry-run` to skip the publish, or pass `--minor`/`--major`/an
+  explicit version to control the bump.

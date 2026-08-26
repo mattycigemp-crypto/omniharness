@@ -3,6 +3,10 @@
   "version": "0.1.2",
   "description": "OmniHarness — local-first agent orchestration harness for OmniRoute. Analyzes tasks, selects strategies and models, drives agents, repairs failures, and learns from outcomes.",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mattycigemp-crypto/omniharness.git"
+  },
   "bin": {
     "omniharness": "cli.js"
   },

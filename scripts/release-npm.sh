@@ -19,7 +19,11 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-export PATH="$HOME/go-sdk/go/bin:$PATH"
+# Prefer the portable Go toolchain when present (local dev); CI installs Go
+# itself via actions/setup-go, so a missing ~/go-sdk must not break PATH.
+if [[ -x "$HOME/go-sdk/go/bin/go" ]]; then
+  export PATH="$HOME/go-sdk/go/bin:$PATH"
+fi
 
 DRY_RUN=0
 BUMP="patch"

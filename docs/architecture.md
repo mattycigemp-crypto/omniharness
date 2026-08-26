@@ -279,6 +279,16 @@ below) with a real model inference:
   (`npm install -g omniharness-cli@latest`, printed before running);
   source/dev builds print the rebuild command. Version comparison is numeric,
   and an unpublished package (E404) is reported, not treated as an error.
+  Launching the harness prints a best-effort, 24h-cached "update available"
+  notice for npm installs (source builds are never nagged).
+- **Release pipeline**: `.github/workflows/publish.yml` auto-publishes on every
+  push to `main` via npm **trusted publishing (OIDC)** — `id-token: write`, no
+  npm token, automatic provenance. The shared `scripts/release-npm.sh` bumps
+  the version (patch default; `--minor`/`--major`/explicit), verifies with
+  `go vet` + the full suite, builds, and publishes; `--dry-run` skips publish.
+  A local bypass-2FA-token hook was tried first but abandoned: npm is
+  deprecating bypass-2FA tokens (direct publish ends January 2027), and OIDC
+  only exists on hosted CI runners.
 
 ## 10. Anti-goals (v1)
 
