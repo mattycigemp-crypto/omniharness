@@ -73,6 +73,7 @@ execution through OmniRoute. It is local-first and headless-capable.`,
 		newStartCmd(),
 		newTUISubCmd(),
 		newLogCmd(),
+		newUpdateCmd(),
 	)
 	return root
 }

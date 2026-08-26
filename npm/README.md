@@ -23,6 +23,7 @@ omniharness run "add a README" --headless   # runs in the current directory
 omniharness                 # interactive cockpit (TUI)
 omniharness sessions        # persisted sessions
 omniharness models          # provider/model catalog from OmniRoute
+omniharness update          # check npm and self-update to the latest release
 ```
 
 The harness treats the **current working directory** as the workspace.

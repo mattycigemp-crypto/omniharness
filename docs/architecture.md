@@ -274,6 +274,11 @@ below) with a real model inference:
 - **Doctor probe budget** raised 10s → 45s: `/v1/models` can take >25s to
   rebuild the 5,886-model catalog after idle, which previously misreported a
   live server as unreachable.
+- **`omniharness update`** (`internal/cli/update.go`): checks the npm registry
+  for a newer `omniharness-cli` release. npm-installed binaries self-update
+  (`npm install -g omniharness-cli@latest`, printed before running);
+  source/dev builds print the rebuild command. Version comparison is numeric,
+  and an unpublished package (E404) is reported, not treated as an error.
 
 ## 10. Anti-goals (v1)
 
