@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"omniharness/internal/combo"
 	"omniharness/internal/config"
 	"omniharness/internal/event"
 	"omniharness/internal/runtime"
@@ -23,7 +25,7 @@ func newTestModel(t *testing.T) (*Model, *testutil.FakeOmniRoute) {
 		t.Fatal(err)
 	}
 	t.Cleanup(rt.Close)
-	return New(cfg, rt), fake
+	return New(cfg, rt, ""), fake
 }
 
 // update routes a message through the model, asserting the result stays a *Model.
@@ -191,6 +193,207 @@ func TestModelRunningFlagBlocksDuplicateSubmission(t *testing.T) {
 	}
 	if len(sessions) != 1 {
 		t.Fatalf("sessions = %d, want exactly 1 (no orphaned sessions)", len(sessions))
+	}
+}
+
+func TestModelChatThreadBuildsConversation(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.width, m.height = 120, 40
+
+	m = publish(t, m, &event.TaskCreatedData{Prompt: "build the feature"})
+	m = publish(t, m, &event.StrategySelectedData{Strategy: "direct", Reason: "simple"})
+	m = publish(t, m, &event.TaskCompletedData{Summary: "shipped it", Output: "details"})
+
+	if len(m.conversation) < 2 {
+		t.Fatalf("conversation has %d lines, want >= 2", len(m.conversation))
+	}
+	if m.conversation[0].Kind != chatUser || m.conversation[0].Text != "build the feature" {
+		t.Fatalf("first line %+v", m.conversation[0])
+	}
+	view := m.View()
+	if !strings.Contains(view, "build the feature") {
+		t.Fatalf("user bubble not rendered:\n%s", view)
+	}
+	if !strings.Contains(view, "shipped it") {
+		t.Fatalf("result bubble not rendered:\n%s", view)
+	}
+	// Sidebar should show the strategy and session id.
+	if !strings.Contains(view, "strategy") || !strings.Contains(view, "direct") {
+		t.Fatalf("sidebar missing strategy:\n%s", view)
+	}
+}
+
+func TestModelTypewriterRevealsResultProgressively(t *testing.T) {
+	m, _ := newTestModel(t)
+	full := "the final answer text"
+	tsk := &task.Task{Status: task.StatusCompleted, Result: &task.Result{Summary: full}}
+	m, _ = update(t, m, taskDoneMsg{Task: tsk})
+	if m.running {
+		t.Fatal("running must clear on completion")
+	}
+	if m.streamFull != full {
+		t.Fatalf("streamFull = %q", m.streamFull)
+	}
+	// The first tick reveals a prefix; after enough ticks the whole text shows.
+	m, _ = update(t, m, tickMsg{})
+	if m.stream == "" || len(m.stream) >= len(full) {
+		t.Fatalf("after first tick stream = %q (want a partial reveal)", m.stream)
+	}
+	if !strings.HasPrefix(full, m.stream) {
+		t.Fatalf("stream %q is not a prefix of %q", m.stream, full)
+	}
+	for i := 0; i < 100 && m.streamIdx < len(full); i++ {
+		m, _ = update(t, m, tickMsg{})
+	}
+	if m.stream != full {
+		t.Fatalf("stream never reached full text: %q", m.stream)
+	}
+}
+
+func TestModelSpinnerAdvancesOnTick(t *testing.T) {
+	m, _ := newTestModel(t)
+	f0 := m.frame
+	m, _ = update(t, m, tickMsg{})
+	if m.frame != f0+1 {
+		t.Fatalf("frame did not advance: %d -> %d", f0, m.frame)
+	}
+}
+
+func TestModelComboPickerNavigatesAndSets(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.configPath = t.TempDir() + string(os.PathSeparator) + "cfg.toml"
+	m.combos = []combo.Option{
+		{ID: "auto/best-coding", Description: "coding", Kind: "auto"},
+		{ID: "auto/best-reasoning", Description: "reasoning", Kind: "auto"},
+	}
+	m.combosLoading = false
+	m.view = ViewCombo
+
+	// Navigate to auto/best-reasoning and apply it.
+	m, _ = update(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.comboSel != 1 {
+		t.Fatalf("comboSel = %d", m.comboSel)
+	}
+	m2, cmd := update(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("pickCombo must not return a command")
+	}
+	if m2.cfg.Models.Default != "auto/best-reasoning" {
+		t.Fatalf("cfg.Models.Default = %q", m2.cfg.Models.Default)
+	}
+	if m2.view != ViewMain {
+		t.Fatalf("view = %s, want main", m2.view)
+	}
+	// Persisted to the config file (picker writes through config.Save), and
+	// the API key must never be written.
+	data, err := os.ReadFile(m2.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "auto/best-reasoning") {
+		t.Fatalf("picked combo not persisted:\n%s", data)
+	}
+	if strings.Contains(string(data), "api_key") {
+		t.Fatalf("combo picker wrote a secrets section:\n%s", data)
+	}
+}
+
+func TestModelComboPickerCustomIdEntry(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.configPath = t.TempDir() + string(os.PathSeparator) + "cfg.toml"
+	m.combos = []combo.Option{{ID: "auto/best-coding", Description: "coding", Kind: "auto"}}
+	m.combosLoading = false
+	m.view = ViewCombo
+
+	// Last row is the custom-id entry: select past the list and press enter.
+	m, _ = update(t, m, tea.KeyMsg{Type: tea.KeyDown}) // now at len(combos) == 1
+	if m.comboSel != 1 {
+		t.Fatalf("comboSel = %d, want 1 (custom entry)", m.comboSel)
+	}
+	m2, _ := update(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !m2.modelInput || !m2.inputFocused || m2.view != ViewMain {
+		t.Fatalf("model input mode not entered: %+v", m2)
+	}
+
+	// Type a specific model id and submit.
+	m3, _ := update(t, m2, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("openai/gpt-5.4")})
+	m3, cmd3 := update(t, m3, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd3 != nil {
+		t.Fatal("applyCombo must not return a command")
+	}
+	if m3.cfg.Models.Default != "openai/gpt-5.4" {
+		t.Fatalf("cfg.Models.Default = %q", m3.cfg.Models.Default)
+	}
+	if m3.modelInput {
+		t.Fatal("model input mode must clear after submit")
+	}
+}
+
+func TestModelComboPickerRejectsMalformedId(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.configPath = t.TempDir() + string(os.PathSeparator) + "cfg.toml"
+	m.combos = []combo.Option{{ID: "auto/best-coding", Description: "coding", Kind: "auto"}}
+	m.combosLoading = false
+	m.view = ViewCombo
+	m, _ = update(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = update(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("not-a-model")})
+	m2, cmd := update(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("rejected id must not return a command")
+	}
+	if m2.cfg.Models.Default != "auto/best-coding" {
+		t.Fatalf("malformed id must not change the combo (got %q)", m2.cfg.Models.Default)
+	}
+}
+
+func TestModelComboPickerEscBackToMain(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.view = ViewCombo
+	m, _ = update(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.view != ViewMain {
+		t.Fatalf("view = %s, want main", m.view)
+	}
+}
+
+func TestModelTracksActualModelsUsed(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.width, m.height = 120, 40
+
+	m = publish(t, m, &event.ModelRequestedData{Model: "auto/best-coding", Reason: "config default"})
+	m = publish(t, m, &event.ModelRespondedData{Model: "auto/best-coding", TokensIn: 100, TokensOut: 200, CostUSD: 0.001})
+	m = publish(t, m, &event.ModelRequestedData{Model: "auto/best-reasoning", Reason: "repair escalation"})
+	m = publish(t, m, &event.ModelFailedData{Model: "auto/best-reasoning", Error: "boom"})
+
+	if len(m.modelStats) != 2 {
+		t.Fatalf("modelStats = %d, want 2", len(m.modelStats))
+	}
+	coding := m.modelStats[0]
+	if coding.ID != "auto/best-coding" || coding.Calls != 1 || coding.TokensIn != 100 || coding.TokensOut != 200 || coding.LastState != "ok" {
+		t.Fatalf("coding stat %+v", coding)
+	}
+	reasoning := m.modelStats[1]
+	if reasoning.Failures != 1 || reasoning.LastState != "failed" || reasoning.Reason != "repair escalation" {
+		t.Fatalf("reasoning stat %+v", reasoning)
+	}
+	if m.lastModel != "auto/best-reasoning" {
+		t.Fatalf("lastModel = %q", m.lastModel)
+	}
+	view := m.View()
+	if !strings.Contains(view, "auto/best-coding") || !strings.Contains(view, "auto/best-reasoning") {
+		t.Fatalf("actual models not rendered:\n%s", view)
+	}
+}
+
+func TestModelTaskResetClearsModelStats(t *testing.T) {
+	m, _ := newTestModel(t)
+	m = publish(t, m, &event.ModelRequestedData{Model: "auto/best-coding"})
+	if len(m.modelStats) != 1 {
+		t.Fatalf("modelStats = %d", len(m.modelStats))
+	}
+	m, _ = update(t, m, taskStartedMsg{SessionID: "s2", TaskID: "t2"})
+	if len(m.modelStats) != 0 || m.lastModel != "" {
+		t.Fatalf("model stats not reset: %d, last=%q", len(m.modelStats), m.lastModel)
 	}
 }
 

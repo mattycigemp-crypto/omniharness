@@ -23,9 +23,11 @@ endpoint = "http://127.0.0.1:20128"
 timeout = "120s"
 # api_key = ""   # prefer OMNIROUTE_API_KEY
 
-# OmniRoute's auto/* combos route to whatever provider is actually
-# provisioned, so they work on any instance. Explicit provider-pinned ids
-# (e.g. cursor/claude-…) only work when that provider is configured+funded.
+# The model combo the harness routes through. "auto/*" combos route to
+# whatever provider is actually provisioned, so they work on any instance;
+# explicit provider-pinned ids (e.g. openai/gpt-5.4) only work when that
+# provider is configured+funded. Choose interactively with `omniharness stack`
+# (or the TUI combo picker, p key).
 [models]
 default = "auto/best-coding"
 

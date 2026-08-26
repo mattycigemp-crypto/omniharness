@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"omniharness/internal/combo"
 	"omniharness/internal/config"
 	"omniharness/internal/event"
 	"omniharness/internal/policy"
@@ -32,6 +33,7 @@ const (
 	ViewGraph
 	ViewRouting
 	ViewSessions
+	ViewCombo
 	ViewHelp
 	viewCount
 )
@@ -48,6 +50,8 @@ func (v View) String() string {
 		return "routing"
 	case ViewSessions:
 		return "sessions"
+	case ViewCombo:
+		return "combo"
 	case ViewHelp:
 		return "help"
 	}
@@ -72,12 +76,47 @@ type eventLine struct {
 	Text string
 }
 
+// chatKind identifies a conversation bubble.
+type chatKind int
+
+const (
+	chatUser chatKind = iota
+	chatHarness
+	chatResult
+	chatError
+)
+
+// chatLine is one bubble in the chat thread.
+type chatLine struct {
+	Kind chatKind
+	Text string
+	Time string
+}
+
+// modelStat aggregates one model's usage in the current session.
+type modelStat struct {
+	ID        string
+	Calls     int
+	TokensIn  int64
+	TokensOut int64
+	Cost      float64
+	Failures  int
+	LastState string // "ok" | "failed" | "requested"
+	Reason    string // last selection reason (explainability)
+}
+
+// combosMsg carries the fetched model combo list.
+type combosMsg struct {
+	Options []combo.Option
+	Live    bool // catalog came from the server, not the fallback
+}
+
 // approvalReq is a pending human approval.
 type approvalReq struct {
-	Tool    string
-	Risk    string
-	Reason  string
-	Reply   chan bool
+	Tool   string
+	Risk   string
+	Reason string
+	Reply  chan bool
 }
 
 // taskDoneMsg carries the finished task.
@@ -94,7 +133,7 @@ type approvalMsg struct{ Req *approvalReq }
 
 // approvalAnswerMsg is the user's answer.
 type approvalAnswerMsg struct {
-	Req  *approvalReq
+	Req   *approvalReq
 	Grant bool
 }
 
@@ -112,33 +151,50 @@ type taskStartedMsg struct {
 
 // Model is the TUI state.
 type Model struct {
-	cfg     config.Config
-	rt      *runtime.Runtime
-	program *tea.Program
-	view    View
+	cfg        config.Config
+	configPath string // where `stack set` persists (empty = don't persist)
+	rt         *runtime.Runtime
+	program    *tea.Program
+	view       View
 
 	width, height int
 
 	// Live task state.
-	sessionID string
-	taskID    string
-	status    task.Status
-	strategy  string
+	sessionID      string
+	taskID         string
+	status         task.Status
+	strategy       string
 	strategyReason string
-	steps     []string
-	prompt    string
-	agents    []agentRow
-	events    []eventLine // ring buffer
-	metrics   telemetry.SessionMetrics
-	repairs   int
+	steps          []string
+	prompt         string
+	agents         []agentRow
+	events         []eventLine // ring buffer
+	metrics        telemetry.SessionMetrics
+	repairs        int // Conversation (chat thread) + animation state.
+	conversation   []chatLine
+	frame          int    // animation frame (tick-driven)
+	stream         string // typewriter buffer (result text revealed so far)
+	streamFull     string // full result text to reveal
+	streamIdx      int
+
+	// Model combo picker.
+	combos        []combo.Option
+	combosLoading bool
+	comboSel      int
+	modelInput    bool // input bar is in "type a provider/model id" mode
+
+	// Per-model usage (actual models used this session).
+	modelStats  []modelStat
+	modelStatID map[string]int
+	lastModel   string // most recently requested model (header badge)
 
 	// Control.
-	running  bool
-	cancel   context.CancelFunc
-	approval *approvalReq
-	input    textinput.Model
+	running      bool
+	cancel       context.CancelFunc
+	approval     *approvalReq
+	input        textinput.Model
 	inputFocused bool
-	selected int // selected row in agent view
+	selected     int // selected row in agent view
 
 	// Sessions view.
 	sessions []*session.Session
@@ -149,31 +205,36 @@ type Model struct {
 
 // Styles holds the (deliberately restrained) visual language.
 type Styles struct {
-	base       lipgloss.Style
-	header     lipgloss.Style
-	muted      lipgloss.Style
-	accent     lipgloss.Style
-	ok         lipgloss.Style
-	err        lipgloss.Style
-	warn       lipgloss.Style
-	border     lipgloss.Style
-	footer     lipgloss.Style
-	title      lipgloss.Style
+	base   lipgloss.Style
+	header lipgloss.Style
+	muted  lipgloss.Style
+	accent lipgloss.Style
+	ok     lipgloss.Style
+	err    lipgloss.Style
+	warn   lipgloss.Style
+	border lipgloss.Style
+	footer lipgloss.Style
+	title  lipgloss.Style
 }
 
-// New builds the TUI model.
-func New(cfg config.Config, rt *runtime.Runtime) *Model {
+// New builds the TUI model. configPath is where a picked stack is persisted
+// (the config file the CLI loaded); pass "" to keep the picker in-memory.
+func New(cfg config.Config, rt *runtime.Runtime, configPath string) *Model {
 	in := textinput.New()
 	in.Placeholder = "describe a task…"
 	in.Prompt = "> "
 	in.CharLimit = 1000
 	return &Model{
-		cfg:    cfg,
-		rt:     rt,
-		view:   ViewMain,
-		input:  in,
-		status: task.StatusPending,
-		styles: makeStyles(cfg.TUI.Color),
+		cfg:           cfg,
+		configPath:    configPath,
+		rt:            rt,
+		view:          ViewMain,
+		input:         in,
+		status:        task.StatusPending,
+		styles:        makeStyles(cfg.TUI.Color),
+		modelStatID:   map[string]int{},
+		combos:        combo.List(nil), // offline fallback until the catalog loads
+		combosLoading: true,
 	}
 }
 
@@ -209,11 +270,23 @@ func makeStyles(color bool) Styles {
 // Init starts the input and refresh tick. Runtime events arrive through the
 // persistent subscription installed by Run (via prog.Send).
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.input.Focus(), tick())
+	return tea.Batch(m.input.Focus(), m.tick())
 }
 
-func tick() tea.Cmd {
-	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
+// refreshInterval returns the animation cadence from config (default 100ms).
+func (m *Model) refreshInterval() time.Duration {
+	ms := m.cfg.TUI.RefreshMS
+	if ms <= 0 {
+		ms = 100
+	}
+	if ms < 30 {
+		ms = 30
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+func (m *Model) tick() tea.Cmd {
+	return tea.Tick(m.refreshInterval(), func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
 // Update handles messages.
@@ -227,15 +300,34 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 
 	case tickMsg:
+		m.frame++
+		// Typewriter reveal: surface more of the final result each tick.
+		if m.streamIdx < len(m.streamFull) {
+			m.streamIdx += 5
+			if m.streamIdx > len(m.streamFull) {
+				m.streamIdx = len(m.streamFull)
+			}
+			m.stream = m.streamFull[:m.streamIdx]
+		}
 		if m.sessionID != "" {
 			if mm, err := telemetry.ForSession(m.rt.Store, m.sessionID); err == nil {
 				m.metrics = mm
 			}
 		}
-		return m, tick()
+		return m, m.tick()
 
 	case eventMsg:
 		m.applyEvent(msg.E)
+		return m, nil
+
+	case combosMsg:
+		m.combos = msg.Options
+		m.combosLoading = false
+		m.comboSel = 0
+		// If the fetch happened after the user pressed p, land in the picker.
+		if m.view == ViewCombo {
+			return m, nil
+		}
 		return m, nil
 
 	case approvalMsg:
@@ -259,6 +351,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.strategy = ""
 		m.strategyReason = ""
 		m.steps = nil
+		m.repairs = 0
+		m.lastModel = ""
+		m.modelStats = nil
+		m.modelStatID = map[string]int{}
+		// Reset the typewriter so a fresh task never replays a stale result.
+		m.streamFull = ""
+		m.stream = ""
+		m.streamIdx = 0
 		return m, nil
 
 	case taskDoneMsg:
@@ -269,6 +369,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = task.StatusFailed
 		}
 		m.refreshSessions()
+		// Prime the typewriter with the final result (real content, revealed
+		// progressively for effect).
+		if msg.Task != nil {
+			if full := resultText(msg.Task); full != "" {
+				m.streamFull = full
+				m.streamIdx = 0
+				m.stream = ""
+			}
+		}
 		return m, nil
 
 	case sessionsMsg:
@@ -295,21 +404,49 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.inputFocused {
 		switch msg.String() {
 		case "enter":
-			prompt := strings.TrimSpace(m.input.Value())
-			if prompt != "" {
-				m.input.SetValue("")
-				m.inputFocused = false
-				return m, m.startTask(prompt)
+			val := strings.TrimSpace(m.input.Value())
+			if val == "" {
+				return m, nil
 			}
-			return m, nil
+			m.input.SetValue("")
+			m.inputFocused = false
+			if m.modelInput {
+				// "type a provider/model id" mode: commit the combo.
+				m.modelInput = false
+				return m, m.applyCombo(val)
+			}
+			return m, m.startTask(val)
 		case "esc":
 			m.inputFocused = false
+			m.modelInput = false
 			return m, nil
 		default:
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			return m, cmd
 		}
+	}
+
+	// Combo picker navigation.
+	if m.view == ViewCombo {
+		switch msg.String() {
+		case "up":
+			if m.comboSel > 0 {
+				m.comboSel--
+			}
+			return m, nil
+		case "down":
+			if m.comboSel < len(m.combos) {
+				m.comboSel++
+			}
+			return m, nil
+		case "enter":
+			return m, m.pickCombo()
+		case "esc":
+			m.view = ViewMain
+			return m, nil
+		}
+		return m, nil
 	}
 
 	switch msg.String() {
@@ -337,6 +474,13 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "i":
 		m.inputFocused = true
+		return m, nil
+	case "p":
+		if m.combosLoading {
+			return m, m.fetchCombos()
+		}
+		m.comboSel = 0
+		m.view = ViewCombo
 		return m, nil
 	case "r":
 		m.refreshSessions()
@@ -384,6 +528,79 @@ func (m *Model) cancelTask() {
 	}
 }
 
+// fetchCombos loads the model combo list from the live OmniRoute catalog
+// (falling back to the built-in combos when unreachable). It never fails the
+// TUI; the fallback is always usable.
+func (m *Model) fetchCombos() tea.Cmd {
+	rt := m.rt
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		ids, err := rt.Gateway.ListCatalog(ctx)
+		if err != nil {
+			return combosMsg{Options: combo.List(nil), Live: false}
+		}
+		return combosMsg{Options: combo.List(ids), Live: true}
+	}
+}
+
+// pickCombo commits the selected picker entry: either a combo id or the
+// "type a provider/model id" entry, which flips the input bar to model mode.
+func (m *Model) pickCombo() tea.Cmd {
+	if m.comboSel == len(m.combos) {
+		// Custom id entry (last row).
+		m.modelInput = true
+		m.view = ViewMain
+		m.input.SetValue("")
+		m.input.Placeholder = "provider/model id… (e.g. openai/gpt-5.4)"
+		m.inputFocused = true
+		return m.input.Focus()
+	}
+	if m.comboSel < 0 || m.comboSel >= len(m.combos) {
+		return nil
+	}
+	return m.applyCombo(m.combos[m.comboSel].ID)
+}
+
+// applyCombo sets the model combo (cfg.Models.Default), persists it when a
+// config path is known, and confirms in the chat thread. Validation is
+// structural only; OmniRoute surfaces routing failures at request time.
+func (m *Model) applyCombo(id string) tea.Cmd {
+	if id == "" {
+		return m.noteError(fmt.Errorf("empty model combo"))
+	}
+	if !combo.IsAuto(id) && !strings.Contains(id, "/") {
+		return m.noteError(fmt.Errorf("%s", combo.FormatError(id)))
+	}
+	m.cfg.Models.Default = id
+	m.comboSel = 0
+	m.modelInput = false
+	m.view = ViewMain
+	m.input.Placeholder = "describe a task…"
+	m.chat(chatHarness, "combo → "+id+" — "+combo.Describe(id))
+	if m.configPath != "" {
+		cfg, err := config.Load(m.configPath)
+		if err != nil {
+			return m.noteError(err)
+		}
+		cfg.Models.Default = id
+		if err := cfg.Save(m.configPath); err != nil {
+			return m.noteError(err)
+		}
+	}
+	return nil
+}
+
+// noteError surfaces a transient error as a chat line.
+func (m *Model) noteError(err error) tea.Cmd {
+	m.conversation = append(m.conversation, chatLine{
+		Kind: chatError,
+		Text: err.Error(),
+		Time: time.Now().Format("15:04:05"),
+	})
+	return nil
+}
+
 func (m *Model) refreshSessions() {
 	ss, err := m.rt.ListSessions(20)
 	if err == nil {
@@ -425,16 +642,23 @@ func (m *Model) applyEvent(e event.Event) {
 		var d event.TaskCreatedData
 		decode(e, &d)
 		m.prompt = d.Prompt
+		m.chat(chatUser, truncate(d.Prompt, 500))
 	case event.StrategySelected:
 		var d event.StrategySelectedData
 		decode(e, &d)
 		m.strategy = d.Strategy
 		m.strategyReason = d.Reason
 		m.steps = d.Steps
+		reason := d.Reason
+		if reason == "" {
+			reason = "(no reason)"
+		}
+		m.chat(chatHarness, "strategy: "+d.Strategy+" — "+reason)
 	case event.AgentCreated:
 		var d event.AgentCreatedData
 		decode(e, &d)
 		m.agents = append(m.agents, agentRow{ID: shortID(e.AgentID), Role: d.Role, Model: d.Model, State: "created"})
+		m.chat(chatHarness, "agent ready · "+d.Role+" ("+d.Model+")")
 	case event.AgentUpdated, event.AgentCompleted, event.AgentFailed, event.AgentCancelled, event.AgentPaused:
 		var d event.AgentStateData
 		decode(e, &d)
@@ -445,29 +669,121 @@ func (m *Model) applyEvent(e event.Event) {
 		if m.metrics.ModelCalls == 0 {
 			m.metrics = telemetry.SessionMetrics{}
 		}
+		m.lastModel = d.Model
+		m.recordModelStat(d.Model, func(s *modelStat) {
+			s.TokensIn += d.TokensIn
+			s.TokensOut += d.TokensOut
+			s.Cost += d.CostUSD
+			s.LastState = "ok"
+		})
+		m.chat(chatHarness, fmt.Sprintf("model ← %s (%d+%d tok, $%.4f)", d.Model, d.TokensIn, d.TokensOut, d.CostUSD))
 	case event.RepairStarted:
 		var d event.RepairData
 		decode(e, &d)
 		m.repairs++
+		m.chat(chatHarness, fmt.Sprintf("repair #%d — %s", d.Attempt, d.Strategy))
 	case event.TaskCompleted:
 		var d event.TaskCompletedData
 		decode(e, &d)
 		m.status = task.StatusCompleted
 		if d.Summary != "" {
 			m.prompt = d.Summary
+			m.chat(chatResult, d.Summary)
 		}
 	case event.TaskFailed:
 		var d event.TaskFailedData
 		decode(e, &d)
 		m.status = task.StatusFailed
+		m.chat(chatError, "task failed: "+truncate(d.Error, 300))
 	case event.TaskCancelled:
 		m.status = task.StatusCancelled
+		m.chat(chatHarness, "task cancelled")
 	case event.TaskStarted:
 		var d event.TaskStateData
 		decode(e, &d)
 		m.status = d.Status
+	case event.ModelRequested:
+		var d event.ModelRequestedData
+		decode(e, &d)
+		m.lastModel = d.Model
+		m.recordModelStat(d.Model, func(s *modelStat) {
+			s.Calls++
+			s.LastState = "requested"
+			if d.Reason != "" {
+				s.Reason = d.Reason
+			}
+		})
+		if d.Reason != "" {
+			m.chat(chatHarness, "model → "+d.Model+" ("+d.Reason+")")
+		} else {
+			m.chat(chatHarness, "model → "+d.Model)
+		}
+	case event.ModelFailed:
+		var d event.ModelFailedData
+		decode(e, &d)
+		m.lastModel = d.Model
+		m.recordModelStat(d.Model, func(s *modelStat) {
+			s.Failures++
+			s.LastState = "failed"
+		})
+		m.chat(chatError, "model ✗ "+d.Model+": "+truncate(d.Error, 200))
+	case event.ToolRequested:
+		var d event.ToolRequestedData
+		decode(e, &d)
+		m.chat(chatHarness, "tool "+d.Tool+" ["+d.Risk+"]")
+	case event.ToolFailed:
+		var d event.ToolFailedData
+		decode(e, &d)
+		m.chat(chatError, "tool ✗ "+d.Tool+": "+truncate(d.Error, 160))
+	case event.EvaluationComplete:
+		var d event.EvaluationCompletedData
+		decode(e, &d)
+		m.chat(chatHarness, "verified · "+d.Evaluator+" → "+d.Outcome)
 	}
 	m.pushEvent(e)
+}
+
+// resultText extracts the final, user-facing result text of a task.
+func resultText(t *task.Task) string {
+	if t == nil {
+		return ""
+	}
+	if t.Result != nil {
+		if t.Result.Summary != "" {
+			return t.Result.Summary
+		}
+		if t.Result.Output != "" {
+			return t.Result.Output
+		}
+	}
+	return t.Error
+}
+
+// recordModelStat updates (or creates) the per-model usage row for id.
+// The mutate fn runs with the row already existing; rows are kept in first-use
+// order so the sidebar can show the most recent model last.
+func (m *Model) recordModelStat(id string, mutate func(*modelStat)) {
+	if id == "" {
+		return
+	}
+	idx, ok := m.modelStatID[id]
+	if !ok {
+		idx = len(m.modelStats)
+		m.modelStatID[id] = idx
+		m.modelStats = append(m.modelStats, modelStat{ID: id})
+	}
+	mutate(&m.modelStats[idx])
+}
+
+// chat appends a conversation bubble, keeping the thread bounded.
+func (m *Model) chat(k chatKind, text string) {
+	if text == "" {
+		return
+	}
+	m.conversation = append(m.conversation, chatLine{Kind: k, Text: text, Time: time.Now().Format("15:04:05")})
+	if len(m.conversation) > 400 {
+		m.conversation = m.conversation[len(m.conversation)-400:]
+	}
 }
 
 func (m *Model) upsertAgent(id string, d event.AgentStateData) {

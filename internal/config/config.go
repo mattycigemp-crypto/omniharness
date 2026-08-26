@@ -119,7 +119,7 @@ type Benchmark struct {
 
 // Logging configures structured logging.
 type Logging struct {
-	Level  string `toml:"level,omitempty"` // debug | info | warn | error
+	Level  string `toml:"level,omitempty"`  // debug | info | warn | error
 	Format string `toml:"format,omitempty"` // text | json
 }
 
@@ -183,8 +183,7 @@ func Default() Config {
 		Logging: Logging{
 			Level:  "info",
 			Format: "text",
-		},
-		MCP: MCP{},
+		}, MCP: MCP{},
 	}
 }
 
@@ -305,6 +304,28 @@ func (c *Config) applyEnv() {
 func DefaultPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".omniharness.toml")
+}
+
+// Save writes the configuration back to path as TOML. Used by `stack set`
+// and the TUI stack picker so the chosen stack persists across launches.
+// The API key is scrubbed before encoding: OmniHarness never writes secrets
+// to disk (keys come from the environment and stay in memory).
+func (c *Config) Save(path string) error {
+	if path == "" {
+		return fmt.Errorf("no config path")
+	}
+	keep := c.OmniRoute.APIKey
+	c.OmniRoute.APIKey = ""
+	defer func() { c.OmniRoute.APIKey = keep }()
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	defer f.Close()
+	if err := toml.NewEncoder(f).Encode(c); err != nil {
+		return fmt.Errorf("encode config %s: %w", path, err)
+	}
+	return nil
 }
 
 // WriteDefault writes the default config to path if it does not exist.

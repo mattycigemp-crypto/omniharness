@@ -15,8 +15,8 @@ import (
 
 	"omniharness/internal/agent"
 	composer "omniharness/internal/context"
-	"omniharness/internal/event"
 	"omniharness/internal/evaluate"
+	"omniharness/internal/event"
 	"omniharness/internal/gateway"
 	"omniharness/internal/id"
 	"omniharness/internal/memory"

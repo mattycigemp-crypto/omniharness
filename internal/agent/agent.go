@@ -46,66 +46,66 @@ func AllRoles() []Role {
 
 // RoleConfig declares a role's system prompt, model intent and tool policy.
 type RoleConfig struct {
-	Role         Role
-	Prompt       string
-	ModelIntent  model.Intent
-	ToolAllow    []string // empty = use registry policy only
+	Role        Role
+	Prompt      string
+	ModelIntent model.Intent
+	ToolAllow   []string // empty = use registry policy only
 }
 
 // DefaultRoles returns the built-in role definitions.
 func DefaultRoles() map[Role]RoleConfig {
 	return map[Role]RoleConfig{
 		RoleArchitect: {
-			Role:   RoleArchitect,
-			Prompt: "You are the architect. Produce precise designs, plans and decomposition. Be concrete: name files, functions and interfaces. Prefer reading before writing.",
+			Role:        RoleArchitect,
+			Prompt:      "You are the architect. Produce precise designs, plans and decomposition. Be concrete: name files, functions and interfaces. Prefer reading before writing.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapReasoning, model.CapCoding}},
 			ToolAllow:   []string{"read_file", "list_dir", "find_files", "search", "git"},
 		},
 		RoleImplementer: {
-			Role:   RoleImplementer,
-			Prompt: "You are the implementer. Make minimal, correct changes. Prefer editing existing files. Run the provided tools to inspect before you modify. Keep changes focused on the task.",
+			Role:        RoleImplementer,
+			Prompt:      "You are the implementer. Make minimal, correct changes. Prefer editing existing files. Run the provided tools to inspect before you modify. Keep changes focused on the task.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapCoding, model.CapFast}},
 			ToolAllow:   []string{"read_file", "write_file", "edit_file", "list_dir", "find_files", "search", "shell", "git"},
 		},
 		RoleResearcher: {
-			Role:   RoleResearcher,
-			Prompt: "You are the researcher. Gather evidence and sources. Report findings with citations and note uncertainty explicitly. Do not fabricate sources.",
+			Role:        RoleResearcher,
+			Prompt:      "You are the researcher. Gather evidence and sources. Report findings with citations and note uncertainty explicitly. Do not fabricate sources.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapResearch, model.CapReasoning}},
 			ToolAllow:   []string{"read_file", "list_dir", "find_files", "search", "shell", "git"},
 		},
 		RoleDebugger: {
-			Role:   RoleDebugger,
-			Prompt: "You are the debugger. Reproduce the failure first, then isolate root cause with the smallest possible experiment. Report the root cause and the fix.",
+			Role:        RoleDebugger,
+			Prompt:      "You are the debugger. Reproduce the failure first, then isolate root cause with the smallest possible experiment. Report the root cause and the fix.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapReasoning, model.CapCoding}},
 			ToolAllow:   []string{"read_file", "search", "shell", "git"},
 		},
 		RoleReviewer: {
-			Role:   RoleReviewer,
-			Prompt: "You are the reviewer. Check correctness, safety, and adherence to the task. Identify concrete defects with file/line references. Be skeptical; do not rubber-stamp.",
+			Role:        RoleReviewer,
+			Prompt:      "You are the reviewer. Check correctness, safety, and adherence to the task. Identify concrete defects with file/line references. Be skeptical; do not rubber-stamp.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapReview, model.CapReasoning}},
 			ToolAllow:   []string{"read_file", "list_dir", "find_files", "search", "shell", "git"},
 		},
 		RoleTester: {
-			Role:   RoleTester,
-			Prompt: "You are the tester. Write and run tests that prove the behavior described in the task. Report pass/fail per test.",
+			Role:        RoleTester,
+			Prompt:      "You are the tester. Write and run tests that prove the behavior described in the task. Report pass/fail per test.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapCoding, model.CapFast}},
 			ToolAllow:   []string{"read_file", "write_file", "edit_file", "search", "shell", "git"},
 		},
 		RoleSecurityAuditor: {
-			Role:   RoleSecurityAuditor,
-			Prompt: "You are the security auditor. Look for injection, secrets, unsafe file/shell operations, and privilege issues. Report severity and concrete fixes.",
+			Role:        RoleSecurityAuditor,
+			Prompt:      "You are the security auditor. Look for injection, secrets, unsafe file/shell operations, and privilege issues. Report severity and concrete fixes.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapReasoning, model.CapReview}},
 			ToolAllow:   []string{"read_file", "search", "git"},
 		},
 		RoleOptimizer: {
-			Role:   RoleOptimizer,
-			Prompt: "You are the optimizer. Improve performance without changing observable behavior. Measure before and after.",
+			Role:        RoleOptimizer,
+			Prompt:      "You are the optimizer. Improve performance without changing observable behavior. Measure before and after.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapCoding, model.CapReasoning}},
 			ToolAllow:   []string{"read_file", "edit_file", "search", "shell", "git"},
 		},
 		RoleSynthesizer: {
-			Role:   RoleSynthesizer,
-			Prompt: "You are the synthesizer. Combine the collected results into one coherent deliverable. Integrate, reconcile conflicts, and produce the final answer.",
+			Role:        RoleSynthesizer,
+			Prompt:      "You are the synthesizer. Combine the collected results into one coherent deliverable. Integrate, reconcile conflicts, and produce the final answer.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapReasoning, model.CapCoding}},
 			ToolAllow:   []string{"read_file", "search"},
 		},
@@ -116,28 +116,28 @@ func DefaultRoles() map[Role]RoleConfig {
 type Lifecycle string
 
 const (
-	LifecycleCreated    Lifecycle = "created"
-	LifecycleReady      Lifecycle = "ready"
-	LifecycleThinking   Lifecycle = "thinking"
-	LifecycleActing     Lifecycle = "acting"
-	LifecycleObserving  Lifecycle = "observing"
-	LifecyclePaused     Lifecycle = "paused"
-	LifecycleCompleted  Lifecycle = "completed"
-	LifecycleFailed     Lifecycle = "failed"
-	LifecycleCancelled  Lifecycle = "cancelled"
+	LifecycleCreated   Lifecycle = "created"
+	LifecycleReady     Lifecycle = "ready"
+	LifecycleThinking  Lifecycle = "thinking"
+	LifecycleActing    Lifecycle = "acting"
+	LifecycleObserving Lifecycle = "observing"
+	LifecyclePaused    Lifecycle = "paused"
+	LifecycleCompleted Lifecycle = "completed"
+	LifecycleFailed    Lifecycle = "failed"
+	LifecycleCancelled Lifecycle = "cancelled"
 )
 
 // Deps are the shared runtime dependencies of every agent.
 type Deps struct {
-	Bus          *event.Bus
-	Store        *session.Store
-	Gateway      *gateway.Client
-	ModelSel     *model.Selector
-	Tools        *tools.Registry
-	Policy       *policy.Engine
-	Composer     *composer.Composer
-	Roles        map[Role]RoleConfig
-	Workspace    string
+	Bus           *event.Bus
+	Store         *session.Store
+	Gateway       *gateway.Client
+	ModelSel      *model.Selector
+	Tools         *tools.Registry
+	Policy        *policy.Engine
+	Composer      *composer.Composer
+	Roles         map[Role]RoleConfig
+	Workspace     string
 	MaxIterations int // tool-call loop iterations per agent (0 = 100)
 	// OnApprovalRequest is invoked when a tool needs human approval. When nil,
 	// policy-engine approvals run through its own approver.
@@ -146,15 +146,15 @@ type Deps struct {
 
 // Agent is a single runnable agent.
 type Agent struct {
-	ID        string
-	SessionID string
-	TaskID    string
-	Role      Role
-	Model     string // resolved provider/model
+	ID          string
+	SessionID   string
+	TaskID      string
+	Role        Role
+	Model       string // resolved provider/model
 	ModelReason string // why this model was chosen
-	Status    task.Status
-	Lifecycle Lifecycle
-	Action    string // human-readable current action
+	Status      task.Status
+	Lifecycle   Lifecycle
+	Action      string // human-readable current action
 
 	Transcript []gateway.Message
 	TokensIn   int64

@@ -420,6 +420,48 @@ func (c *Client) ListModels(ctx context.Context, providerID string) ([]ModelInfo
 	return nil, c.errf(KindBadRequest, 0, "decode models: %v", err)
 }
 
+// ListCatalog fetches the global model catalog (ids only). It mirrors the
+// OpenAI-style /v1/models listing OmniRoute exposes; only the id fields are
+// decoded — the payload can carry large per-model metadata we don't need.
+// Returns ids in catalog order. When the catalog is unreachable or unreadable
+// the error is classified (network vs auth vs availability).
+func (c *Client) ListCatalog(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint+"/v1/models", nil)
+	if err != nil {
+		return nil, c.errf(KindNetwork, 0, "build request: %v", err)
+	}
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, c.errf(KindNetwork, 0, "%v", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 12<<20))
+	if err != nil {
+		return nil, c.errf(KindNetwork, 0, "%v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.errf(Classify(resp.StatusCode), resp.StatusCode, "list catalog")
+	}
+	var out struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, c.errf(KindBadRequest, 0, "decode catalog: %v", err)
+	}
+	ids := make([]string, 0, len(out.Data))
+	for _, m := range out.Data {
+		if m.ID != "" {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids, nil
+}
+
 // SplitModel splits a "provider/model" reference into its parts.
 func SplitModel(ref string) (provider, model string) {
 	i := strings.Index(ref, "/")

@@ -75,6 +75,10 @@ type Event struct {
 	AgentID   string          `json:"agentId,omitempty"`
 	Time      time.Time       `json:"time"`
 	Data      json.RawMessage `json:"data,omitempty"`
+	// Seq is the bus-wide publish order (stamped by Publish). It exists so
+	// consumers can prove durability ordering ("every event published before
+	// this point is durably handled"); it is never persisted.
+	Seq uint64 `json:"-"`
 }
 
 // New builds an Event from a typed payload.
@@ -110,7 +114,9 @@ func Decode(e Event) (Payload, error) {
 // UnknownTypeError is returned when an event type has no registered factory.
 type UnknownTypeError struct{ Type Type }
 
-func (e *UnknownTypeError) Error() string { return "no payload registered for event type " + string(e.Type) }
+func (e *UnknownTypeError) Error() string {
+	return "no payload registered for event type " + string(e.Type)
+}
 
 var registry = map[Type]func() Payload{}
 
@@ -128,6 +134,7 @@ type Bus struct {
 	subscribers map[uint64]*subscriber
 	nextID      uint64
 	closed      bool
+	seq         uint64 // publish order; monotonically increasing under mu
 }
 
 type subscriber struct {
@@ -141,12 +148,17 @@ func NewBus() *Bus {
 }
 
 // Publish delivers an event to every matching subscriber. It never blocks.
+// The stamped Seq is the publish order, so a consumer that records the last
+// seq it handled can prove "everything published before point T is handled"
+// by comparing against Sequence() at T.
 func (b *Bus) Publish(e Event) {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
 		return
 	}
+	b.seq++
+	e.Seq = b.seq
 	for _, s := range b.subscribers {
 		if s.filters != nil && !s.filters[e.Type] {
 			continue
@@ -166,6 +178,16 @@ func (b *Bus) Publish(e Event) {
 		}
 	}
 	b.mu.Unlock()
+}
+
+// Sequence returns the highest publish sequence stamped so far. Events are
+// delivered to each subscriber in publish order, so a consumer whose last
+// handled seq equals Sequence() has seen every event published before the
+// call.
+func (b *Bus) Sequence() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.seq
 }
 
 // Subscribe returns a channel of all events. The cancel function unsubscribes

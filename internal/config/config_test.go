@@ -24,6 +24,45 @@ func TestDefaultsValidate(t *testing.T) {
 	}
 }
 
+func TestSaveRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cfg.toml")
+	c := Default()
+	c.Models.Default = "auto/best-coding"
+	c.OmniRoute.Endpoint = "http://127.0.0.1:29999"
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Models.Default != "auto/best-coding" {
+		t.Fatalf("models.default after round-trip = %q", loaded.Models.Default)
+	}
+	if loaded.OmniRoute.Endpoint != "http://127.0.0.1:29999" {
+		t.Fatalf("endpoint after round-trip = %q", loaded.OmniRoute.Endpoint)
+	}
+	// Saving must never write the API key even if one is set in memory.
+	c.OmniRoute.APIKey = "sk-super-secret"
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "sk-super-secret") {
+		t.Fatal("Save leaked the API key into the config file")
+	}
+}
+
+func TestSaveRejectsEmptyPath(t *testing.T) {
+	cfg := Default()
+	if err := cfg.Save(""); err == nil {
+		t.Fatal("Save with empty path should fail")
+	}
+}
+
 func TestLoadMissingFileUsesDefaults(t *testing.T) {
 	c, err := Load(filepath.Join(t.TempDir(), "nope.toml"))
 	if err != nil {

@@ -7,8 +7,69 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"omniharness/internal/combo"
 	"omniharness/internal/event"
 )
+
+// ---------------------------------------------------------------------------
+// Palette + animation helpers
+// ---------------------------------------------------------------------------
+
+var (
+	pAccent   = lipgloss.Color("#5EA5FF") // Gemini-ish blue
+	pAccentBg = lipgloss.Color("#14263F")
+	pOK       = lipgloss.Color("#3DDC84")
+	pErr      = lipgloss.Color("#FF6B6B")
+	pWarn     = lipgloss.Color("#FFB020")
+	pMuted    = lipgloss.Color("#8A93A3")
+	pBorder   = lipgloss.Color("#2E3A4C")
+	pBg       = lipgloss.Color("#0B1018")
+	pUserBg   = lipgloss.Color("#173A5E")
+)
+
+// spinnerFrames is the activity spinner (braille).
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func (m *Model) spinner() string {
+	return spinnerFrames[m.frame%len(spinnerFrames)]
+}
+
+// hueToHex converts an HSL hue (degrees) to a #rrggbb hex at fixed
+// saturation/lightness — used for the animated brand gradient.
+func hueToHex(h int) string {
+	s, l := 0.72, 0.62
+	c := (1 - abs(2*l-1)) * s
+	x := c * (1 - abs(float64((h/60)%2)-1))
+	var r, g, b float64
+	switch h / 60 {
+	case 0:
+		r, g, b = c, x, 0
+	case 1:
+		r, g, b = x, c, 0
+	case 2:
+		r, g, b = 0, c, x
+	case 3:
+		r, g, b = 0, x, c
+	case 4:
+		r, g, b = x, 0, c
+	default:
+		r, g, b = c, 0, x
+	}
+	mn := l - c/2
+	return fmt.Sprintf("#%02X%02X%02X",
+		int((r+mn)*255), int((g+mn)*255), int((b+mn)*255))
+}
+
+func abs(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// ---------------------------------------------------------------------------
+// Top-level view
+// ---------------------------------------------------------------------------
 
 // View renders the full screen.
 func (m *Model) View() string {
@@ -30,6 +91,8 @@ func (m *Model) View() string {
 		body = m.renderRouting()
 	case ViewSessions:
 		body = m.renderSessions()
+	case ViewCombo:
+		body = m.renderCombo()
 	case ViewHelp:
 		body = m.renderHelp()
 	}
@@ -39,116 +102,342 @@ func (m *Model) View() string {
 	return lipgloss.NewStyle().Width(m.width).Height(m.height).Render(content)
 }
 
+// ---------------------------------------------------------------------------
+// Header
+// ---------------------------------------------------------------------------
+
 func (m *Model) renderHeader() string {
+	// Animated brand: hue drifts slowly across the blue range.
+	hue := 200 + (m.frame*3)%70
+	brand := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color(hueToHex(hue))).
+		Render("◉ omniharness")
+
 	status := string(m.status)
 	statusStyle := m.styles.muted
 	switch m.status {
 	case "running":
+		status = m.spinner() + " " + status
 		statusStyle = m.styles.accent
 	case "completed":
+		status = "✓ " + status
 		statusStyle = m.styles.ok
 	case "failed", "cancelled":
+		status = "✗ " + status
 		statusStyle = m.styles.err
+	case "pending", "":
+		status = "ready"
+		statusStyle = m.styles.muted
 	}
-	right := fmt.Sprintf("session %s  task %s", shortID(m.sessionID), shortID(m.taskID))
+
+	var right []string
 	if m.strategy != "" {
-		right = "strategy " + m.strategy + "  " + right
+		right = append(right, m.styles.muted.Render("strategy "+m.strategy))
 	}
-	title := "omniharness"
-	if m.running {
-		title += " ●"
+	if m.lastModel != "" {
+		right = append(right, m.styles.accent.Render("model "+m.lastModel))
 	}
-	return m.styles.header.Render(title + "  " + statusStyle.Render(status)) +
-		m.styles.muted.Render("  "+right)
+	if len(m.agents) > 0 {
+		right = append(right, m.styles.muted.Render("agents "+fmt.Sprint(len(m.agents))))
+	}
+	right = append(right, m.styles.muted.Render("session "+shortID(m.sessionID)))
+
+	left := brand + "   " + statusStyle.Render(status)
+	return lipgloss.JoinHorizontal(lipgloss.Left, left, lipgloss.NewStyle().Width(m.width).Align(lipgloss.Right).Render(strings.Join(right, "  ")))
 }
+
+// ---------------------------------------------------------------------------
+// Footer
+// ---------------------------------------------------------------------------
 
 func (m *Model) renderFooter() string {
-	keys := []string{"tab views", "i input", "enter run", "c cancel", "q quit"}
-	if m.view == ViewSessions {
-		keys = []string{"↑↓ select", "enter resume", "tab views", "q quit"}
-	}
 	if m.approval != nil {
-		keys = []string{"y approve", "n deny"}
+		return m.styles.warn.Render("⚠ approval required  ") +
+			m.styles.footer.Render("[y] approve    [n] deny")
 	}
-	return m.styles.footer.Render(strings.Join(keys, "  ·  ") + "  " + viewIndicator(m.view))
+	input := m.input.View()
+	if m.inputFocused {
+		input = m.styles.accent.Render("> ") + m.input.View()
+	} else {
+		input = m.styles.muted.Render("⌨ ") + m.input.View()
+	}
+	var keys []string
+	switch m.view {
+	case ViewMain:
+		keys = []string{"enter run", "i input", "c cancel", "p combo", "tab views", "q quit"}
+	case ViewSessions:
+		keys = []string{"↑↓ select", "enter resume", "tab views", "q quit"}
+	case ViewCombo:
+		keys = []string{"↑↓ select", "enter set", "esc back"}
+	}
+	hint := m.styles.footer.Render(strings.Join(keys, "  ·  "))
+	return lipgloss.JoinHorizontal(lipgloss.Left, input, lipgloss.NewStyle().Width(m.width).Align(lipgloss.Right).Render(hint))
 }
 
-func viewIndicator(v View) string {
-	names := make([]string, viewCount)
-	for i := 0; i < int(viewCount); i++ {
-		n := View(i).String()
-		if i == int(v) {
-			n = "[" + n + "]"
-		}
-		names[i] = n
-	}
-	return strings.Join(names, " ")
-}
+// ---------------------------------------------------------------------------
+// Main: chat layout (conversation + status sidebar)
+// ---------------------------------------------------------------------------
 
 func (m *Model) renderMain() string {
 	if m.approval != nil {
 		return m.renderApproval()
 	}
-	var sections []string
-
-	// Task + strategy panel.
-	taskPanel := fmt.Sprintf("prompt: %s\n", truncate(m.prompt, 90))
-	taskPanel += fmt.Sprintf("strategy: %s\n", m.strategy)
-	if m.strategyReason != "" {
-		taskPanel += m.styles.muted.Render("  " + m.strategyReason)
+	bodyH := m.height - 3
+	if bodyH < 6 {
+		bodyH = 6
 	}
-	sections = append(sections, m.styles.border.Render(taskPanel))
+	rightW := m.width * 2 / 5
+	if rightW < 24 {
+		rightW = 24
+	}
+	if m.width-40 > 12 && rightW > m.width-40 {
+		rightW = m.width - 40
+	}
+	leftW := m.width - rightW - 2
+	if leftW < 20 {
+		leftW = 20
+	}
+	// Narrow terminals: never let the panes exceed the screen; lipgloss
+	// truncates, but negative/absurd widths would panic.
+	if leftW > m.width-2 {
+		leftW = m.width - 2
+	}
+	if rightW > m.width-2 {
+		rightW = m.width - 2
+	}
 
-	// Metrics line.
-	mm := m.metrics
-	metrics := fmt.Sprintf("model calls %d  tools %d  tokens %d  cost $%.4f  latency %s  repairs %d",
-		mm.ModelCalls, mm.ToolCalls, mm.TokensIn+mm.TokensOut, mm.CostUSD,
-		formatDurationMS(mm.LatencyMS), m.repairs)
-	sections = append(sections, m.styles.muted.Render(metrics))
+	conversation := m.renderConversation(leftW, bodyH)
+	sidebar := m.renderSidebar(rightW, bodyH)
 
-	// Agents panel.
-	var b strings.Builder
-	if len(m.agents) == 0 {
-		b.WriteString(m.styles.muted.Render("no agents yet"))
-	} else {
-		fmt.Fprintf(&b, "%-10s %-32s %-12s %s\n", "ROLE", "MODEL", "STATE", "ACTION")
-		for _, a := range m.agents {
-			fmt.Fprintf(&b, "%-10s %-32s %-12s %s\n", a.Role, truncate(a.Model, 32), a.State, truncate(a.Action, 40))
+	body := lipgloss.JoinHorizontal(lipgloss.Top, conversation, sidebar)
+	return lipgloss.NewStyle().Width(m.width).Height(bodyH).Render(body)
+}
+
+// renderConversation renders the chat thread with bubbles, the live activity
+// line and the streaming result, scrolled to fit avail lines.
+func (m *Model) renderConversation(w, avail int) string {
+	var blocks []string
+
+	// Bubble for each conversation entry.
+	for _, c := range m.conversation {
+		switch c.Kind {
+		case chatUser:
+			blocks = append(blocks, m.renderUserBubble(c.Text, w))
+		case chatResult:
+			blocks = append(blocks, m.renderResultBubble(c.Text, w))
+		case chatError:
+			blocks = append(blocks, m.renderErrorBubble(c.Text, w))
+		default:
+			blocks = append(blocks, m.renderHarnessLine(c.Text, c.Time, w))
 		}
 	}
-	sections = append(sections, m.styles.border.Render(m.styles.title.Render("agents")+"\n"+b.String()))
 
-	// Event stream (tail).
-	var ev strings.Builder
+	// Streaming result (typewriter).
+	if m.streamFull != "" && m.streamIdx < len(m.streamFull) {
+		blocks = append(blocks, m.renderStreamingBubble(m.stream, w))
+	} else if m.streamFull != "" && m.stream != "" {
+		blocks = append(blocks, m.renderResultBubble(m.streamFull, w))
+	}
+
+	// Live activity while a task runs.
+	if m.running {
+		blocks = append(blocks, m.renderActivity(w))
+	}
+
+	if len(blocks) == 0 {
+		blocks = append(blocks, m.styles.muted.Render("  awaiting events — describe a task and press enter"))
+	}
+
+	// Flatten to lines, then keep the tail that fits the pane.
+	var lines []string
+	for _, b := range blocks {
+		for _, l := range strings.Split(b, "\n") {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) > avail {
+		lines = lines[len(lines)-avail:]
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+}
+
+func (m *Model) renderUserBubble(text string, w int) string {
+	inner := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#EAF2FF")).
+		Background(pUserBg).
+		Padding(0, 1).
+		MaxWidth(w - 4).
+		Render(text)
+	// Right-align each line within the pane (Gemini style).
+	var out []string
+	for _, l := range strings.Split(inner, "\n") {
+		out = append(out, lipgloss.NewStyle().Width(w).Align(lipgloss.Right).Render(l))
+	}
+	label := lipgloss.NewStyle().Width(w).Align(lipgloss.Right).Render(m.styles.muted.Render("you"))
+	return label + "\n" + strings.Join(out, "\n")
+}
+
+func (m *Model) renderResultBubble(text string, w int) string {
+	body := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#DCE6F2")).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(pOK).
+		Padding(0, 1).
+		MaxWidth(w - 2).
+		Render(text)
+	return m.styles.ok.Render("✓ result") + "\n" + body
+}
+
+func (m *Model) renderStreamingBubble(text string, w int) string {
+	body := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#DCE6F2")).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(pAccent).
+		Padding(0, 1).
+		MaxWidth(w - 2).
+		Render(text + m.spinner())
+	return m.styles.accent.Render("◉ result") + "\n" + body
+}
+
+func (m *Model) renderErrorBubble(text string, w int) string {
+	body := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFD9D9")).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(pErr).
+		Padding(0, 1).
+		MaxWidth(w - 2).
+		Render(text)
+	return m.styles.err.Render("✗") + "\n" + body
+}
+
+func (m *Model) renderHarnessLine(text, tm string, w int) string {
+	label := m.styles.accent.Render("●")
+	time := m.styles.muted.Render(tm)
+	body := lipgloss.NewStyle().MaxWidth(w - 6).Render(text)
+	return label + " " + time + "  " + body
+}
+
+// renderActivity is the live "what is happening now" line with a spinner.
+func (m *Model) renderActivity(w int) string {
+	var action string
+	if len(m.agents) > 0 {
+		a := m.agents[len(m.agents)-1]
+		action = fmt.Sprintf("agent %s · %s", a.ID, a.State)
+		if a.Action != "" {
+			action += " · " + a.Action
+		}
+	} else {
+		action = "working"
+	}
+	line := m.styles.accent.Render(m.spinner()) + " " + m.styles.muted.Render(action)
+	return lipgloss.NewStyle().MaxWidth(w).Render(line)
+}
+
+// renderSidebar renders the live status card + event tail.
+func (m *Model) renderSidebar(w, avail int) string {
+	var b strings.Builder
+	b.WriteString(m.styles.title.Render("task") + "\n")
+	fmt.Fprintf(&b, "  %s\n", truncate(m.prompt, w-4))
+	if m.strategy != "" {
+		fmt.Fprintf(&b, "  %s %s\n", m.styles.muted.Render("strategy"), m.styles.accent.Render(m.strategy))
+		if m.strategyReason != "" {
+			fmt.Fprintf(&b, "  %s\n", m.styles.muted.Render("↳ "+truncate(m.strategyReason, w-6)))
+		}
+	}
+	mm := m.metrics
+	fmt.Fprintf(&b, "  %s %d\n", m.styles.muted.Render("agents"), len(m.agents))
+	if len(m.modelStats) > 0 {
+		b.WriteString("  " + m.styles.muted.Render("models") + "\n")
+		shown := len(m.modelStats)
+		extra := 0
+		if shown > 3 {
+			extra = shown - 3
+			shown = 3
+		}
+		for i := len(m.modelStats) - shown; i < len(m.modelStats); i++ {
+			s := m.modelStats[i]
+			b.WriteString("    " + m.modelMarker(s) + " " + truncate(s.ID, w-30) +
+				m.styles.muted.Render(fmt.Sprintf(" %dx %d+%d $%.4f", s.Calls, s.TokensIn, s.TokensOut, s.Cost)) + "\n")
+		}
+		if extra > 0 {
+			b.WriteString("    " + m.styles.muted.Render(fmt.Sprintf("…+%d more (routing view)", extra)) + "\n")
+		}
+	}
+	fmt.Fprintf(&b, "  %s %s\n", m.styles.muted.Render("tokens"), fmt.Sprintf("%d+%d", mm.TokensIn, mm.TokensOut))
+	fmt.Fprintf(&b, "  %s $%.4f\n", m.styles.muted.Render("cost"), mm.CostUSD)
+	fmt.Fprintf(&b, "  %s %s\n", m.styles.muted.Render("latency"), formatDurationMS(mm.LatencyMS))
+	if m.repairs > 0 {
+		fmt.Fprintf(&b, "  %s %d\n", m.styles.warn.Render("repairs"), m.repairs)
+	}
+	fmt.Fprintf(&b, "  %s %s\n", m.styles.muted.Render("combo"), m.cfg.Models.Default)
+
+	b.WriteString("\n" + m.styles.title.Render("events") + "\n")
 	start := 0
-	limit := m.height - 14
+	limit := avail - 12
+	if limit < 3 {
+		limit = 3
+	}
 	if len(m.events) > limit {
 		start = len(m.events) - limit
 	}
 	for _, e := range m.events[start:] {
-		ev.WriteString(e.Time + " " + e.Text + "\n")
+		fmt.Fprintf(&b, "  %s %s\n", m.styles.muted.Render(e.Time), truncate(e.Text, w-6))
 	}
-	if ev.Len() == 0 {
-		ev.WriteString(m.styles.muted.Render("awaiting events…"))
+	if b.Len() == 0 {
+		b.WriteString(m.styles.muted.Render("  awaiting events…"))
 	}
-	sections = append(sections, m.styles.border.Render(m.styles.title.Render("events")+"\n"+ev.String()))
-
-	// Prompt input.
-	inputLine := "task"
-	if m.inputFocused {
-		inputLine = "task >"
-	}
-	sections = append(sections, inputLine+" "+m.input.View())
-
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	return m.styles.border.Render(b.String())
 }
 
+// renderApproval shows the approval modal.
 func (m *Model) renderApproval() string {
 	a := m.approval
 	panel := fmt.Sprintf("%s  tool: %s  risk: %s\nreason: %s\n\n[y] approve    [n] deny",
-		m.styles.warn.Render("approval required"), a.Tool, a.Risk, a.Reason)
+		m.styles.warn.Render("⚠ approval required"), a.Tool, a.Risk, a.Reason)
 	return m.styles.border.Render(panel)
 }
+
+// ---------------------------------------------------------------------------
+// Combo picker (model combos)
+// ---------------------------------------------------------------------------
+
+func (m *Model) renderCombo() string {
+	var b strings.Builder
+	b.WriteString(m.styles.title.Render("choose your model combo — enter to select") + "\n")
+	b.WriteString(m.styles.muted.Render("auto/* combos route to whatever provider OmniRoute has provisioned; or pick a specific provider/model") + "\n\n")
+	if m.combosLoading {
+		b.WriteString(m.spinner() + " " + m.styles.muted.Render("loading combos from "+m.cfg.OmniRoute.Endpoint+"…"))
+		return m.styles.border.Render(b.String())
+	}
+	current := m.cfg.Models.Default
+	for i, c := range m.combos {
+		marker := "  "
+		name := c.ID
+		if i == m.comboSel {
+			marker = m.styles.accent.Render("▸ ")
+			name = m.styles.accent.Render(c.ID)
+		}
+		if c.ID == current {
+			name = name + m.styles.ok.Render("  ✓")
+		}
+		fmt.Fprintf(&b, "%s%-30s %s\n", marker, name, m.styles.muted.Render(c.Description))
+	}
+	// Custom id entry (last row).
+	marker := "  "
+	label := m.styles.muted.Render("type a provider/model id…")
+	if m.comboSel == len(m.combos) {
+		marker = m.styles.accent.Render("▸ ")
+		label = m.styles.accent.Render("type a provider/model id…")
+	}
+	fmt.Fprintf(&b, "%s%-30s %s\n", marker, label, m.styles.muted.Render("enter any provider/model id"))
+	fmt.Fprintf(&b, "\n%s\n", m.styles.muted.Render("current combo: "+current+" — "+combo.Describe(current)))
+	return m.styles.border.Render(b.String())
+}
+
+// ---------------------------------------------------------------------------
+// Other views (kept, lightly restyled)
+// ---------------------------------------------------------------------------
 
 func (m *Model) renderAgents() string {
 	if len(m.agents) == 0 {
@@ -169,7 +458,7 @@ func (m *Model) renderAgents() string {
 
 func (m *Model) renderGraph() string {
 	var b strings.Builder
-	b.WriteString(m.styles.title.Render("task graph — " + m.strategy) + "\n")
+	b.WriteString(m.styles.title.Render("task graph — "+m.strategy) + "\n")
 	if len(m.steps) == 0 {
 		b.WriteString(m.styles.muted.Render("no plan selected yet"))
 		return m.styles.border.Render(b.String())
@@ -198,18 +487,43 @@ func (m *Model) agentStateMarker(state string) string {
 	}
 }
 
+// modelMarker renders the per-model state glyph.
+func (m *Model) modelMarker(s modelStat) string {
+	switch s.LastState {
+	case "ok":
+		return m.styles.ok.Render("✓")
+	case "failed":
+		return m.styles.err.Render("✗")
+	default:
+		return m.styles.accent.Render("●")
+	}
+}
+
 func (m *Model) renderRouting() string {
 	mm := m.metrics
 	var b strings.Builder
 	b.WriteString(m.styles.title.Render("routing") + "\n")
 	fmt.Fprintf(&b, "endpoint:  %s\n", m.cfg.OmniRoute.Endpoint)
 	fmt.Fprintf(&b, "session:   %s\n", shortID(m.sessionID))
+	fmt.Fprintf(&b, "combo:     %s\n", m.cfg.Models.Default)
 	b.WriteString("\n" + m.styles.muted.Render("model execution (this session)"))
 	fmt.Fprintf(&b, "\ncalls:     %d  (failed: %d)\n", mm.ModelCalls, mm.FailedCalls)
 	fmt.Fprintf(&b, "tokens:    in %d  out %d\n", mm.TokensIn, mm.TokensOut)
 	fmt.Fprintf(&b, "cost:      $%.4f\n", mm.CostUSD)
 	fmt.Fprintf(&b, "latency:   %s\n", formatDurationMS(mm.LatencyMS))
 	fmt.Fprintf(&b, "evaluations: %d\n", mm.Evaluations)
+	if len(m.modelStats) > 0 {
+		b.WriteString("\n" + m.styles.muted.Render("by model"))
+		for _, s := range m.modelStats {
+			fmt.Fprintf(&b, "\n  %s %-28s %2dx  %d+%d tok  $%.4f", m.modelMarker(s), truncate(s.ID, 28), s.Calls, s.TokensIn, s.TokensOut, s.Cost)
+			if s.Failures > 0 {
+				fmt.Fprintf(&b, "  %s", m.styles.err.Render(fmt.Sprintf("%dx failed", s.Failures)))
+			}
+			if s.Reason != "" {
+				fmt.Fprintf(&b, "\n      %s", m.styles.muted.Render("why: "+truncate(s.Reason, 60)))
+			}
+		}
+	}
 	return m.styles.border.Render(b.String())
 }
 
@@ -233,19 +547,21 @@ func (m *Model) renderSessions() string {
 
 func (m *Model) renderHelp() string {
 	rows := [][2]string{
-		{"tab / shift+tab", "cycle views"},
+		{"enter", "run the task in the input bar"},
 		{"i", "focus the task input"},
-		{"enter", "run the task"},
 		{"c / ctrl+c", "cancel the running task"},
-		{"q", "quit (when idle)"},
-		{"up / down", "select agent / session"},
+		{"p", "choose your stack"},
+		{"tab / shift+tab", "cycle views"},
+		{"up / down", "select agent / session / stack"},
 		{"enter (sessions)", "resume the selected session"},
+		{"enter (stack)", "set the selected stack"},
 		{"y / n", "answer an approval prompt"},
+		{"q", "quit (when idle)"},
 	}
 	var b strings.Builder
 	b.WriteString(m.styles.title.Render("keys") + "\n")
 	for _, r := range rows {
-		fmt.Fprintf(&b, "  %-22s %s\n", r[0], r[1])
+		fmt.Fprintf(&b, "  %-28s %s\n", r[0], r[1])
 	}
 	return m.styles.border.Render(b.String())
 }

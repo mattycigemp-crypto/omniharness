@@ -9,15 +9,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"omniharness/internal/agent"
 	"omniharness/internal/budget"
 	"omniharness/internal/config"
 	composer "omniharness/internal/context"
-	"omniharness/internal/event"
 	"omniharness/internal/evaluate"
+	"omniharness/internal/event"
 	"omniharness/internal/gateway"
 	"omniharness/internal/id"
 	"omniharness/internal/mcp"
@@ -54,13 +54,12 @@ type Runtime struct {
 	sink *persistenceSink
 }
 
-// persistenceSink drains bus events into the store asynchronously. idle is
-// true only between writes, so FlushEvents can rely on it for durability.
+// persistenceSink drains bus events into the store asynchronously. lastWritten
+// is the publish-seq of the most recent event durably handled (written or
+// skipped for lack of a session), so FlushEvents can prove ordering.
 type persistenceSink struct {
-	ch     <-chan event.Event
-	mu     sync.Mutex
-	idle   bool
-	closed bool
+	ch          <-chan event.Event
+	lastWritten atomic.Uint64
 }
 
 // Options tweak construction (used in tests).
@@ -171,7 +170,7 @@ func New(cfg config.Config, opts Options) (*Runtime, error) {
 		r.startPersistenceSink()
 	}
 	return r, nil
-}// startPersistenceSink persists every event to the session store.
+} // startPersistenceSink persists every event to the session store.
 func (r *Runtime) startPersistenceSink() {
 	ch, cancel := r.Bus.Subscribe(1024)
 	s := &persistenceSink{ch: ch}
@@ -179,9 +178,6 @@ func (r *Runtime) startPersistenceSink() {
 	r.stopSinks = append(r.stopSinks, cancel)
 	go func() {
 		for e := range ch {
-			s.mu.Lock()
-			s.idle = false
-			s.mu.Unlock()
 			if e.SessionID != "" {
 				if err := r.Store.AppendEvent(e.SessionID, e); err != nil {
 					// Persistence failure must not kill the runtime, but it must
@@ -189,40 +185,33 @@ func (r *Runtime) startPersistenceSink() {
 					r.Bus.Publish(event.New(&event.LogMessageData{Message: "persist event: " + err.Error()}))
 				}
 			}
-			s.mu.Lock()
-			s.idle = true
-			s.mu.Unlock()
+			// Record AFTER the write so lastWritten is a durable-handled marker.
+			s.lastWritten.Store(e.Seq)
 		}
-		s.mu.Lock()
-		s.closed = true
-		s.idle = true
-		s.mu.Unlock()
 	}()
 }
 
-// FlushEvents waits (bounded by ctx) until every event published so far has
-// been durably written. RunTask calls it before returning so a completed task
-// is never represented as finished while its terminal events are still in
-// flight. Returns true when fully flushed.
+// FlushEvents waits (bounded by ctx) until every event published before the
+// call has been durably handled (written, or skipped for lacking a session).
+// RunTask calls it before returning so a completed task is never represented
+// as finished while its terminal events are still in flight. It snapshots the
+// bus publish sequence, so events published concurrently after the call are
+// not covered (correct: they are not part of this task's completion).
+// Returns true when fully flushed.
 func (r *Runtime) FlushEvents(ctx context.Context) bool {
 	s := r.sink
 	if s == nil {
 		return true
 	}
-	for {
-		s.mu.Lock()
-		idle := s.idle
-		empty := len(s.ch) == 0
-		s.mu.Unlock()
-		if idle && empty {
-			return true
-		}
+	target := r.Bus.Sequence()
+	for s.lastWritten.Load() < target {
 		select {
 		case <-ctx.Done():
 			return false
 		case <-time.After(2 * time.Millisecond):
 		}
 	}
+	return true
 }
 
 // Close shuts down the runtime: MCP clients, sinks, store.

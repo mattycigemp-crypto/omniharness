@@ -74,6 +74,7 @@ execution through OmniRoute. It is local-first and headless-capable.`,
 		newTUISubCmd(),
 		newLogCmd(),
 		newUpdateCmd(),
+		newStackCmd(),
 	)
 	return root
 }
@@ -174,7 +175,11 @@ func runTUI(ctx context.Context, opts RootOptions) error {
 	if notice := launchUpdateNotice(ctx, cfg.Persistence.Dir); notice != "" {
 		fmt.Fprintf(os.Stderr, "⚠ %s\n", notice)
 	}
-	return tui.Run(cfg, rt)
+	configPath := rootOpts.ConfigPath
+	if configPath == "" {
+		configPath = config.DefaultPath()
+	}
+	return tui.Run(cfg, rt, configPath)
 }
 
 // isTerminal reports whether f is attached to an interactive terminal.

@@ -111,6 +111,7 @@ internal/budget        token/cost/time/agent/tool-call budgets
 internal/telemetry     metric recording + aggregation
 internal/cli           cobra commands (headless-first)
 internal/tui           Bubble Tea cockpit (consumer of events)
+internal/combo         model-combo registry (auto/* routing combos + catalog)
 internal/version       build info
 ```
 
@@ -136,6 +137,19 @@ Dependency direction is downward only; `event` and `config` are leaves. No cycle
   the same registry as native tools, so policy applies identically.
 - **TUI is a consumer.** All state flows through the runtime event bus; the TUI renders
   and sends control commands (pause/cancel/approve) only.
+- **The "stack" is the model combo.** `omniharness stack` (and the TUI `p` picker)
+  selects the model combo the harness routes through: an OmniRoute `auto/*` routing
+  combo or a specific `provider/model` id. The list comes from the live `/v1/models`
+  catalog (`internal/combo` curates it: best-* first, then pro-*, then specific
+  models), with a static fallback so the picker works offline. Selection persists to
+  `[models] default`.
+- **Actual models are always visible.** The TUI aggregates every resolved model used
+  in a session (calls, tokens, cost, failures, selection reason) and shows them in the
+  sidebar, the routing view, and a live header badge — including multi-model runs
+  (repair escalations, role-capability differences).
+- **The API key is never written by Save.** `config.Save` (used by `stack set` and the
+  TUI picker) scrubs the key before encoding, so an env-provided key can never leak
+  into the config file on disk.
 
 ## 6. Phases
 

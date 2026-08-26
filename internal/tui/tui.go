@@ -11,8 +11,9 @@ import (
 
 // Run launches the cockpit and blocks until it exits. The runtime is built by
 // the caller (so the CLI can run pre-flight steps like interactive auth); pass
-// nil to build one from cfg here.
-func Run(cfg config.Config, rt *runtime.Runtime) error {
+// nil to build one from cfg here. configPath is where a picked stack is
+// persisted (the config file the CLI loaded); pass "" to keep it in-memory.
+func Run(cfg config.Config, rt *runtime.Runtime, configPath string) error {
 	if rt == nil {
 		var err error
 		rt, err = runtime.New(cfg, runtime.Options{})
@@ -22,7 +23,7 @@ func Run(cfg config.Config, rt *runtime.Runtime) error {
 	}
 	defer rt.Close()
 
-	model := New(cfg, rt)
+	model := New(cfg, rt, configPath)
 	prog := tea.NewProgram(model, tea.WithAltScreen())
 	model.program = prog
 

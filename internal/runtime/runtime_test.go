@@ -128,6 +128,56 @@ func TestRuntimeCancellation(t *testing.T) {
 	}
 }
 
+// TestConcurrentTasksAllDurable is the regression guard for the async
+// persistence flush race: RunTask must never return a completed task whose
+// terminal event is still in flight. The old idle-flag protocol had a window
+// between the sink receiving an event and marking itself busy; the seq-based
+// flush closes it. Run with many concurrent tasks so scheduling pressure
+// widens the window.
+func TestConcurrentTasksAllDurable(t *testing.T) {
+	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "deliverable"})
+	rt := testRuntime(t, fake, t.TempDir())
+
+	const n = 12
+	type result struct {
+		sessionID string
+		taskID    string
+		err       error
+	}
+	results := make(chan result, n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			ss, err := rt.NewSession("", "concurrent")
+			if err != nil {
+				results <- result{err: err}
+				return
+			}
+			tsk, err := rt.RunTask(context.Background(), ss.ID, "Fix the typo in README.md.", RunOptions{})
+			results <- result{sessionID: ss.ID, taskID: tsk.ID, err: err}
+		}(i)
+	}
+
+	for i := 0; i < n; i++ {
+		res := <-results
+		if res.err != nil {
+			t.Fatalf("task %d: %v", i, res.err)
+		}
+		// Durability invariant: the terminal event must already be on disk the
+		// moment RunTask returns — no polling, no retry.
+		evs, err := rt.SessionEvents(res.sessionID, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		types := map[event.Type]bool{}
+		for _, e := range evs {
+			types[e.Type] = true
+		}
+		if !types[event.TaskCompleted] {
+			t.Fatalf("task %s: task.completed not durable on return (have %v)", res.taskID, types)
+		}
+	}
+}
+
 func TestRuntimeBudgetsRespected(t *testing.T) {
 	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "x"})
 	rt := testRuntime(t, fake, t.TempDir())

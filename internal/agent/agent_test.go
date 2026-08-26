@@ -46,15 +46,15 @@ func testDeps(t *testing.T, fake *testutil.FakeOmniRoute, workspace string) Deps
 	}))
 
 	return Deps{
-		Bus:          event.NewBus(),
-		Store:        store,
-		Gateway:      fake.Client(),
-		ModelSel:     model.NewSelector("fake/m1", nil),
-		Tools:        reg,
-		Policy:       pol,
-		Composer:     composer.NewComposer(composer.Limits{CondenseAt: 1 << 18}),
-		Roles:        DefaultRoles(),
-		Workspace:    workspace,
+		Bus:           event.NewBus(),
+		Store:         store,
+		Gateway:       fake.Client(),
+		ModelSel:      model.NewSelector("fake/m1", nil),
+		Tools:         reg,
+		Policy:        pol,
+		Composer:      composer.NewComposer(composer.Limits{CondenseAt: 1 << 18}),
+		Roles:         DefaultRoles(),
+		Workspace:     workspace,
 		MaxIterations: 10,
 	}
 }

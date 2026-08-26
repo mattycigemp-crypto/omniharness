@@ -55,6 +55,9 @@ type FakeOmniRoute struct {
 	// UpgradeRequired, when set, makes /v1/models answer 426 "Use WebSocket."
 	// exactly like OmniRoute's WebSocket-only listener.
 	UpgradeRequired bool
+	// CatalogIDs, when set, is returned by /v1/models instead of the default
+	// single fake/m1 entry.
+	CatalogIDs []string
 }
 
 // NewFakeOmniRoute starts the fake server.
@@ -76,10 +79,17 @@ func NewFakeOmniRoute(t *testing.T, steps ...FakeStep) *FakeOmniRoute {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"object": "list",
-			"data":   []map[string]any{{"id": "fake/m1", "object": "model"}},
-		})
+		f.mu.Lock()
+		catalog := f.CatalogIDs
+		f.mu.Unlock()
+		if len(catalog) == 0 {
+			catalog = []string{"fake/m1"}
+		}
+		data := make([]map[string]any, 0, len(catalog))
+		for _, id := range catalog {
+			data = append(data, map[string]any{"id": id, "object": "model"})
+		}
+		json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
 	})
 	mux.HandleFunc("/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		f.recordAuth(r)
