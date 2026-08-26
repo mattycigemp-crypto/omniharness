@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# Build the OmniHarness binary into the npm wrapper and publish it to npmjs.
+# Build, verify and publish the omniharness-cli npm wrapper.
 #
 # Usage:
-#   scripts/release-npm.sh            # publish current package version
-#   scripts/release-npm.sh 0.2.0      # bump to 0.2.0, stamp the binary, publish
+#   scripts/release-npm.sh               # auto-bump patch (0.1.1 -> 0.1.2), verify, publish
+#   scripts/release-npm.sh --minor       # auto-bump minor (0.1.1 -> 0.2.0)
+#   scripts/release-npm.sh --major       # auto-bump major (0.1.1 -> 1.0.0)
+#   scripts/release-npm.sh 0.2.0         # explicit version
+#   scripts/release-npm.sh --dry-run     # bump + verify only, skip publish
 #
-# Prerequisites: `npm adduser` once, and the portable Go toolchain
-# (scripts/env.sh handles PATH).
+# Prerequisites:
+#   - npm authenticated. Interactive: `npm publish` prompts for the 2FA OTP.
+#     Unattended: a granular token with "Bypass 2FA for publish" enabled, set
+#     as NODE_AUTH_TOKEN or in .npmrc — without a bypass token every publish
+#     needs your one-time code.
+#   - The portable Go toolchain (scripts/env.sh handles PATH).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -14,30 +21,54 @@ cd "$REPO_ROOT"
 
 export PATH="$HOME/go-sdk/go/bin:$PATH"
 
-VERSION="${1:-}"
-LDFLAGS=""
-if [[ -n "$VERSION" ]]; then
-  node -e "
-    const fs = require('fs');
-    const p = 'npm/package.json';
-    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
-    j.version = '$VERSION';
-    fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
-  "
-  LDFLAGS="-X omniharness/internal/version.Version=$VERSION -X omniharness/internal/version.Commit=release"
-else
-  VERSION="$(node -e "console.log(require('./npm/package.json').version)")"
-fi
+DRY_RUN=0
+BUMP="patch"
+VERSION_ARG=""
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=1 ;;
+    --minor)   BUMP="minor" ;;
+    --major)   BUMP="major" ;;
+    -*)        echo "unknown option: $arg" >&2; exit 2 ;;
+    *)         VERSION_ARG="$arg" ;;
+  esac
+done
+
+# bump_version writes the next version into npm/package.json and prints it.
+bump_version() {
+  VERSION_ARG="$VERSION_ARG" BUMP="$BUMP" node -e '
+    const fs = require("fs");
+    const p = "npm/package.json";
+    const j = JSON.parse(fs.readFileSync(p, "utf8"));
+    const [maj, min, pat] = j.version.split(".").map(Number);
+    let v;
+    if (process.env.VERSION_ARG) v = process.env.VERSION_ARG;
+    else if (process.env.BUMP === "major") v = `${maj + 1}.0.0`;
+    else if (process.env.BUMP === "minor") v = `${maj}.${min + 1}.0`;
+    else v = `${maj}.${min}.${pat + 1}`;
+    j.version = v;
+    fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
+    console.log(v);
+  '
+}
+
+VERSION="$(bump_version)"
+LDFLAGS="-X omniharness/internal/version.Version=$VERSION -X omniharness/internal/version.Commit=release"
 
 TARGET="npm/vendor/win32-x64/omniharness.exe"
 mkdir -p "$(dirname "$TARGET")"
-if [[ -n "$LDFLAGS" ]]; then
-  go build -ldflags "$LDFLAGS" -o "$TARGET" ./cmd/omniharness
-else
-  go build -o "$TARGET" ./cmd/omniharness
-fi
-
+go build -ldflags "$LDFLAGS" -o "$TARGET" ./cmd/omniharness
 echo "Built omniharness-cli v$VERSION (win32-x64) -> $TARGET"
+
+echo "Verifying: go vet ./... && go test -count=1 ./..."
+go vet ./...
+go test -count=1 ./...
+echo "Verification passed"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "Dry run: publish skipped. Next version would be $VERSION"
+  exit 0
+fi
 
 cd npm
 npm publish

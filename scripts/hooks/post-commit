@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Auto-publish omniharness-cli after every commit: bump the version, verify
+# (vet + full test suite), build, and npm publish.
+#
+# The commit itself always succeeds — this hook runs after it and only reports.
+# Unattended publishing requires an npm token with "Bypass 2FA for publish"
+# (NODE_AUTH_TOKEN or ~/.npmrc); interactive OTP cannot be entered inside a
+# hook, so without that token the publish step fails loudly below.
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$REPO_ROOT" || exit 0
+
+echo "[post-commit] auto-publishing omniharness-cli…"
+if ! bash scripts/release-npm.sh; then
+  echo "[post-commit] publish FAILED (commit itself succeeded — see above)." >&2
+  echo "[post-commit] If this is a 2FA error, create a granular npm token with" >&2
+  echo "[post-commit] 'Bypass 2FA for publish' and set NODE_AUTH_TOKEN or add it" >&2
+  echo "[post-commit] to ~/.npmrc, then run: bash scripts/release-npm.sh" >&2
+fi

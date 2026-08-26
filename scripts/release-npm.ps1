@@ -2,8 +2,11 @@
 # Works from any directory; the bash script derives the repo root itself.
 #
 # Usage:
-#   scripts\release-npm.ps1            # publish current package version
-#   scripts\release-npm.ps1 0.2.0      # bump to 0.2.0, stamp the binary, publish
+#   scripts\release-npm.ps1            # auto-bump patch, verify, publish
+#   scripts\release-npm.ps1 --minor    # auto-bump minor
+#   scripts\release-npm.ps1 --major    # auto-bump major
+#   scripts\release-npm.ps1 0.2.0      # explicit version
+#   scripts\release-npm.ps1 --dry-run  # bump + verify only
 #
 # Requires Git Bash (installed with Git for Windows) and `npm adduser` once.
 $ErrorActionPreference = 'Stop'

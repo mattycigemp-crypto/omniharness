@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +14,14 @@ import (
 
 	"omniharness/internal/version"
 )
+
+// updateCheckCacheTTL bounds how often the launch-time update check hits the
+// npm registry; the result is cached in the persistence dir.
+const updateCheckCacheTTL = 24 * time.Hour
+
+// launchCheckTimeout caps the launch-time registry check so it never delays
+// starting the harness.
+const launchCheckTimeout = 3 * time.Second
 
 // npmPackage is the published wrapper package this binary ships inside.
 const npmPackage = "omniharness-cli"
@@ -96,6 +105,66 @@ func npmLatestVersion(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("npm view %s: %w", npmPackage, err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// updateCheckCache is the persisted result of a launch-time update check.
+type updateCheckCache struct {
+	CheckedAt time.Time `json:"checked_at"`
+	Latest    string    `json:"latest"`
+}
+
+// updateNoticeFor renders the launch notice, or "" when nothing should be
+// shown (source build, unknown latest, or already up to date).
+func updateNoticeFor(current, latest string, fromNpm bool) string {
+	if !fromNpm || latest == "" {
+		return ""
+	}
+	if compareVersions(current, latest) >= 0 {
+		return ""
+	}
+	return fmt.Sprintf("update available: omniharness-cli %s (you have %s) — run `omniharness update`", latest, current)
+}
+
+// launchUpdateNotice is the best-effort check shown when the harness starts.
+// It only applies to npm-installed binaries, never blocks (3s cap), and caches
+// the registry result for a day so launches stay fast and quiet.
+func launchUpdateNotice(ctx context.Context, cacheDir string) string {
+	exe, err := os.Executable()
+	if err != nil || !installedFromNpm(filepath.Clean(exe)) {
+		return ""
+	}
+	latest, err := cachedLatestVersion(ctx, cacheDir)
+	if err != nil {
+		return ""
+	}
+	return updateNoticeFor(version.Version, latest, true)
+}
+
+// cachedLatestVersion returns the latest published version, reading a fresh
+// cache file when available and refreshing (best-effort) otherwise.
+func cachedLatestVersion(ctx context.Context, cacheDir string) (string, error) {
+	cachePath := ""
+	if cacheDir != "" {
+		cachePath = filepath.Join(cacheDir, "update-check.json")
+		if data, err := os.ReadFile(cachePath); err == nil {
+			var c updateCheckCache
+			if json.Unmarshal(data, &c) == nil && c.Latest != "" && time.Since(c.CheckedAt) < updateCheckCacheTTL {
+				return c.Latest, nil
+			}
+		}
+	}
+	cctx, cancel := context.WithTimeout(ctx, launchCheckTimeout)
+	defer cancel()
+	latest, err := npmLatestVersion(cctx)
+	if err != nil || latest == "" {
+		return "", err
+	}
+	if cachePath != "" {
+		if data, err := json.Marshal(updateCheckCache{CheckedAt: time.Now(), Latest: latest}); err == nil {
+			_ = os.WriteFile(cachePath, data, 0o600) // best-effort; never fail the launch
+		}
+	}
+	return latest, nil
 }
 
 func runUpdate(ctx context.Context) error {

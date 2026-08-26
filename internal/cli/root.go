@@ -170,6 +170,10 @@ func runTUI(ctx context.Context, opts RootOptions) error {
 	if err := ensureAuth(ctx, rt, cfg, authPrompter{interactive: isTerminal(os.Stdin), stdin: os.Stdin}); err != nil {
 		return err
 	}
+	// Best-effort update notice: never blocks the launch and never fails it.
+	if notice := launchUpdateNotice(ctx, cfg.Persistence.Dir); notice != "" {
+		fmt.Fprintf(os.Stderr, "⚠ %s\n", notice)
+	}
 	return tui.Run(cfg, rt)
 }
 
