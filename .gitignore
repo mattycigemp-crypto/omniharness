@@ -1,0 +1,17 @@
+# Build output
+/bin/
+*.exe
+
+# Editor / tool state
+.freebuff/
+
+# Local persistence (never commit session data or artifacts)
+*.db
+*.db-wal
+*.db-shm
+/data/
+/omniharness.db*
+
+# OS noise
+.DS_Store
+Thumbs.db
