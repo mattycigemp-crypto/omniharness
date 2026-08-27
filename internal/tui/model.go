@@ -112,9 +112,10 @@ type modelStat struct {
 
 // combosMsg carries the fetched model combo list.
 type combosMsg struct {
-	Options   []combo.Option
-	Live      bool // catalog came from the server, not the fallback
-	Providers []providerInfo // connected providers from the account
+	Options      []combo.Option
+	Live         bool // catalog came from the server, not the fallback
+	Providers    []providerInfo // connected providers from the account
+	AccountCombos []accountCombo // user's configured combos from OmniRoute
 }
 
 // providerInfo describes a connected provider from the OmniRoute account.
@@ -123,6 +124,14 @@ type providerInfo struct {
 	Name    string
 	Status  string // "active", "inactive", "test_passed", etc.
 	Models  []string // available model IDs
+}
+
+// accountCombo is a user-configured combo from their OmniRoute account.
+type accountCombo struct {
+	Name     string
+	Strategy string
+	Models   []string // provider/model refs in the chain
+	Default  bool
 }
 
 // approvalReq is a pending human approval.
@@ -200,6 +209,9 @@ type Model struct {
 	// Connected providers from the OmniRoute account.
 	providers     []providerInfo
 	providersLoading bool
+
+	// User's configured combos from the OmniRoute account.
+	accountCombos []accountCombo
 
 	// Per-model usage (actual models used this session).
 	modelStats  []modelStat
@@ -355,6 +367,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case combosMsg:
 		m.combos = msg.Options
 		m.providers = msg.Providers
+		m.accountCombos = msg.AccountCombos
 		m.combosLoading = false
 		m.comboSel = 0
 		// If the fetch happened after the user pressed p, land in the picker.
@@ -476,6 +489,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Combo picker navigation.
 	if m.view == ViewCombo {
+		totalAccount := len(m.accountCombos)
+		totalCatalog := len(m.combos)
+		total := totalAccount + totalCatalog + 1 // +1 for custom entry
+
 		switch msg.String() {
 		case "up":
 			if m.comboSel > 0 {
@@ -483,7 +500,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "down":
-			if m.comboSel < len(m.combos) {
+			if m.comboSel < total-1 {
 				m.comboSel++
 			}
 			return m, nil
@@ -589,8 +606,8 @@ func (m *Model) cancelTask() {
 
 // fetchCombos loads the model combo list from the live OmniRoute catalog
 // (falling back to the built-in combos when unreachable). It also fetches
-// connected providers from the account. It never fails the TUI; the fallback
-// is always usable.
+// connected providers and the user's configured combos. It never fails the
+// TUI; the fallback is always usable.
 func (m *Model) fetchCombos() tea.Cmd {
 	rt := m.rt
 	return func() tea.Msg {
@@ -600,7 +617,7 @@ func (m *Model) fetchCombos() tea.Cmd {
 		if err != nil {
 			return combosMsg{Options: combo.List(nil), Live: false}
 		}
-		// Also fetch connected providers.
+		// Fetch connected providers.
 		var providers []providerInfo
 		if conns, err := rt.Gateway.ListProviders(ctx); err == nil {
 			for _, c := range conns {
@@ -611,15 +628,45 @@ func (m *Model) fetchCombos() tea.Cmd {
 				})
 			}
 		}
-		return combosMsg{Options: combo.List(ids), Live: true, Providers: providers}
+		// Fetch user's configured combos.
+		var accountCombos []accountCombo
+		for _, gc := range rt.Gateway.ListCombos(ctx) {
+			var models []string
+			for _, m := range gc.Models {
+				if m.Model != "" {
+					models = append(models, m.Model)
+				}
+			}
+			accountCombos = append(accountCombos, accountCombo{
+				Name:     gc.Name,
+				Strategy: gc.Strategy,
+				Models:   models,
+				Default:  gc.IsDefault,
+			})
+		}
+		return combosMsg{Options: combo.List(ids), Live: true, Providers: providers, AccountCombos: accountCombos}
 	}
 }
 
-// pickCombo commits the selected picker entry: either a combo id or the
-// "type a provider/model id" entry, which flips the input bar to model mode.
+// pickCombo commits the selected picker entry: either an account combo,
+// a catalog combo, or the "type a provider/model id" entry.
 func (m *Model) pickCombo() tea.Cmd {
-	if m.comboSel == len(m.combos) {
-		// Custom id entry (last row).
+	totalAccount := len(m.accountCombos)
+	totalCatalog := len(m.combos)
+	total := totalAccount + totalCatalog + 1 // +1 for custom entry
+
+	if m.comboSel < 0 || m.comboSel >= total {
+		return nil
+	}
+
+	// Account combos are listed first.
+	if m.comboSel < totalAccount {
+		ac := m.accountCombos[m.comboSel]
+		return m.applyCombo(ac.Name)
+	}
+
+	// Custom id entry (last row).
+	if m.comboSel == total-1 {
 		m.modelInput = true
 		m.view = ViewMain
 		m.input.SetValue("")
@@ -627,10 +674,13 @@ func (m *Model) pickCombo() tea.Cmd {
 		m.inputFocused = true
 		return m.input.Focus()
 	}
-	if m.comboSel < 0 || m.comboSel >= len(m.combos) {
-		return nil
+
+	// Catalog combos.
+	catalogIdx := m.comboSel - totalAccount
+	if catalogIdx >= 0 && catalogIdx < totalCatalog {
+		return m.applyCombo(m.combos[catalogIdx].ID)
 	}
-	return m.applyCombo(m.combos[m.comboSel].ID)
+	return nil
 }
 
 // applyCombo sets the model combo (cfg.Models.Default), persists it when a

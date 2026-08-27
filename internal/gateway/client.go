@@ -470,3 +470,63 @@ func SplitModel(ref string) (provider, model string) {
 	}
 	return ref[:i], ref[i+1:]
 }
+
+// Combo describes a user's configured combo from the OmniRoute account.
+type Combo struct {
+	Name       string         `json:"name"`
+	Strategy   string         `json:"strategy"`
+	Models     []ComboModel   `json:"models"`
+	Capabilities ComboCaps    `json:"capabilities,omitempty"`
+	IsDefault  bool           `json:"isDefault,omitempty"`
+}
+
+// ComboModel is one model step in a combo chain.
+type ComboModel struct {
+	Kind       string `json:"kind"`       // "model" | "combo"
+	Model      string `json:"model"`      // provider/model reference or combo name
+	ProviderID string `json:"providerId,omitempty"`
+}
+
+// ComboCaps describes combo capabilities.
+type ComboCaps struct {
+	Multimodal bool `json:"multimodal,omitempty"`
+	Reasoning  bool `json:"reasoning,omitempty"`
+	Caching    bool `json:"caching,omitempty"`
+}
+
+// ListCombos fetches the user's configured combos from the OmniRoute account.
+// Returns the combo list; never returns an error (degrades to empty on failure).
+func (c *Client) ListCombos(ctx context.Context) []Combo {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint+"/v1/combos", nil)
+	if err != nil {
+		return nil
+	}
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	// The endpoint returns [{name, strategy, models, ...}].
+	var combos []Combo
+	if err := json.Unmarshal(raw, &combos); err == nil && len(combos) > 0 {
+		return combos
+	}
+	// Some responses wrap in {"combos":[...]}.
+	var wrapped struct {
+		Combos []Combo `json:"combos"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err == nil {
+		return wrapped.Combos
+	}
+	return nil
+}

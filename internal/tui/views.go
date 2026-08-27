@@ -478,7 +478,36 @@ func (m *Model) renderCombo() string {
 		return m.styles.border.Render(b.String())
 	}
 
-	// Show connected providers first.
+	// Show user's configured combos from their OmniRoute account first.
+	if len(m.accountCombos) > 0 {
+		b.WriteString(m.styles.accent.Render("your combos") + " " + m.styles.muted.Render("(from your OmniRoute account)") + "\n")
+		for i, c := range m.accountCombos {
+			marker := "  "
+			name := c.Name
+			if i == m.comboSel {
+				marker = m.styles.accent.Render("▸ ")
+				name = m.styles.accent.Render(c.Name)
+			}
+			if c.Name == m.cfg.Models.Default {
+				name = name + m.styles.ok.Render("  ✓")
+			}
+			strategyTag := ""
+			if c.Strategy != "" {
+				strategyTag = " " + m.styles.muted.Render("["+c.Strategy+"]")
+			}
+			fmt.Fprintf(&b, "%s%s%s\n", marker, name, strategyTag)
+			if len(c.Models) > 0 {
+				models := strings.Join(c.Models, " · ")
+				if len(models) > 60 {
+					models = models[:57] + "…"
+				}
+				fmt.Fprintf(&b, "    %s\n", m.styles.muted.Render(models))
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	// Show connected providers.
 	if len(m.providers) > 0 {
 		b.WriteString(m.styles.accent.Render("connected providers") + "\n")
 		for _, p := range m.providers {
@@ -506,10 +535,11 @@ func (m *Model) renderCombo() string {
 	}
 
 	current := m.cfg.Models.Default
+	offset := len(m.accountCombos)
 	for i, c := range m.combos {
 		marker := "  "
 		name := c.ID
-		if i == m.comboSel {
+		if i+offset == m.comboSel {
 			marker = m.styles.accent.Render("▸ ")
 			name = m.styles.accent.Render(c.ID)
 		}
@@ -521,7 +551,7 @@ func (m *Model) renderCombo() string {
 	// Custom id entry (last row).
 	marker := "  "
 	label := m.styles.muted.Render("type a provider/model id…")
-	if m.comboSel == len(m.combos) {
+	if m.comboSel == offset+len(m.combos) {
 		marker = m.styles.accent.Render("▸ ")
 		label = m.styles.accent.Render("type a provider/model id…")
 	}
