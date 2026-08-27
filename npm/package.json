@@ -8,10 +8,11 @@
     "url": "https://github.com/mattycigemp-crypto/omniharness.git"
   },
   "bin": {
-    "omniharness": "dist/cli.js"
+    "omniharness": "cli.js"
   },
   "files": [
-    "dist/",
+    "cli.js",
+    "vendor/",
     "README.md"
   ],
   "scripts": {
