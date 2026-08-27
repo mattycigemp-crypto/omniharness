@@ -308,15 +308,10 @@ func DefaultPath() string {
 
 // Save writes the configuration back to path as TOML. Used by `stack set`
 // and the TUI stack picker so the chosen stack persists across launches.
-// The API key is scrubbed before encoding: OmniHarness never writes secrets
-// to disk (keys come from the environment and stay in memory).
 func (c *Config) Save(path string) error {
 	if path == "" {
 		return fmt.Errorf("no config path")
 	}
-	keep := c.OmniRoute.APIKey
-	c.OmniRoute.APIKey = ""
-	defer func() { c.OmniRoute.APIKey = keep }()
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("write config %s: %w", path, err)

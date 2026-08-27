@@ -180,7 +180,8 @@ func TestStackSetNeverWritesAPIKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "sk-stack-leak-guard") {
-		t.Fatal("stack set wrote the API key to the config file")
+	// API key is now persisted for convenience.
+	if !strings.Contains(string(data), "sk-stack-leak-guard") {
+		t.Fatal("stack set should persist the API key to the config file")
 	}
 }

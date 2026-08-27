@@ -920,7 +920,7 @@ func (m *Model) startKeyInput() tea.Cmd {
 	return m.input.Focus()
 }
 
-// applyKey stores the entered API key in memory for this session.
+// applyKey stores the entered API key and persists it to the config file.
 func (m *Model) applyKey(key string) tea.Cmd {
 	m.keyInput = false
 	m.input.Placeholder = "describe a task…"
@@ -928,7 +928,13 @@ func (m *Model) applyKey(key string) tea.Cmd {
 		return m.noteError(fmt.Errorf("no API key provided"))
 	}
 	m.cfg.OmniRoute.APIKey = key
-	m.chat(chatHarness, "API key set (key_"+last4(key)+") — connected to OmniRoute")
+	// Persist to config file so the key survives restarts.
+	if m.configPath != "" {
+		if err := m.cfg.Save(m.configPath); err != nil {
+			return m.noteError(fmt.Errorf("saved key but failed to persist: %w", err))
+		}
+	}
+	m.chat(chatHarness, "API key set (key_"+last4(key)+") — saved to config")
 	return nil
 }
 
@@ -941,7 +947,7 @@ func (m *Model) startEndpointInput() tea.Cmd {
 	return m.input.Focus()
 }
 
-// applyEndpoint stores the entered endpoint URL for this session.
+// applyEndpoint stores the entered endpoint URL and persists it.
 func (m *Model) applyEndpoint(url string) tea.Cmd {
 	m.endpointInput = false
 	m.input.SetValue("")
@@ -953,7 +959,13 @@ func (m *Model) applyEndpoint(url string) tea.Cmd {
 		return m.noteError(fmt.Errorf("endpoint must start with http:// or https://"))
 	}
 	m.cfg.OmniRoute.Endpoint = strings.TrimSuffix(url, "/")
-	m.chat(chatHarness, "endpoint → "+m.cfg.OmniRoute.Endpoint)
+	// Persist to config file.
+	if m.configPath != "" {
+		if err := m.cfg.Save(m.configPath); err != nil {
+			return m.noteError(fmt.Errorf("saved endpoint but failed to persist: %w", err))
+		}
+	}
+	m.chat(chatHarness, "endpoint → "+m.cfg.OmniRoute.Endpoint+" — saved")
 	// Re-create the gateway client with the new endpoint.
 	if m.rt != nil && m.rt.Gateway != nil {
 		m.rt.Gateway = gateway.New(m.cfg.OmniRoute.Endpoint, m.cfg.OmniRoute.Timeout, m.cfg.OmniRoute.APIKey)
