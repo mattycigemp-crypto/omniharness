@@ -22,13 +22,15 @@ import (
 	"omniharness/internal/session"
 	"omniharness/internal/task"
 	"omniharness/internal/telemetry"
+	"omniharness/internal/version"
 )
 
 // View identifies the active TUI view.
 type View int
 
 const (
-	ViewMain View = iota
+	ViewHome View = iota
+	ViewMain
 	ViewAgents
 	ViewGraph
 	ViewRouting
@@ -40,6 +42,8 @@ const (
 
 func (v View) String() string {
 	switch v {
+	case ViewHome:
+		return "home"
 	case ViewMain:
 		return "main"
 	case ViewAgents:
@@ -224,17 +228,25 @@ func New(cfg config.Config, rt *runtime.Runtime, configPath string) *Model {
 	in.Placeholder = "describe a task…"
 	in.Prompt = "> "
 	in.CharLimit = 1000
+
+	// Build the welcome conversation on startup.
+	convo := []chatLine{
+		{Kind: chatHarness, Text: "Welcome to OmniRoute! Your free AI gateway.", Time: time.Now().Format("15:04:05")},
+		{Kind: chatHarness, Text: "Start by describing a task or choose a model with 'p'.", Time: time.Now().Format("15:04:05")},
+	}
+
 	return &Model{
 		cfg:           cfg,
 		configPath:    configPath,
 		rt:            rt,
-		view:          ViewMain,
+		view:          ViewHome,
 		input:         in,
 		status:        task.StatusPending,
 		styles:        makeStyles(cfg.TUI.Color),
 		modelStatID:   map[string]int{},
 		combos:        combo.List(nil), // offline fallback until the catalog loads
 		combosLoading: true,
+		conversation:  convo,
 	}
 }
 
@@ -410,6 +422,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.input.SetValue("")
 			m.inputFocused = false
+			if strings.HasPrefix(val, "/") {
+				return m, m.handleCommand(val)
+			}
 			if m.modelInput {
 				// "type a provider/model id" mode: commit the combo.
 				m.modelInput = false
@@ -443,7 +458,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			return m, m.pickCombo()
 		case "esc":
-			m.view = ViewMain
+			m.view = ViewHome
 			return m, nil
 		}
 		return m, nil
@@ -457,7 +472,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	case "tab", "right":
-		m.view = View((int(m.view) + 1) % int(viewCount))
+		if m.view == ViewHome {
+			m.view = ViewMain
+		} else {
+			m.view = View((int(m.view) + 1) % int(viewCount))
+		}
 		return m, nil
 	case "shift+tab", "left":
 		m.view = View((int(m.view) + int(viewCount) - 1) % int(viewCount))
@@ -494,6 +513,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if m.view == ViewSessions {
 			return m, m.resumeSession()
+		}
+		if m.view == ViewHome && !m.running {
+			m.inputFocused = true
+			return m, m.input.Focus()
 		}
 	}
 	return m, nil
@@ -591,7 +614,36 @@ func (m *Model) applyCombo(id string) tea.Cmd {
 	return nil
 }
 
-// noteError surfaces a transient error as a chat line.
+// handleCommand processes slash commands entered in the input bar.
+func (m *Model) handleCommand(cmd string) tea.Cmd {
+	args := strings.Fields(cmd)
+	if len(args) == 0 {
+		return nil
+	}
+	switch args[0] {
+	case "/init":
+		m.chat(chatHarness, "No local project config needed. Use 'p' to pick a model.")
+	case "/help":
+		m.view = ViewHelp
+	case "/settings":
+		m.chat(chatHarness, fmt.Sprintf("Endpoint: %s | Model: %s | Budget: $%.2f", m.cfg.OmniRoute.Endpoint, m.cfg.Models.Default, m.cfg.Budgets.MaxCostUSD))
+	case "/model":
+		if len(args) > 1 {
+			return m.applyCombo(args[1])
+		}
+		m.view = ViewCombo
+	case "/status":
+		m.chat(chatHarness, fmt.Sprintf("Status: %s | Agents: %d | Combo: %s", m.status, len(m.agents), m.cfg.Models.Default))
+	case "/diff":
+		m.chat(chatHarness, "No current diff available.")
+	case "/release-notes":
+		m.chat(chatHarness, "OmniRoute TUI v"+version.Version+" — Gemini-inspired dashboard, improved streaming.")
+	default:
+		m.chat(chatError, "Unknown command: "+args[0])
+	}
+	return nil
+}
+
 func (m *Model) noteError(err error) tea.Cmd {
 	m.conversation = append(m.conversation, chatLine{
 		Kind: chatError,

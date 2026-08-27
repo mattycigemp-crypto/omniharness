@@ -9,6 +9,7 @@ import (
 
 	"omniharness/internal/combo"
 	"omniharness/internal/event"
+	"omniharness/internal/version"
 )
 
 // ---------------------------------------------------------------------------
@@ -26,6 +27,14 @@ var (
 	pBg       = lipgloss.Color("#0B1018")
 	pUserBg   = lipgloss.Color("#173A5E")
 )
+
+// brandLogo is the ASCII art shown on the home screen.
+var brandLogo = []string{
+	"   ___  _______  __    ____ _   ____ ________ __",
+	"  / _ \\/_  __/ / /   / __/| | / __/ __/ __/ //_/",
+	" / ___/ / /   / /__ / _/  | |/ /_\\ \\/ _// ,<  ",
+	"/_/    /_/   /____/___/  |___/___/___/___/_/ |_|",
+}
 
 // spinnerFrames is the activity spinner (braille).
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -81,6 +90,8 @@ func (m *Model) View() string {
 	}
 	var body string
 	switch m.view {
+	case ViewHome:
+		body = m.renderHome()
 	case ViewMain:
 		body = m.renderMain()
 	case ViewAgents:
@@ -112,7 +123,7 @@ func (m *Model) renderHeader() string {
 	brand := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color(hueToHex(hue))).
-		Render("◉ omniharness")
+		Render("◉ omniroute")
 
 	status := string(m.status)
 	statusStyle := m.styles.muted
@@ -141,6 +152,7 @@ func (m *Model) renderHeader() string {
 	if len(m.agents) > 0 {
 		right = append(right, m.styles.muted.Render("agents "+fmt.Sprint(len(m.agents))))
 	}
+	right = append(right, m.styles.muted.Render("$"+fmt.Sprintf("%.3f", m.metrics.CostUSD)))
 	right = append(right, m.styles.muted.Render("session "+shortID(m.sessionID)))
 
 	left := brand + "   " + statusStyle.Render(status)
@@ -162,8 +174,14 @@ func (m *Model) renderFooter() string {
 	} else {
 		input = m.styles.muted.Render("⌨ ") + m.input.View()
 	}
+
+	// Status bar info (cost and model)
+	statusInfo := m.styles.muted.Render(fmt.Sprintf("$%.3f (sub) %s", m.metrics.CostUSD, m.cfg.Models.Default))
+
 	var keys []string
 	switch m.view {
+	case ViewHome:
+		keys = []string{"enter start", "p pick model", "tab views"}
 	case ViewMain:
 		keys = []string{"enter run", "i input", "c cancel", "p combo", "tab views", "q quit"}
 	case ViewSessions:
@@ -172,7 +190,32 @@ func (m *Model) renderFooter() string {
 		keys = []string{"↑↓ select", "enter set", "esc back"}
 	}
 	hint := m.styles.footer.Render(strings.Join(keys, "  ·  "))
-	return lipgloss.JoinHorizontal(lipgloss.Left, input, lipgloss.NewStyle().Width(m.width).Align(lipgloss.Right).Render(hint))
+
+	// Layout: input [status] [shortcuts]
+	return lipgloss.JoinHorizontal(lipgloss.Left,
+		input,
+		lipgloss.NewStyle().Width(m.width/3).Align(lipgloss.Center).Render(statusInfo),
+		lipgloss.NewStyle().Width(m.width).Align(lipgloss.Right).Render(hint),
+	)
+}
+
+// renderHome shows the welcome screen with tips and model info.
+func (m *Model) renderHome() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	for _, l := range brandLogo {
+		b.WriteString(m.styles.accent.Render(l) + "\n")
+	}
+	b.WriteString("\n  " + m.styles.muted.Render("v"+version.Version+" (gateway: "+m.cfg.OmniRoute.Endpoint+")"))
+	b.WriteString("\n")
+	b.WriteString("  " + m.styles.accent.Render("Tips") + "\n")
+	b.WriteString("    Run 'p' to choose a model combo\n")
+	b.WriteString("    Type a task and press enter to start\n")
+	b.WriteString("    Press '?' for shortcuts\n")
+	b.WriteString("  " + m.styles.accent.Render("What's new") + "\n")
+	b.WriteString("    Gemini-inspired dashboard, improved streaming, and provider routing.\n")
+	b.WriteString("  " + m.styles.muted.Render("Current Model: "+m.cfg.Models.Default))
+	return b.String()
 }
 
 // ---------------------------------------------------------------------------

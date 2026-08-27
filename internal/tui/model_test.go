@@ -71,6 +71,8 @@ func TestModelTracksTaskAndAgents(t *testing.T) {
 	if len(m.events) == 0 {
 		t.Fatal("event stream empty")
 	}
+	// Switch to ViewMain so the sidebar renders agent details.
+	m.view = ViewMain
 	view := m.View()
 	if !strings.Contains(view, "direct") || !strings.Contains(view, "implementer") {
 		t.Fatalf("view missing content:\n%s", view)
@@ -151,11 +153,11 @@ func TestModelRendersWithoutTerminal(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.width, m.height = 100, 30
 	view := m.View()
-	if !strings.Contains(view, "omniharness") {
+	if !strings.Contains(view, "omniroute") {
 		t.Fatalf("header missing: %s", view)
 	}
-	if !strings.Contains(view, "awaiting events") && !strings.Contains(view, "events") {
-		t.Fatalf("event panel missing: %s", view)
+	if !strings.Contains(view, "Tips") {
+		t.Fatalf("home screen missing: %s", view)
 	}
 }
 
@@ -199,16 +201,26 @@ func TestModelRunningFlagBlocksDuplicateSubmission(t *testing.T) {
 func TestModelChatThreadBuildsConversation(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.width, m.height = 120, 40
+	m.view = ViewMain
 
 	m = publish(t, m, &event.TaskCreatedData{Prompt: "build the feature"})
 	m = publish(t, m, &event.StrategySelectedData{Strategy: "direct", Reason: "simple"})
 	m = publish(t, m, &event.TaskCompletedData{Summary: "shipped it", Output: "details"})
 
-	if len(m.conversation) < 2 {
-		t.Fatalf("conversation has %d lines, want >= 2", len(m.conversation))
+	// Welcome messages (2 lines) precede the user prompt.
+	if len(m.conversation) < 4 {
+		t.Fatalf("conversation has %d lines, want >= 4", len(m.conversation))
 	}
-	if m.conversation[0].Kind != chatUser || m.conversation[0].Text != "build the feature" {
-		t.Fatalf("first line %+v", m.conversation[0])
+	// Find the user prompt in the conversation (after the welcome lines).
+	found := false
+	for _, c := range m.conversation {
+		if c.Kind == chatUser && c.Text == "build the feature" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("user prompt 'build the feature' not found in conversation")
 	}
 	view := m.View()
 	if !strings.Contains(view, "build the feature") {
@@ -351,8 +363,8 @@ func TestModelComboPickerEscBackToMain(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.view = ViewCombo
 	m, _ = update(t, m, tea.KeyMsg{Type: tea.KeyEsc})
-	if m.view != ViewMain {
-		t.Fatalf("view = %s, want main", m.view)
+	if m.view != ViewHome {
+		t.Fatalf("view = %s, want home", m.view)
 	}
 }
 
@@ -379,6 +391,8 @@ func TestModelTracksActualModelsUsed(t *testing.T) {
 	if m.lastModel != "auto/best-reasoning" {
 		t.Fatalf("lastModel = %q", m.lastModel)
 	}
+	// Switch to ViewMain so the sidebar renders model stats.
+	m.view = ViewMain
 	view := m.View()
 	if !strings.Contains(view, "auto/best-coding") || !strings.Contains(view, "auto/best-reasoning") {
 		t.Fatalf("actual models not rendered:\n%s", view)
