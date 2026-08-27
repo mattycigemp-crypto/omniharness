@@ -28,12 +28,11 @@ var (
 	pUserBg   = lipgloss.Color("#173A5E")
 )
 
-// brandLogo is the ASCII art shown on the home screen.
+// brandLogo is the compact logo shown on the home screen.
 var brandLogo = []string{
-	"   ___  _______  __    ____ _   ____ ________ __",
-	"  / _ \\/_  __/ / /   / __/| | / __/ __/ __/ //_/",
-	" / ___/ / /   / /__ / _/  | |/ /_\\ \\/ _// ,<  ",
-	"/_/    /_/   /____/___/  |___/___/___/___/_/ |_|",
+	"  ╔══════════════════════════════════════╗",
+	"  ║          ◉  O M N I R O U T E        ║",
+	"  ╚══════════════════════════════════════╝",
 }
 
 // spinnerFrames is the activity spinner (braille).
@@ -74,6 +73,14 @@ func abs(v float64) float64 {
 		return -v
 	}
 	return v
+}
+
+// last4 returns the last 4 characters of a string, used for masking secrets.
+func last4(s string) string {
+	if len(s) <= 4 {
+		return s
+	}
+	return s[len(s)-4:]
 }
 
 // ---------------------------------------------------------------------------
@@ -181,9 +188,9 @@ func (m *Model) renderFooter() string {
 	var keys []string
 	switch m.view {
 	case ViewHome:
-		keys = []string{"enter start", "p pick model", "tab views"}
+		keys = []string{"enter start", "k api key", "p pick model", "tab views"}
 	case ViewMain:
-		keys = []string{"enter run", "i input", "c cancel", "p combo", "tab views", "q quit"}
+		keys = []string{"enter run", "i input", "k api key", "c cancel", "p combo", "tab views", "q quit"}
 	case ViewSessions:
 		keys = []string{"↑↓ select", "enter resume", "tab views", "q quit"}
 	case ViewCombo:
@@ -206,15 +213,32 @@ func (m *Model) renderHome() string {
 	for _, l := range brandLogo {
 		b.WriteString(m.styles.accent.Render(l) + "\n")
 	}
-	b.WriteString("\n  " + m.styles.muted.Render("v"+version.Version+" (gateway: "+m.cfg.OmniRoute.Endpoint+")"))
+	b.WriteString("\n  " + m.styles.muted.Render("v"+version.Version+" — free AI gateway for multi-provider LLMs"))
+	b.WriteString("\n  " + m.styles.muted.Render("gateway: "+m.cfg.OmniRoute.Endpoint))
 	b.WriteString("\n")
-	b.WriteString("  " + m.styles.accent.Render("Tips") + "\n")
-	b.WriteString("    Run 'p' to choose a model combo\n")
-	b.WriteString("    Type a task and press enter to start\n")
-	b.WriteString("    Press '?' for shortcuts\n")
-	b.WriteString("  " + m.styles.accent.Render("What's new") + "\n")
-	b.WriteString("    Gemini-inspired dashboard, improved streaming, and provider routing.\n")
-	b.WriteString("  " + m.styles.muted.Render("Current Model: "+m.cfg.Models.Default))
+
+	// API key status
+	if m.cfg.OmniRoute.APIKey != "" {
+		b.WriteString("  " + m.styles.ok.Render("✓ connected") + m.styles.muted.Render(" (key_"+last4(m.cfg.OmniRoute.APIKey)+")"))
+	} else {
+		b.WriteString("  " + m.styles.warn.Render("⚠ no API key") + m.styles.muted.Render(" — press 'k' or type /key"))
+	}
+	b.WriteString("\n")
+
+	// Current combo
+	b.WriteString("  " + m.styles.muted.Render("combo: "+m.styles.accent.Render(m.cfg.Models.Default)))
+	b.WriteString("\n\n")
+
+	// Tips
+	b.WriteString("  " + m.styles.accent.Render("Getting started") + "\n")
+	b.WriteString("    Type a task in the input bar below and press enter\n")
+	b.WriteString("    Press 'p' to choose a model combo\n")
+	b.WriteString("    Press 'k' to set your OmniRoute API key\n")
+	b.WriteString("    Press '?' for all shortcuts\n")
+	b.WriteString("\n")
+
+	// Input hint
+	b.WriteString("  " + m.styles.muted.Render("↓ type below to begin"))
 	return b.String()
 }
 
@@ -448,11 +472,38 @@ func (m *Model) renderApproval() string {
 func (m *Model) renderCombo() string {
 	var b strings.Builder
 	b.WriteString(m.styles.title.Render("choose your model combo — enter to select") + "\n")
-	b.WriteString(m.styles.muted.Render("auto/* combos route to whatever provider OmniRoute has provisioned; or pick a specific provider/model") + "\n\n")
 	if m.combosLoading {
 		b.WriteString(m.spinner() + " " + m.styles.muted.Render("loading combos from "+m.cfg.OmniRoute.Endpoint+"…"))
 		return m.styles.border.Render(b.String())
 	}
+
+	// Show connected providers first.
+	if len(m.providers) > 0 {
+		b.WriteString(m.styles.accent.Render("connected providers") + "\n")
+		for _, p := range m.providers {
+			statusIcon := m.styles.muted.Render("·")
+			if p.Status == "active" || p.Status == "test_passed" {
+				statusIcon = m.styles.ok.Render("✓")
+			} else if p.Status == "inactive" {
+				statusIcon = m.styles.warn.Render("⚠")
+			}
+			fmt.Fprintf(&b, "  %s %s (%s)\n", statusIcon, m.styles.accent.Render(p.Name), m.styles.muted.Render(p.Status))
+		}
+		b.WriteString("\n")
+	}
+
+	// Auto combos.
+	autoCount := 0
+	for _, c := range m.combos {
+		if c.Kind != "auto" {
+			autoCount++
+			continue
+		}
+	}
+	if autoCount > 0 {
+		b.WriteString(m.styles.muted.Render("auto/* combos route to whatever provider OmniRoute has provisioned") + "\n")
+	}
+
 	current := m.cfg.Models.Default
 	for i, c := range m.combos {
 		marker := "  "
@@ -592,6 +643,7 @@ func (m *Model) renderHelp() string {
 	rows := [][2]string{
 		{"enter", "run the task in the input bar"},
 		{"i", "focus the task input"},
+		{"k", "set your OmniRoute API key"},
 		{"c / ctrl+c", "cancel the running task"},
 		{"p", "choose your stack"},
 		{"tab / shift+tab", "cycle views"},

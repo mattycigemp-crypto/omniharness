@@ -111,8 +111,17 @@ type modelStat struct {
 
 // combosMsg carries the fetched model combo list.
 type combosMsg struct {
-	Options []combo.Option
-	Live    bool // catalog came from the server, not the fallback
+	Options   []combo.Option
+	Live      bool // catalog came from the server, not the fallback
+	Providers []providerInfo // connected providers from the account
+}
+
+// providerInfo describes a connected provider from the OmniRoute account.
+type providerInfo struct {
+	ID      string
+	Name    string
+	Status  string // "active", "inactive", "test_passed", etc.
+	Models  []string // available model IDs
 }
 
 // approvalReq is a pending human approval.
@@ -187,6 +196,10 @@ type Model struct {
 	comboSel      int
 	modelInput    bool // input bar is in "type a provider/model id" mode
 
+	// Connected providers from the OmniRoute account.
+	providers     []providerInfo
+	providersLoading bool
+
 	// Per-model usage (actual models used this session).
 	modelStats  []modelStat
 	modelStatID map[string]int
@@ -199,6 +212,9 @@ type Model struct {
 	input        textinput.Model
 	inputFocused bool
 	selected     int // selected row in agent view
+
+	// API key input mode.
+	keyInput bool // input bar is in "paste your API key" mode
 
 	// Sessions view.
 	sessions []*session.Session
@@ -334,6 +350,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case combosMsg:
 		m.combos = msg.Options
+		m.providers = msg.Providers
 		m.combosLoading = false
 		m.comboSel = 0
 		// If the fetch happened after the user pressed p, land in the picker.
@@ -422,6 +439,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.input.SetValue("")
 			m.inputFocused = false
+			if m.keyInput {
+				// API key entry mode: store the key.
+				return m, m.applyKey(val)
+			}
 			if strings.HasPrefix(val, "/") {
 				return m, m.handleCommand(val)
 			}
@@ -434,6 +455,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc":
 			m.inputFocused = false
 			m.modelInput = false
+			m.keyInput = false
+			m.input.Placeholder = "describe a task…"
 			return m, nil
 		default:
 			var cmd tea.Cmd
@@ -494,6 +517,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "i":
 		m.inputFocused = true
 		return m, nil
+	case "k":
+		return m, m.startKeyInput()
 	case "p":
 		if m.combosLoading {
 			return m, m.fetchCombos()
@@ -552,8 +577,9 @@ func (m *Model) cancelTask() {
 }
 
 // fetchCombos loads the model combo list from the live OmniRoute catalog
-// (falling back to the built-in combos when unreachable). It never fails the
-// TUI; the fallback is always usable.
+// (falling back to the built-in combos when unreachable). It also fetches
+// connected providers from the account. It never fails the TUI; the fallback
+// is always usable.
 func (m *Model) fetchCombos() tea.Cmd {
 	rt := m.rt
 	return func() tea.Msg {
@@ -563,7 +589,18 @@ func (m *Model) fetchCombos() tea.Cmd {
 		if err != nil {
 			return combosMsg{Options: combo.List(nil), Live: false}
 		}
-		return combosMsg{Options: combo.List(ids), Live: true}
+		// Also fetch connected providers.
+		var providers []providerInfo
+		if conns, err := rt.Gateway.ListProviders(ctx); err == nil {
+			for _, c := range conns {
+				providers = append(providers, providerInfo{
+					ID:     c.ID,
+					Name:   c.Name,
+					Status: c.Status,
+				})
+			}
+		}
+		return combosMsg{Options: combo.List(ids), Live: true, Providers: providers}
 	}
 }
 
@@ -614,6 +651,27 @@ func (m *Model) applyCombo(id string) tea.Cmd {
 	return nil
 }
 
+// startKeyInput switches the input bar to API key entry mode.
+func (m *Model) startKeyInput() tea.Cmd {
+	m.keyInput = true
+	m.input.SetValue("")
+	m.input.Placeholder = "paste your OmniRoute API key (sk-…)"
+	m.inputFocused = true
+	return m.input.Focus()
+}
+
+// applyKey stores the entered API key in memory for this session.
+func (m *Model) applyKey(key string) tea.Cmd {
+	m.keyInput = false
+	m.input.Placeholder = "describe a task…"
+	if key == "" {
+		return m.noteError(fmt.Errorf("no API key provided"))
+	}
+	m.cfg.OmniRoute.APIKey = key
+	m.chat(chatHarness, "API key set (key_"+last4(key)+") — connected to OmniRoute")
+	return nil
+}
+
 // handleCommand processes slash commands entered in the input bar.
 func (m *Model) handleCommand(cmd string) tea.Cmd {
 	args := strings.Fields(cmd)
@@ -638,6 +696,8 @@ func (m *Model) handleCommand(cmd string) tea.Cmd {
 		m.chat(chatHarness, "No current diff available.")
 	case "/release-notes":
 		m.chat(chatHarness, "OmniRoute TUI v"+version.Version+" — Gemini-inspired dashboard, improved streaming.")
+	case "/key":
+		return m.startKeyInput()
 	default:
 		m.chat(chatError, "Unknown command: "+args[0])
 	}

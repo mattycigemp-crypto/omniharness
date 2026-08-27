@@ -156,7 +156,7 @@ func TestModelRendersWithoutTerminal(t *testing.T) {
 	if !strings.Contains(view, "omniroute") {
 		t.Fatalf("header missing: %s", view)
 	}
-	if !strings.Contains(view, "Tips") {
+	if !strings.Contains(view, "Getting started") {
 		t.Fatalf("home screen missing: %s", view)
 	}
 }
