@@ -188,9 +188,9 @@ func (m *Model) renderFooter() string {
 	var keys []string
 	switch m.view {
 	case ViewHome:
-		keys = []string{"enter start", "k api key", "p pick model", "tab views"}
+		keys = []string{"enter start", "k api key", "e endpoint", "p pick model", "tab views"}
 	case ViewMain:
-		keys = []string{"enter run", "i input", "k api key", "c cancel", "p combo", "tab views", "q quit"}
+		keys = []string{"enter run", "i input", "k api key", "e endpoint", "c cancel", "p combo", "tab views", "q quit"}
 	case ViewSessions:
 		keys = []string{"↑↓ select", "enter resume", "tab views", "q quit"}
 	case ViewCombo:
@@ -234,6 +234,7 @@ func (m *Model) renderHome() string {
 	b.WriteString("    Type a task in the input bar below and press enter\n")
 	b.WriteString("    Press 'p' to choose a model combo\n")
 	b.WriteString("    Press 'k' to set your OmniRoute API key\n")
+	b.WriteString("    Press 'e' to change the OmniRoute endpoint\n")
 	b.WriteString("    Press '?' for all shortcuts\n")
 	b.WriteString("\n")
 
@@ -644,6 +645,7 @@ func (m *Model) renderHelp() string {
 		{"enter", "run the task in the input bar"},
 		{"i", "focus the task input"},
 		{"k", "set your OmniRoute API key"},
+		{"e", "change the OmniRoute endpoint"},
 		{"c / ctrl+c", "cancel the running task"},
 		{"p", "choose your stack"},
 		{"tab / shift+tab", "cycle views"},

@@ -13,7 +13,7 @@ func TestDefaultsValidate(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if c.OmniRoute.Endpoint != "http://127.0.0.1:20128" {
+	if c.OmniRoute.Endpoint != "http://localhost:20128" {
 		t.Fatalf("endpoint %q", c.OmniRoute.Endpoint)
 	}
 	if c.Policy.RiskAction["critical"] != "block" {

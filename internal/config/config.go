@@ -128,7 +128,7 @@ func Default() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
 		OmniRoute: OmniRoute{
-			Endpoint: "http://127.0.0.1:20128",
+			Endpoint: "http://localhost:20128",
 			Timeout:  120 * time.Second,
 		},
 		Models: Models{

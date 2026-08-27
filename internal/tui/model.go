@@ -17,6 +17,7 @@ import (
 	"omniharness/internal/combo"
 	"omniharness/internal/config"
 	"omniharness/internal/event"
+	"omniharness/internal/gateway"
 	"omniharness/internal/policy"
 	"omniharness/internal/runtime"
 	"omniharness/internal/session"
@@ -215,6 +216,9 @@ type Model struct {
 
 	// API key input mode.
 	keyInput bool // input bar is in "paste your API key" mode
+
+	// Endpoint input mode.
+	endpointInput bool // input bar is in "type endpoint URL" mode
 
 	// Sessions view.
 	sessions []*session.Session
@@ -439,10 +443,14 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.input.SetValue("")
 			m.inputFocused = false
-			if m.keyInput {
-				// API key entry mode: store the key.
-				return m, m.applyKey(val)
-			}
+		if m.keyInput {
+			// API key entry mode: store the key.
+			return m, m.applyKey(val)
+		}
+		if m.endpointInput {
+			// Endpoint entry mode: store the URL.
+			return m, m.applyEndpoint(val)
+		}
 			if strings.HasPrefix(val, "/") {
 				return m, m.handleCommand(val)
 			}
@@ -456,6 +464,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.inputFocused = false
 			m.modelInput = false
 			m.keyInput = false
+			m.endpointInput = false
 			m.input.Placeholder = "describe a task…"
 			return m, nil
 		default:
@@ -519,6 +528,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "k":
 		return m, m.startKeyInput()
+	case "e":
+		return m, m.startEndpointInput()
 	case "p":
 		if m.combosLoading {
 			return m, m.fetchCombos()
@@ -672,6 +683,35 @@ func (m *Model) applyKey(key string) tea.Cmd {
 	return nil
 }
 
+// startEndpointInput switches the input bar to endpoint URL entry mode.
+func (m *Model) startEndpointInput() tea.Cmd {
+	m.endpointInput = true
+	m.input.SetValue(m.cfg.OmniRoute.Endpoint)
+	m.input.Placeholder = "OmniRoute endpoint URL (e.g. http://localhost:20128)"
+	m.inputFocused = true
+	return m.input.Focus()
+}
+
+// applyEndpoint stores the entered endpoint URL for this session.
+func (m *Model) applyEndpoint(url string) tea.Cmd {
+	m.endpointInput = false
+	m.input.SetValue("")
+	m.input.Placeholder = "describe a task…"
+	if url == "" {
+		return m.noteError(fmt.Errorf("no endpoint provided"))
+	}
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		return m.noteError(fmt.Errorf("endpoint must start with http:// or https://"))
+	}
+	m.cfg.OmniRoute.Endpoint = strings.TrimSuffix(url, "/")
+	m.chat(chatHarness, "endpoint → "+m.cfg.OmniRoute.Endpoint)
+	// Re-create the gateway client with the new endpoint.
+	if m.rt != nil && m.rt.Gateway != nil {
+		m.rt.Gateway = gateway.New(m.cfg.OmniRoute.Endpoint, m.cfg.OmniRoute.Timeout, m.cfg.OmniRoute.APIKey)
+	}
+	return nil
+}
+
 // handleCommand processes slash commands entered in the input bar.
 func (m *Model) handleCommand(cmd string) tea.Cmd {
 	args := strings.Fields(cmd)
@@ -698,6 +738,11 @@ func (m *Model) handleCommand(cmd string) tea.Cmd {
 		m.chat(chatHarness, "OmniRoute TUI v"+version.Version+" — Gemini-inspired dashboard, improved streaming.")
 	case "/key":
 		return m.startKeyInput()
+	case "/endpoint":
+		if len(args) > 1 {
+			return m.applyEndpoint(args[1])
+		}
+		return m.startEndpointInput()
 	default:
 		m.chat(chatError, "Unknown command: "+args[0])
 	}
