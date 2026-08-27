@@ -38,13 +38,24 @@ for arg in "$@"; do
   esac
 done
 
+# latest_published queries npm for the current published version of the package.
+# Returns empty string when the package has never been published.
+latest_published() {
+  npm view omniharness-cli version 2>/dev/null || true
+}
+
 # bump_version writes the next version into npm/package.json and prints it.
+# It bumps from the *latest published* version on npm (not the local
+# package.json) so that CI runs never try to re-publish an existing version.
 bump_version() {
-  VERSION_ARG="$VERSION_ARG" BUMP="$BUMP" node -e '
+  VERSION_ARG="$VERSION_ARG" BUMP="$BUMP" LATEST_PUBLISHED="$(latest_published)" node -e '
     const fs = require("fs");
     const p = "npm/package.json";
     const j = JSON.parse(fs.readFileSync(p, "utf8"));
-    const [maj, min, pat] = j.version.split(".").map(Number);
+    // Use the latest published version as the baseline when available,
+    // falling back to the local package.json version.
+    const base = process.env.LATEST_PUBLISHED || j.version;
+    const [maj, min, pat] = base.split(".").map(Number);
     let v;
     if (process.env.VERSION_ARG) v = process.env.VERSION_ARG;
     else if (process.env.BUMP === "major") v = `${maj + 1}.0.0`;
