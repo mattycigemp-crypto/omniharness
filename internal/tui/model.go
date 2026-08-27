@@ -87,9 +87,9 @@ type modelStat struct {
 
 // combosMsg carries the fetched model combo list.
 type combosMsg struct {
-	Options      []combo.Option
-	Live         bool
-	Providers    []providerInfo
+	Options       []combo.Option
+	Live          bool
+	Providers     []providerInfo
 	AccountCombos []accountCombo
 }
 
@@ -157,10 +157,10 @@ type bootCompleteMsg struct{}
 
 // Model is the TUI state.
 type Model struct {
-	cfg        config.Config
-	configPath string
-	rt         *runtime.Runtime
-	program    *tea.Program
+	cfg           config.Config
+	configPath    string
+	rt            *runtime.Runtime
+	program       *tea.Program
 	width, height int
 
 	// Live task state.
@@ -188,8 +188,8 @@ type Model struct {
 	modelInput    bool
 
 	// Connected providers and user's combos.
-	providers      []providerInfo
-	accountCombos  []accountCombo
+	providers     []providerInfo
+	accountCombos []accountCombo
 
 	// Per-model usage.
 	modelStats  []modelStat
@@ -330,6 +330,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouse(msg)
 
 	case bootMsg:
+		if m.bootDone || m.overlay != OverlayBoot {
+			return m, nil
+		}
 		m.bootPhase = msg.phase
 		m.bootMsgs = append(m.bootMsgs, msg.msg)
 		switch msg.phase {
@@ -345,12 +348,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		case 1:
 			return m, tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
-				if m.cfg.OmniRoute.APIKey != "" {
-					return bootMsg{phase: 2, msg: "✓ authenticated (key_" + last4(m.cfg.OmniRoute.APIKey) + ")"}
-				}
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
 				diag := m.rt.Gateway.Diagnose(ctx)
+				if m.cfg.OmniRoute.APIKey != "" {
+					if diag.State == gateway.AuthRejected {
+						return bootMsg{phase: 2, msg: "⚠ API key rejected — press Ctrl+K to replace it"}
+					}
+					return bootMsg{phase: 2, msg: "✓ authenticated (key_" + last4(m.cfg.OmniRoute.APIKey) + ")"}
+				}
 				switch diag.State {
 				case gateway.AuthNotRequired:
 					return bootMsg{phase: 2, msg: "✓ anonymous mode (no API key needed)"}
@@ -369,7 +375,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				var accountCombos []accountCombo
-				for _, gc := range m.rt.Gateway.ListCombos(ctx) {
+				combos, comboErr := m.rt.Gateway.ListCombos(ctx)
+				if comboErr != nil {
+					combos = nil
+				}
+				for _, gc := range combos {
 					var models []string
 					for _, md := range gc.Models {
 						if md.Model != "" {
@@ -382,7 +392,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.accountCombos = accountCombos
 				count := len(accountCombos)
 				if count > 0 {
-					return bootMsg{phase: 3, msg: fmt.Sprintf("✓ loaded %d combos, %d providers", count, len(providers))}
+					return bootMsg{phase: 3, msg: fmt.Sprintf("✓ loaded %d account combos, %d providers", count, len(providers))}
+				}
+				if comboErr != nil {
+					return bootMsg{phase: 3, msg: "⚠ could not load account combos — check API key and endpoint"}
 				}
 				return bootMsg{phase: 3, msg: fmt.Sprintf("✓ %d providers connected", len(providers))}
 			})
@@ -459,6 +472,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case taskDoneMsg:
 		m.running = false
+		m.cancel = nil
 		if msg.Task != nil {
 			m.status = msg.Task.Status
 		} else if msg.Err != nil {
@@ -710,6 +724,7 @@ func (m *Model) startTask(prompt string) tea.Cmd {
 func (m *Model) cancelTask() {
 	if m.cancel != nil {
 		m.cancel()
+		m.cancel = nil
 	}
 }
 
@@ -740,11 +755,15 @@ func (m *Model) applyCombo(id string) tea.Cmd {
 
 func (m *Model) applyKey(key string) tea.Cmd {
 	m.keyInput = false
+	m.input.SetValue("")
 	m.input.Placeholder = "describe a task…"
 	if key == "" {
 		return m.noteError(fmt.Errorf("no API key provided"))
 	}
 	m.cfg.OmniRoute.APIKey = key
+	if m.rt != nil && m.rt.Gateway != nil {
+		m.rt.Gateway.SetAPIKey(key)
+	}
 	if m.configPath != "" {
 		if err := m.cfg.Save(m.configPath); err != nil {
 			return m.noteError(fmt.Errorf("saved key but failed to persist: %w", err))

@@ -1,7 +1,6 @@
 // Package config loads, validates and supplies OmniHarness configuration.
-// Configuration is TOML with sensible defaults; secrets are never stored here
-// (OmniRoute holds credentials, and API keys may be supplied via environment
-// or the keyring, never written to disk by OmniHarness).
+// Configuration is TOML with sensible defaults. API keys may be supplied by
+// environment or saved explicitly through the interactive TUI.
 package config
 
 import (
@@ -44,7 +43,7 @@ type MCServer struct {
 // OmniRoute configures the gateway connection.
 type OmniRoute struct {
 	// Endpoint is the base URL of the OmniRoute server, e.g.
-	// http://127.0.0.1:20128
+	// http://localhost:20128
 	Endpoint string `toml:"endpoint"`
 	// Timeout bounds a single model request.
 	Timeout time.Duration `toml:"timeout"`
@@ -197,9 +196,6 @@ func Load(path string) (Config, error) {
 			if !os.IsNotExist(err) {
 				return cfg, fmt.Errorf("read config %s: %w", path, err)
 			}
-			// Missing file: fall through to defaults + env overrides.
-			cfg.applyEnv()
-			return cfg, nil
 		}
 		if err := toml.Unmarshal(data, &cfg); err != nil {
 			return cfg, fmt.Errorf("parse config %s: %w", path, err)
@@ -278,9 +274,7 @@ func validCapability(c string) bool {
 
 // applyEnv applies environment overrides. The OMNIROUTE_* names are primary
 // (they match OmniRoute's own server conventions); OMNIHARNESS_* remain as
-// legacy aliases. The API key is never written to disk by OmniHarness — it is
-// only ever read from the environment (or an ephemeral flag) and held in
-// memory.
+// legacy aliases. Environment values take precedence over the config file.
 func (c *Config) applyEnv() {
 	if v := os.Getenv("OMNIROUTE_URL"); v != "" {
 		c.OmniRoute.Endpoint = v
@@ -304,10 +298,8 @@ func (c *Config) applyEnv() {
 func DefaultPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".omniharness.toml")
-}
-
-// Save writes the configuration back to path as TOML. Used by `stack set`
-// and the TUI stack picker so the chosen stack persists across launches.
+} // Save writes the configuration back to path as TOML. Used by `stack set`
+// and the TUI settings so endpoint, API key, and model choices persist across launches.
 func (c *Config) Save(path string) error {
 	if path == "" {
 		return fmt.Errorf("no config path")

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -168,6 +169,15 @@ func TestModelKeyInput(t *testing.T) {
 	}
 }
 
+func TestModelApplyKeyUpdatesLiveGateway(t *testing.T) {
+	m, fake := newTestModel(t)
+	m.applyKey("sk-live-1234")
+	fake.RequireAPIKey = "sk-live-1234"
+	if _, err := m.rt.Gateway.ListProviders(context.Background()); err != nil {
+		t.Fatalf("live gateway did not receive updated key: %v", err)
+	}
+}
+
 func TestModelEndpointInput(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.configPath = t.TempDir() + string(os.PathSeparator) + "cfg.toml"
@@ -243,6 +253,20 @@ func TestModelStartTask(t *testing.T) {
 	}
 	if !m2.running {
 		t.Fatal("should be running")
+	}
+}
+
+func TestModelTaskCompletionClearsCancel(t *testing.T) {
+	m, _ := newTestModel(t)
+	called := false
+	m.cancel = func() { called = true }
+	m.running = true
+	m2, _ := update(t, m, taskDoneMsg{Err: os.ErrClosed})
+	if m2.cancel != nil {
+		t.Fatal("cancel function should be cleared after task completion")
+	}
+	if called {
+		t.Fatal("completion must not invoke cancellation")
 	}
 }
 
