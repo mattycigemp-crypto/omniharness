@@ -273,6 +273,7 @@ func New(cfg config.Config, rt *runtime.Runtime, configPath string) *Model {
 		rt:            rt,
 		view:          ViewHome,
 		input:         in,
+		inputFocused:  true, // auto-focus so typing works immediately
 		status:        task.StatusPending,
 		styles:        makeStyles(cfg.TUI.Color),
 		modelStatID:   map[string]int{},
@@ -314,7 +315,46 @@ func makeStyles(color bool) Styles {
 // Init starts the input and refresh tick. Runtime events arrive through the
 // persistent subscription installed by Run (via prog.Send).
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.input.Focus(), m.tick())
+	return tea.Batch(m.input.Focus(), m.tick(), fetchCombosCmd(m))
+}
+
+// fetchCombosCmd returns a command that fetches combos on startup.
+func fetchCombosCmd(m *Model) tea.Cmd {
+	rt := m.rt
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		ids, err := rt.Gateway.ListCatalog(ctx)
+		if err != nil {
+			return combosMsg{Options: combo.List(nil), Live: false}
+		}
+		var providers []providerInfo
+		if conns, err := rt.Gateway.ListProviders(ctx); err == nil {
+			for _, c := range conns {
+				providers = append(providers, providerInfo{
+					ID:     c.ID,
+					Name:   c.Name,
+					Status: c.Status,
+				})
+			}
+		}
+		var accountCombos []accountCombo
+		for _, gc := range rt.Gateway.ListCombos(ctx) {
+			var models []string
+			for _, m := range gc.Models {
+				if m.Model != "" {
+					models = append(models, m.Model)
+				}
+			}
+			accountCombos = append(accountCombos, accountCombo{
+				Name:     gc.Name,
+				Strategy: gc.Strategy,
+				Models:   models,
+				Default:  gc.IsDefault,
+			})
+		}
+		return combosMsg{Options: combo.List(ids), Live: true, Providers: providers, AccountCombos: accountCombos}
+	}
 }
 
 // refreshInterval returns the animation cadence from config (default 100ms).
@@ -342,6 +382,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 
 	case tickMsg:
 		m.frame++
@@ -456,14 +499,14 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.input.SetValue("")
 			m.inputFocused = false
-		if m.keyInput {
-			// API key entry mode: store the key.
-			return m, m.applyKey(val)
-		}
-		if m.endpointInput {
-			// Endpoint entry mode: store the URL.
-			return m, m.applyEndpoint(val)
-		}
+			if m.keyInput {
+				// API key entry mode: store the key.
+				return m, m.applyKey(val)
+			}
+			if m.endpointInput {
+				// Endpoint entry mode: store the URL.
+				return m, m.applyEndpoint(val)
+			}
 			if strings.HasPrefix(val, "/") {
 				return m, m.handleCommand(val)
 			}
@@ -575,6 +618,45 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleMouse processes mouse events for click-to-focus and view switching.
+func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.MouseLeft:
+		// Click on the tab bar to switch views.
+		if msg.Y == 0 {
+			// Estimate tab positions (each tab ~8 chars + 2 space).
+			tabWidth := 10
+			x := msg.X
+			// Skip brand area (~20 chars).
+			if x > 20 {
+				tabIdx := (x - 20) / tabWidth
+				if tabIdx >= 0 && tabIdx < int(viewCount) {
+					m.view = View(tabIdx)
+				}
+			}
+		}
+		// Click on input area to focus.
+		if msg.Y >= m.height-2 {
+			m.inputFocused = true
+			return m, m.input.Focus()
+		}
+	case tea.MouseWheelUp:
+		if m.view == ViewCombo {
+			if m.comboSel > 0 {
+				m.comboSel--
+			}
+		}
+	case tea.MouseWheelDown:
+		if m.view == ViewCombo {
+			total := len(m.accountCombos) + len(m.combos) + 1
+			if m.comboSel < total-1 {
+				m.comboSel++
+			}
+		}
+	}
+	return m, nil
+}
+
 // startTask launches the task runner goroutine. State that the Update loop
 // owns (running, cancel) is set here synchronously — never from inside the
 // returned cmd, which runs on the tea command goroutine and would race with
@@ -606,8 +688,8 @@ func (m *Model) cancelTask() {
 
 // fetchCombos loads the model combo list from the live OmniRoute catalog
 // (falling back to the built-in combos when unreachable). It also fetches
-// connected providers and the user's configured combos. It never fails the
-// TUI; the fallback is always usable.
+// connected providers and the user's configured combos. Only auto/* combos
+// are shown in the picker (individual models are hidden).
 func (m *Model) fetchCombos() tea.Cmd {
 	rt := m.rt
 	return func() tea.Msg {
@@ -616,6 +698,13 @@ func (m *Model) fetchCombos() tea.Cmd {
 		ids, err := rt.Gateway.ListCatalog(ctx)
 		if err != nil {
 			return combosMsg{Options: combo.List(nil), Live: false}
+		}
+		// Filter to only auto/* combos (hide individual models).
+		var autoOnly []string
+		for _, id := range ids {
+			if combo.IsAuto(id) {
+				autoOnly = append(autoOnly, id)
+			}
 		}
 		// Fetch connected providers.
 		var providers []providerInfo
@@ -644,7 +733,7 @@ func (m *Model) fetchCombos() tea.Cmd {
 				Default:  gc.IsDefault,
 			})
 		}
-		return combosMsg{Options: combo.List(ids), Live: true, Providers: providers, AccountCombos: accountCombos}
+		return combosMsg{Options: combo.List(autoOnly), Live: true, Providers: providers, AccountCombos: accountCombos}
 	}
 }
 

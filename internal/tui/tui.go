@@ -24,7 +24,7 @@ func Run(cfg config.Config, rt *runtime.Runtime, configPath string) error {
 	defer rt.Close()
 
 	model := New(cfg, rt, configPath)
-	prog := tea.NewProgram(model, tea.WithAltScreen())
+	prog := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	model.program = prog
 
 	// The TUI is the human: approvals flow through it.

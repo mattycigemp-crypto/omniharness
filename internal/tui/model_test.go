@@ -94,6 +94,7 @@ func TestModelTaskCompletion(t *testing.T) {
 
 func TestModelTabCyclesViews(t *testing.T) {
 	m, _ := newTestModel(t)
+	m.inputFocused = false // unfocus input so tab cycles views
 	start := m.view
 	m, cmd := update(t, m, tea.KeyMsg{Type: tea.KeyTab})
 	if cmd != nil {
@@ -279,6 +280,7 @@ func TestModelComboPickerNavigatesAndSets(t *testing.T) {
 		{ID: "auto/best-reasoning", Description: "reasoning", Kind: "auto"},
 	}
 	m.combosLoading = false
+	m.inputFocused = false
 	m.view = ViewCombo
 
 	// Navigate to auto/best-reasoning and apply it.
@@ -315,6 +317,7 @@ func TestModelComboPickerCustomIdEntry(t *testing.T) {
 	m.configPath = t.TempDir() + string(os.PathSeparator) + "cfg.toml"
 	m.combos = []combo.Option{{ID: "auto/best-coding", Description: "coding", Kind: "auto"}}
 	m.combosLoading = false
+	m.inputFocused = false
 	m.view = ViewCombo
 
 	// Last row is the custom-id entry: select past the list and press enter.
@@ -346,6 +349,7 @@ func TestModelComboPickerRejectsMalformedId(t *testing.T) {
 	m.configPath = t.TempDir() + string(os.PathSeparator) + "cfg.toml"
 	m.combos = []combo.Option{{ID: "auto/best-coding", Description: "coding", Kind: "auto"}}
 	m.combosLoading = false
+	m.inputFocused = false
 	m.view = ViewCombo
 	m, _ = update(t, m, tea.KeyMsg{Type: tea.KeyDown})
 	m, _ = update(t, m, tea.KeyMsg{Type: tea.KeyEnter})
@@ -361,6 +365,7 @@ func TestModelComboPickerRejectsMalformedId(t *testing.T) {
 
 func TestModelComboPickerEscBackToMain(t *testing.T) {
 	m, _ := newTestModel(t)
+	m.inputFocused = false
 	m.view = ViewCombo
 	m, _ = update(t, m, tea.KeyMsg{Type: tea.KeyEsc})
 	if m.view != ViewHome {

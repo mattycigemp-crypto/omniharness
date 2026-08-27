@@ -124,6 +124,9 @@ func (m *Model) View() string {
 // Header
 // ---------------------------------------------------------------------------
 
+// viewLabels maps view indices to short labels for the tab bar.
+var viewLabels = []string{"home", "chat", "agents", "graph", "route", "sessions", "combos", "help"}
+
 func (m *Model) renderHeader() string {
 	// Animated brand: hue drifts slowly across the blue range.
 	hue := 200 + (m.frame*3)%70
@@ -131,6 +134,18 @@ func (m *Model) renderHeader() string {
 		Bold(true).
 		Foreground(lipgloss.Color(hueToHex(hue))).
 		Render("◉ omniharness")
+
+	// View tabs.
+	var tabs []string
+	for i := 0; i < int(viewCount); i++ {
+		label := viewLabels[i]
+		if View(i) == m.view {
+			tabs = append(tabs, m.styles.accent.Render("["+label+"]"))
+		} else {
+			tabs = append(tabs, m.styles.muted.Render(label))
+		}
+	}
+	tabBar := strings.Join(tabs, "  ")
 
 	status := string(m.status)
 	statusStyle := m.styles.muted
@@ -163,7 +178,7 @@ func (m *Model) renderHeader() string {
 	right = append(right, m.styles.muted.Render("session "+shortID(m.sessionID)))
 
 	left := brand + "   " + statusStyle.Render(status)
-	return lipgloss.JoinHorizontal(lipgloss.Left, left, lipgloss.NewStyle().Width(m.width).Align(lipgloss.Right).Render(strings.Join(right, "  ")))
+	return lipgloss.JoinHorizontal(lipgloss.Left, left, " "+tabBar, lipgloss.NewStyle().Width(m.width).Align(lipgloss.Right).Render(strings.Join(right, "  ")))
 }
 
 // ---------------------------------------------------------------------------
