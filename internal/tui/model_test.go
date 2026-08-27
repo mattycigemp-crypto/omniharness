@@ -153,7 +153,7 @@ func TestModelRendersWithoutTerminal(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.width, m.height = 100, 30
 	view := m.View()
-	if !strings.Contains(view, "omniroute") {
+	if !strings.Contains(view, "omniharness") {
 		t.Fatalf("header missing: %s", view)
 	}
 	if !strings.Contains(view, "Getting started") {

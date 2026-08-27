@@ -251,7 +251,7 @@ func New(cfg config.Config, rt *runtime.Runtime, configPath string) *Model {
 
 	// Build the welcome conversation on startup.
 	convo := []chatLine{
-		{Kind: chatHarness, Text: "Welcome to OmniRoute! Your free AI gateway.", Time: time.Now().Format("15:04:05")},
+		{Kind: chatHarness, Text: "Welcome to OmniHarness! Agent orchestration for OmniRoute.", Time: time.Now().Format("15:04:05")},
 		{Kind: chatHarness, Text: "Start by describing a task or choose a model with 'p'.", Time: time.Now().Format("15:04:05")},
 	}
 
@@ -735,7 +735,7 @@ func (m *Model) handleCommand(cmd string) tea.Cmd {
 	case "/diff":
 		m.chat(chatHarness, "No current diff available.")
 	case "/release-notes":
-		m.chat(chatHarness, "OmniRoute TUI v"+version.Version+" — Gemini-inspired dashboard, improved streaming.")
+		m.chat(chatHarness, "OmniHarness TUI v"+version.Version+" — Gemini-inspired dashboard, improved streaming.")
 	case "/key":
 		return m.startKeyInput()
 	case "/endpoint":

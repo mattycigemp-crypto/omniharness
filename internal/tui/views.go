@@ -31,7 +31,7 @@ var (
 // brandLogo is the compact logo shown on the home screen.
 var brandLogo = []string{
 	"  ╔══════════════════════════════════════╗",
-	"  ║          ◉  O M N I R O U T E        ║",
+	"  ║          ◉  O M N I H A R N E S S    ║",
 	"  ╚══════════════════════════════════════╝",
 }
 
@@ -130,7 +130,7 @@ func (m *Model) renderHeader() string {
 	brand := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color(hueToHex(hue))).
-		Render("◉ omniroute")
+		Render("◉ omniharness")
 
 	status := string(m.status)
 	statusStyle := m.styles.muted
