@@ -153,7 +153,15 @@ func TestModelDeniesApprovalOnN(t *testing.T) {
 func TestModelRendersWithoutTerminal(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.width, m.height = 100, 30
+	// Boot screen shows the logo.
 	view := m.View()
+	if !strings.Contains(view, "O M N I H A R N E S S") {
+		t.Fatalf("boot logo missing: %s", view)
+	}
+	// Simulate boot completion.
+	m.view = ViewHome
+	m.inputFocused = true
+	view = m.View()
 	if !strings.Contains(view, "omniharness") {
 		t.Fatalf("header missing: %s", view)
 	}

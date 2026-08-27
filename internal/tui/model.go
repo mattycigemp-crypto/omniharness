@@ -30,7 +30,8 @@ import (
 type View int
 
 const (
-	ViewHome View = iota
+	ViewBoot View = iota
+	ViewHome
 	ViewMain
 	ViewAgents
 	ViewGraph
@@ -43,6 +44,8 @@ const (
 
 func (v View) String() string {
 	switch v {
+	case ViewBoot:
+		return "boot"
 	case ViewHome:
 		return "home"
 	case ViewMain:
@@ -163,6 +166,15 @@ type approvalAnswerMsg struct {
 // tickMsg is a periodic refresh pulse.
 type tickMsg time.Time
 
+// bootMsg is a boot sequence step.
+type bootMsg struct {
+	phase int
+	msg   string
+}
+
+// bootCompleteMsg signals boot is done.
+type bootCompleteMsg struct{}
+
 // sessionsMsg carries the session list.
 type sessionsMsg struct{ Sessions []*session.Session }
 
@@ -235,6 +247,11 @@ type Model struct {
 	// Sessions view.
 	sessions []*session.Session
 
+	// Boot sequence.
+	bootPhase  int    // 0-4: current boot step
+	bootMsgs   []string // messages to display
+	bootDone   bool    // boot complete
+
 	// Style.
 	styles Styles
 }
@@ -271,9 +288,9 @@ func New(cfg config.Config, rt *runtime.Runtime, configPath string) *Model {
 		cfg:           cfg,
 		configPath:    configPath,
 		rt:            rt,
-		view:          ViewHome,
+		view:          ViewBoot,
 		input:         in,
-		inputFocused:  true, // auto-focus so typing works immediately
+		inputFocused:  false, // don't focus during boot
 		status:        task.StatusPending,
 		styles:        makeStyles(cfg.TUI.Color),
 		modelStatID:   map[string]int{},
@@ -315,7 +332,14 @@ func makeStyles(color bool) Styles {
 // Init starts the input and refresh tick. Runtime events arrive through the
 // persistent subscription installed by Run (via prog.Send).
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.input.Focus(), m.tick(), fetchCombosCmd(m))
+	return tea.Batch(m.tick(), m.startBoot())
+}
+
+// startBoot kicks off the boot sequence with animated steps.
+func (m *Model) startBoot() tea.Cmd {
+	return func() tea.Msg {
+		return bootMsg{phase: 0, msg: "initializing OmniHarness v" + version.Version}
+	}
 }
 
 // fetchCombosCmd returns a command that fetches combos on startup.
@@ -385,6 +409,92 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
+
+	case bootMsg:
+		m.bootPhase = msg.phase
+		m.bootMsgs = append(m.bootMsgs, msg.msg)
+		// Progress through boot phases.
+		switch msg.phase {
+		case 0:
+			// Connect to OmniRoute.
+			return m, tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				err := m.rt.Gateway.Ping(ctx)
+				if err != nil {
+					return bootMsg{phase: 1, msg: "⚠ gateway unreachable at " + m.cfg.OmniRoute.Endpoint}
+				}
+				return bootMsg{phase: 1, msg: "✓ connected to " + m.cfg.OmniRoute.Endpoint}
+			})
+		case 1:
+			// Check auth.
+			return m, tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
+				if m.cfg.OmniRoute.APIKey != "" {
+					return bootMsg{phase: 2, msg: "✓ authenticated (key_" + last4(m.cfg.OmniRoute.APIKey) + ")"}
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				diag := m.rt.Gateway.Diagnose(ctx)
+				switch diag.State {
+				case gateway.AuthNotRequired:
+					return bootMsg{phase: 2, msg: "✓ anonymous mode (no API key needed)"}
+				case gateway.AuthUnreachable:
+					return bootMsg{phase: 2, msg: "⚠ gateway unreachable — key can be set later with 'k'"}
+				default:
+					return bootMsg{phase: 2, msg: "⚠ no API key — press 'k' to set one"}
+				}
+			})
+		case 2:
+			// Fetch combos.
+			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+				defer cancel()
+				var providers []providerInfo
+				if conns, err := m.rt.Gateway.ListProviders(ctx); err == nil {
+					for _, c := range conns {
+						providers = append(providers, providerInfo{
+							ID:     c.ID,
+							Name:   c.Name,
+							Status: c.Status,
+						})
+					}
+				}
+				var accountCombos []accountCombo
+				for _, gc := range m.rt.Gateway.ListCombos(ctx) {
+					var models []string
+					for _, md := range gc.Models {
+						if md.Model != "" {
+							models = append(models, md.Model)
+						}
+					}
+					accountCombos = append(accountCombos, accountCombo{
+						Name:     gc.Name,
+						Strategy: gc.Strategy,
+						Models:   models,
+						Default:  gc.IsDefault,
+					})
+				}
+				m.providers = providers
+				m.accountCombos = accountCombos
+				count := len(accountCombos)
+				if count > 0 {
+					return bootMsg{phase: 3, msg: fmt.Sprintf("✓ loaded %d account combos, %d providers", count, len(providers))}
+				}
+				return bootMsg{phase: 3, msg: fmt.Sprintf("✓ %d providers connected", len(providers))}
+			})
+		case 3:
+			// Finalize.
+			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+				return bootCompleteMsg{}
+			})
+		}
+		return m, nil
+
+	case bootCompleteMsg:
+		m.bootDone = true
+		m.view = ViewHome
+		m.inputFocused = true
+		return m, m.input.Focus()
 
 	case tickMsg:
 		m.frame++

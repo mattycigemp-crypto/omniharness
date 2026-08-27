@@ -97,6 +97,8 @@ func (m *Model) View() string {
 	}
 	var body string
 	switch m.view {
+	case ViewBoot:
+		body = m.renderBoot()
 	case ViewHome:
 		body = m.renderHome()
 	case ViewMain:
@@ -125,7 +127,7 @@ func (m *Model) View() string {
 // ---------------------------------------------------------------------------
 
 // viewLabels maps view indices to short labels for the tab bar.
-var viewLabels = []string{"home", "chat", "agents", "graph", "route", "sessions", "combos", "help"}
+var viewLabels = []string{"boot", "home", "chat", "agents", "graph", "route", "sessions", "combos", "help"}
 
 func (m *Model) renderHeader() string {
 	// Animated brand: hue drifts slowly across the blue range.
@@ -219,6 +221,58 @@ func (m *Model) renderFooter() string {
 		lipgloss.NewStyle().Width(m.width/3).Align(lipgloss.Center).Render(statusInfo),
 		lipgloss.NewStyle().Width(m.width).Align(lipgloss.Right).Render(hint),
 	)
+}
+
+// renderBoot shows the animated boot sequence.
+func (m *Model) renderBoot() string {
+	var b strings.Builder
+
+	// Center the boot screen.
+	b.WriteString("\n\n")
+
+	// Animated logo with gradient.
+	for _, l := range brandLogo {
+		hue := 200 + (m.frame*5)%60
+		b.WriteString(lipgloss.NewStyle().
+			Foreground(lipgloss.Color(hueToHex(hue))).
+			Bold(true).
+			Render(l) + "\n")
+	}
+	b.WriteString("\n")
+
+	// Version.
+	b.WriteString(m.styles.muted.Render("  v" + version.Version))
+	b.WriteString("\n\n")
+
+	// Progress bar.
+	totalPhases := 4
+	progress := m.bootPhase
+	if progress > totalPhases {
+		progress = totalPhases
+	}
+	barWidth := 40
+	filled := (progress * barWidth) / totalPhases
+	if filled > barWidth {
+		filled = barWidth
+	}
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+	b.WriteString("  " + m.styles.accent.Render(bar) + "\n\n")
+
+	// Boot messages.
+	for _, msg := range m.bootMsgs {
+		if strings.HasPrefix(msg, "⚠") {
+			b.WriteString("  " + m.styles.warn.Render(msg) + "\n")
+		} else {
+			b.WriteString("  " + m.styles.ok.Render(msg) + "\n")
+		}
+	}
+
+	// Show spinner if still booting.
+	if !m.bootDone {
+		b.WriteString("\n  " + m.spinner() + " " + m.styles.muted.Render("booting...") + "\n")
+	}
+
+	return b.String()
 }
 
 // renderHome shows the welcome screen with tips and model info.
