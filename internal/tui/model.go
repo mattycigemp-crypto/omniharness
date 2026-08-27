@@ -1,6 +1,5 @@
-// Package tui implements the OmniHarness cockpit: a thin Bubble Tea
-// presentation/control layer over the core runtime. All state flows from the
-// event bus into the view; the TUI never owns truth.
+// Package tui implements the OmniHarness cockpit: a single-screen chat
+// interface with overlay dialogs, inspired by OpenCode's TUI design.
 package tui
 
 import (
@@ -26,45 +25,18 @@ import (
 	"omniharness/internal/version"
 )
 
-// View identifies the active TUI view.
-type View int
+// Overlay identifies what dialog is open on top of the chat.
+type Overlay int
 
 const (
-	ViewBoot View = iota
-	ViewHome
-	ViewMain
-	ViewAgents
-	ViewGraph
-	ViewRouting
-	ViewSessions
-	ViewCombo
-	ViewHelp
-	viewCount
+	OverlayNone Overlay = iota
+	OverlayModelPicker
+	OverlaySessions
+	OverlayHelp
+	OverlayKeyInput
+	OverlayEndpointInput
+	OverlayBoot
 )
-
-func (v View) String() string {
-	switch v {
-	case ViewBoot:
-		return "boot"
-	case ViewHome:
-		return "home"
-	case ViewMain:
-		return "main"
-	case ViewAgents:
-		return "agents"
-	case ViewGraph:
-		return "graph"
-	case ViewRouting:
-		return "routing"
-	case ViewSessions:
-		return "sessions"
-	case ViewCombo:
-		return "combo"
-	case ViewHelp:
-		return "help"
-	}
-	return "?"
-}
 
 // agentRow is a live snapshot of one agent.
 type agentRow struct {
@@ -109,31 +81,30 @@ type modelStat struct {
 	TokensOut int64
 	Cost      float64
 	Failures  int
-	LastState string // "ok" | "failed" | "requested"
-	Reason    string // last selection reason (explainability)
+	LastState string
+	Reason    string
 }
 
 // combosMsg carries the fetched model combo list.
 type combosMsg struct {
 	Options      []combo.Option
-	Live         bool // catalog came from the server, not the fallback
-	Providers    []providerInfo // connected providers from the account
-	AccountCombos []accountCombo // user's configured combos from OmniRoute
+	Live         bool
+	Providers    []providerInfo
+	AccountCombos []accountCombo
 }
 
-// providerInfo describes a connected provider from the OmniRoute account.
+// providerInfo describes a connected provider.
 type providerInfo struct {
-	ID      string
-	Name    string
-	Status  string // "active", "inactive", "test_passed", etc.
-	Models  []string // available model IDs
+	ID     string
+	Name   string
+	Status string
 }
 
-// accountCombo is a user-configured combo from their OmniRoute account.
+// accountCombo is a user-configured combo from OmniRoute.
 type accountCombo struct {
 	Name     string
 	Strategy string
-	Models   []string // provider/model refs in the chain
+	Models   []string
 	Default  bool
 }
 
@@ -166,15 +137,6 @@ type approvalAnswerMsg struct {
 // tickMsg is a periodic refresh pulse.
 type tickMsg time.Time
 
-// bootMsg is a boot sequence step.
-type bootMsg struct {
-	phase int
-	msg   string
-}
-
-// bootCompleteMsg signals boot is done.
-type bootCompleteMsg struct{}
-
 // sessionsMsg carries the session list.
 type sessionsMsg struct{ Sessions []*session.Session }
 
@@ -184,14 +146,21 @@ type taskStartedMsg struct {
 	TaskID    string
 }
 
+// bootMsg is a boot sequence step.
+type bootMsg struct {
+	phase int
+	msg   string
+}
+
+// bootCompleteMsg signals boot is done.
+type bootCompleteMsg struct{}
+
 // Model is the TUI state.
 type Model struct {
 	cfg        config.Config
-	configPath string // where `stack set` persists (empty = don't persist)
+	configPath string
 	rt         *runtime.Runtime
 	program    *tea.Program
-	view       View
-
 	width, height int
 
 	// Live task state.
@@ -203,32 +172,29 @@ type Model struct {
 	steps          []string
 	prompt         string
 	agents         []agentRow
-	events         []eventLine // ring buffer
+	events         []eventLine
 	metrics        telemetry.SessionMetrics
-	repairs        int // Conversation (chat thread) + animation state.
+	repairs        int
 	conversation   []chatLine
-	frame          int    // animation frame (tick-driven)
-	stream         string // typewriter buffer (result text revealed so far)
-	streamFull     string // full result text to reveal
+	frame          int
+	stream         string
+	streamFull     string
 	streamIdx      int
 
 	// Model combo picker.
 	combos        []combo.Option
 	combosLoading bool
 	comboSel      int
-	modelInput    bool // input bar is in "type a provider/model id" mode
+	modelInput    bool
 
-	// Connected providers from the OmniRoute account.
-	providers     []providerInfo
-	providersLoading bool
+	// Connected providers and user's combos.
+	providers      []providerInfo
+	accountCombos  []accountCombo
 
-	// User's configured combos from the OmniRoute account.
-	accountCombos []accountCombo
-
-	// Per-model usage (actual models used this session).
+	// Per-model usage.
 	modelStats  []modelStat
 	modelStatID map[string]int
-	lastModel   string // most recently requested model (header badge)
+	lastModel   string
 
 	// Control.
 	running      bool
@@ -236,30 +202,28 @@ type Model struct {
 	approval     *approvalReq
 	input        textinput.Model
 	inputFocused bool
-	selected     int // selected row in agent view
+	selected     int
 
-	// API key input mode.
-	keyInput bool // input bar is in "paste your API key" mode
-
-	// Endpoint input mode.
-	endpointInput bool // input bar is in "type endpoint URL" mode
+	// Overlay state.
+	overlay       Overlay
+	keyInput      bool
+	endpointInput bool
 
 	// Sessions view.
 	sessions []*session.Session
 
 	// Boot sequence.
-	bootPhase  int    // 0-4: current boot step
-	bootMsgs   []string // messages to display
-	bootDone   bool    // boot complete
+	bootPhase int
+	bootMsgs  []string
+	bootDone  bool
 
 	// Style.
 	styles Styles
 }
 
-// Styles holds the (deliberately restrained) visual language.
+// Styles holds the visual language.
 type Styles struct {
 	base   lipgloss.Style
-	header lipgloss.Style
 	muted  lipgloss.Style
 	accent lipgloss.Style
 	ok     lipgloss.Style
@@ -270,31 +234,29 @@ type Styles struct {
 	title  lipgloss.Style
 }
 
-// New builds the TUI model. configPath is where a picked stack is persisted
-// (the config file the CLI loaded); pass "" to keep the picker in-memory.
+// New builds the TUI model.
 func New(cfg config.Config, rt *runtime.Runtime, configPath string) *Model {
 	in := textinput.New()
 	in.Placeholder = "describe a task…"
 	in.Prompt = "> "
 	in.CharLimit = 1000
 
-	// Build the welcome conversation on startup.
 	convo := []chatLine{
 		{Kind: chatHarness, Text: "Welcome to OmniHarness! Agent orchestration for OmniRoute.", Time: time.Now().Format("15:04:05")},
-		{Kind: chatHarness, Text: "Start by describing a task or choose a model with 'p'.", Time: time.Now().Format("15:04:05")},
+		{Kind: chatHarness, Text: "Start by describing a task. Press Ctrl+O to pick a model.", Time: time.Now().Format("15:04:05")},
 	}
 
 	return &Model{
 		cfg:           cfg,
 		configPath:    configPath,
 		rt:            rt,
-		view:          ViewBoot,
+		overlay:       OverlayBoot,
 		input:         in,
-		inputFocused:  false, // don't focus during boot
+		inputFocused:  false,
 		status:        task.StatusPending,
 		styles:        makeStyles(cfg.TUI.Color),
 		modelStatID:   map[string]int{},
-		combos:        combo.List(nil), // offline fallback until the catalog loads
+		combos:        combo.List(nil),
 		combosLoading: true,
 		conversation:  convo,
 	}
@@ -304,7 +266,6 @@ func makeStyles(color bool) Styles {
 	if !color {
 		return Styles{
 			base:   lipgloss.NewStyle(),
-			header: lipgloss.NewStyle().Bold(true).Padding(0, 1),
 			muted:  lipgloss.NewStyle().Faint(true),
 			accent: lipgloss.NewStyle().Bold(true),
 			ok:     lipgloss.NewStyle().Bold(true),
@@ -317,7 +278,6 @@ func makeStyles(color bool) Styles {
 	}
 	return Styles{
 		base:   lipgloss.NewStyle(),
-		header: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("24")).Padding(0, 1),
 		muted:  lipgloss.NewStyle().Faint(true),
 		accent: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
 		ok:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42")),
@@ -329,59 +289,18 @@ func makeStyles(color bool) Styles {
 	}
 }
 
-// Init starts the input and refresh tick. Runtime events arrive through the
-// persistent subscription installed by Run (via prog.Send).
+// Init starts the TUI.
 func (m *Model) Init() tea.Cmd {
 	return tea.Batch(m.tick(), m.startBoot())
 }
 
-// startBoot kicks off the boot sequence with animated steps.
+// startBoot kicks off the boot sequence.
 func (m *Model) startBoot() tea.Cmd {
 	return func() tea.Msg {
 		return bootMsg{phase: 0, msg: "initializing OmniHarness v" + version.Version}
 	}
 }
 
-// fetchCombosCmd returns a command that fetches combos on startup.
-func fetchCombosCmd(m *Model) tea.Cmd {
-	rt := m.rt
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		defer cancel()
-		ids, err := rt.Gateway.ListCatalog(ctx)
-		if err != nil {
-			return combosMsg{Options: combo.List(nil), Live: false}
-		}
-		var providers []providerInfo
-		if conns, err := rt.Gateway.ListProviders(ctx); err == nil {
-			for _, c := range conns {
-				providers = append(providers, providerInfo{
-					ID:     c.ID,
-					Name:   c.Name,
-					Status: c.Status,
-				})
-			}
-		}
-		var accountCombos []accountCombo
-		for _, gc := range rt.Gateway.ListCombos(ctx) {
-			var models []string
-			for _, m := range gc.Models {
-				if m.Model != "" {
-					models = append(models, m.Model)
-				}
-			}
-			accountCombos = append(accountCombos, accountCombo{
-				Name:     gc.Name,
-				Strategy: gc.Strategy,
-				Models:   models,
-				Default:  gc.IsDefault,
-			})
-		}
-		return combosMsg{Options: combo.List(ids), Live: true, Providers: providers, AccountCombos: accountCombos}
-	}
-}
-
-// refreshInterval returns the animation cadence from config (default 100ms).
 func (m *Model) refreshInterval() time.Duration {
 	ms := m.cfg.TUI.RefreshMS
 	if ms <= 0 {
@@ -413,10 +332,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case bootMsg:
 		m.bootPhase = msg.phase
 		m.bootMsgs = append(m.bootMsgs, msg.msg)
-		// Progress through boot phases.
 		switch msg.phase {
 		case 0:
-			// Connect to OmniRoute.
 			return m, tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
@@ -427,7 +344,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return bootMsg{phase: 1, msg: "✓ connected to " + m.cfg.OmniRoute.Endpoint}
 			})
 		case 1:
-			// Check auth.
 			return m, tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
 				if m.cfg.OmniRoute.APIKey != "" {
 					return bootMsg{phase: 2, msg: "✓ authenticated (key_" + last4(m.cfg.OmniRoute.APIKey) + ")"}
@@ -438,25 +354,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				switch diag.State {
 				case gateway.AuthNotRequired:
 					return bootMsg{phase: 2, msg: "✓ anonymous mode (no API key needed)"}
-				case gateway.AuthUnreachable:
-					return bootMsg{phase: 2, msg: "⚠ gateway unreachable — key can be set later with 'k'"}
 				default:
-					return bootMsg{phase: 2, msg: "⚠ no API key — press 'k' to set one"}
+					return bootMsg{phase: 2, msg: "⚠ no API key — press Ctrl+K to set one"}
 				}
 			})
 		case 2:
-			// Fetch combos.
 			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 				defer cancel()
 				var providers []providerInfo
 				if conns, err := m.rt.Gateway.ListProviders(ctx); err == nil {
 					for _, c := range conns {
-						providers = append(providers, providerInfo{
-							ID:     c.ID,
-							Name:   c.Name,
-							Status: c.Status,
-						})
+						providers = append(providers, providerInfo{ID: c.ID, Name: c.Name, Status: c.Status})
 					}
 				}
 				var accountCombos []accountCombo
@@ -467,23 +376,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							models = append(models, md.Model)
 						}
 					}
-					accountCombos = append(accountCombos, accountCombo{
-						Name:     gc.Name,
-						Strategy: gc.Strategy,
-						Models:   models,
-						Default:  gc.IsDefault,
-					})
+					accountCombos = append(accountCombos, accountCombo{Name: gc.Name, Strategy: gc.Strategy, Models: models, Default: gc.IsDefault})
 				}
 				m.providers = providers
 				m.accountCombos = accountCombos
 				count := len(accountCombos)
 				if count > 0 {
-					return bootMsg{phase: 3, msg: fmt.Sprintf("✓ loaded %d account combos, %d providers", count, len(providers))}
+					return bootMsg{phase: 3, msg: fmt.Sprintf("✓ loaded %d combos, %d providers", count, len(providers))}
 				}
 				return bootMsg{phase: 3, msg: fmt.Sprintf("✓ %d providers connected", len(providers))}
 			})
 		case 3:
-			// Finalize.
 			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 				return bootCompleteMsg{}
 			})
@@ -492,13 +395,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case bootCompleteMsg:
 		m.bootDone = true
-		m.view = ViewHome
+		m.overlay = OverlayNone
 		m.inputFocused = true
 		return m, m.input.Focus()
 
 	case tickMsg:
 		m.frame++
-		// Typewriter reveal: surface more of the final result each tick.
 		if m.streamIdx < len(m.streamFull) {
 			m.streamIdx += 5
 			if m.streamIdx > len(m.streamFull) {
@@ -523,10 +425,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.accountCombos = msg.AccountCombos
 		m.combosLoading = false
 		m.comboSel = 0
-		// If the fetch happened after the user pressed p, land in the picker.
-		if m.view == ViewCombo {
-			return m, nil
-		}
 		return m, nil
 
 	case approvalMsg:
@@ -554,7 +452,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastModel = ""
 		m.modelStats = nil
 		m.modelStatID = map[string]int{}
-		// Reset the typewriter so a fresh task never replays a stale result.
 		m.streamFull = ""
 		m.stream = ""
 		m.streamIdx = 0
@@ -568,8 +465,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = task.StatusFailed
 		}
 		m.refreshSessions()
-		// Prime the typewriter with the final result (real content, revealed
-		// progressively for effect).
 		if msg.Task != nil {
 			if full := resultText(msg.Task); full != "" {
 				m.streamFull = full
@@ -588,8 +483,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// handleKey routes keys by context (approval modal, prompt input, views).
+// handleKey routes keys by context.
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Boot screen: any key skips to home.
+	if m.overlay == OverlayBoot && m.bootDone {
+		m.overlay = OverlayNone
+		m.inputFocused = true
+		return m, m.input.Focus()
+	}
+
+	// Approval modal.
 	if m.approval != nil {
 		switch msg.String() {
 		case "y", "Y":
@@ -600,6 +503,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Overlay navigation.
+	if m.overlay != OverlayNone && m.overlay != OverlayBoot {
+		return m.handleOverlayKey(msg)
+	}
+
+	// Input mode.
 	if m.inputFocused {
 		switch msg.String() {
 		case "enter":
@@ -610,18 +519,15 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.SetValue("")
 			m.inputFocused = false
 			if m.keyInput {
-				// API key entry mode: store the key.
 				return m, m.applyKey(val)
 			}
 			if m.endpointInput {
-				// Endpoint entry mode: store the URL.
 				return m, m.applyEndpoint(val)
 			}
 			if strings.HasPrefix(val, "/") {
 				return m, m.handleCommand(val)
 			}
 			if m.modelInput {
-				// "type a provider/model id" mode: commit the combo.
 				m.modelInput = false
 				return m, m.applyCombo(val)
 			}
@@ -640,32 +546,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Combo picker navigation.
-	if m.view == ViewCombo {
-		totalAccount := len(m.accountCombos)
-		totalCatalog := len(m.combos)
-		total := totalAccount + totalCatalog + 1 // +1 for custom entry
-
-		switch msg.String() {
-		case "up":
-			if m.comboSel > 0 {
-				m.comboSel--
-			}
-			return m, nil
-		case "down":
-			if m.comboSel < total-1 {
-				m.comboSel++
-			}
-			return m, nil
-		case "enter":
-			return m, m.pickCombo()
-		case "esc":
-			m.view = ViewHome
-			return m, nil
-		}
-		return m, nil
-	}
-
+	// Global shortcuts.
 	switch msg.String() {
 	case "ctrl+c", "q":
 		if m.running {
@@ -673,92 +554,132 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Quit
-	case "tab", "right":
-		if m.view == ViewHome {
-			m.view = ViewMain
-		} else {
-			m.view = View((int(m.view) + 1) % int(viewCount))
-		}
+	case "ctrl+o", "ctrl+O":
+		m.overlay = OverlayModelPicker
+		m.comboSel = 0
 		return m, nil
-	case "shift+tab", "left":
-		m.view = View((int(m.view) + int(viewCount) - 1) % int(viewCount))
+	case "ctrl+a", "ctrl+A":
+		m.overlay = OverlaySessions
+		m.refreshSessions()
 		return m, nil
-	case "up":
-		if m.selected > 0 {
-			m.selected--
-		}
-		return m, nil
-	case "down":
-		if m.selected < len(m.agents)-1 {
-			m.selected++
-		}
+	case "ctrl+k", "ctrl+K":
+		m.keyInput = true
+		m.input.SetValue("")
+		m.input.Placeholder = "paste your OmniRoute API key (sk-…)"
+		m.inputFocused = true
+		return m, m.input.Focus()
+	case "ctrl+e", "ctrl+E":
+		m.endpointInput = true
+		m.input.SetValue(m.cfg.OmniRoute.Endpoint)
+		m.input.Placeholder = "OmniRoute endpoint URL (e.g. http://localhost:20128)"
+		m.inputFocused = true
+		return m, m.input.Focus()
+	case "?", "ctrl+/":
+		m.overlay = OverlayHelp
 		return m, nil
 	case "i":
 		m.inputFocused = true
-		return m, nil
-	case "k":
-		return m, m.startKeyInput()
-	case "e":
-		return m, m.startEndpointInput()
-	case "p":
-		if m.combosLoading {
-			return m, m.fetchCombos()
-		}
-		m.comboSel = 0
-		m.view = ViewCombo
-		return m, nil
-	case "r":
-		m.refreshSessions()
-		return m, nil
-	case "s":
-		m.view = ViewSessions
-		return m, nil
+		return m, m.input.Focus()
 	case "c":
 		m.cancelTask()
 		return m, nil
 	case "enter":
-		if m.view == ViewSessions {
-			return m, m.resumeSession()
-		}
-		if m.view == ViewHome && !m.running {
-			m.inputFocused = true
-			return m, m.input.Focus()
-		}
+		m.inputFocused = true
+		return m, m.input.Focus()
 	}
 	return m, nil
 }
 
-// handleMouse processes mouse events for click-to-focus and view switching.
+// handleOverlayKey handles keys when an overlay is open.
+func (m *Model) handleOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch m.overlay {
+	case OverlayModelPicker:
+		return m.handleModelPickerKey(msg)
+	case OverlaySessions:
+		return m.handleSessionsKey(msg)
+	case OverlayHelp:
+		if msg.String() == "esc" || msg.String() == "?" {
+			m.overlay = OverlayNone
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+// handleModelPickerKey handles the model picker overlay.
+func (m *Model) handleModelPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	total := len(m.accountCombos) + 1 // +1 for custom entry
+	switch msg.String() {
+	case "esc":
+		m.overlay = OverlayNone
+		return m, nil
+	case "up", "k":
+		if m.comboSel > 0 {
+			m.comboSel--
+		}
+		return m, nil
+	case "down", "j":
+		if m.comboSel < total-1 {
+			m.comboSel++
+		}
+		return m, nil
+	case "enter":
+		if m.comboSel < len(m.accountCombos) {
+			ac := m.accountCombos[m.comboSel]
+			m.overlay = OverlayNone
+			return m, m.applyCombo(ac.Name)
+		}
+		// Custom entry.
+		m.overlay = OverlayNone
+		m.modelInput = true
+		m.input.SetValue("")
+		m.input.Placeholder = "provider/model id… (e.g. openai/gpt-5.4)"
+		m.inputFocused = true
+		return m, m.input.Focus()
+	}
+	return m, nil
+}
+
+// handleSessionsKey handles the sessions overlay.
+func (m *Model) handleSessionsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.overlay = OverlayNone
+		return m, nil
+	case "up", "k":
+		if m.selected > 0 {
+			m.selected--
+		}
+		return m, nil
+	case "down", "j":
+		if m.selected < len(m.sessions)-1 {
+			m.selected++
+		}
+		return m, nil
+	case "enter":
+		m.overlay = OverlayNone
+		return m, m.resumeSession()
+	}
+	return m, nil
+}
+
+// handleMouse processes mouse events.
 func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.MouseLeft:
-		// Click on the tab bar to switch views.
-		if msg.Y == 0 {
-			// Estimate tab positions (each tab ~8 chars + 2 space).
-			tabWidth := 10
-			x := msg.X
-			// Skip brand area (~20 chars).
-			if x > 20 {
-				tabIdx := (x - 20) / tabWidth
-				if tabIdx >= 0 && tabIdx < int(viewCount) {
-					m.view = View(tabIdx)
-				}
-			}
-		}
-		// Click on input area to focus.
 		if msg.Y >= m.height-2 {
 			m.inputFocused = true
 			return m, m.input.Focus()
 		}
 	case tea.MouseWheelUp:
-		if m.view == ViewCombo {
+		if m.overlay == OverlayModelPicker {
 			if m.comboSel > 0 {
 				m.comboSel--
 			}
 		}
 	case tea.MouseWheelDown:
-		if m.view == ViewCombo {
-			total := len(m.accountCombos) + len(m.combos) + 1
+		if m.overlay == OverlayModelPicker {
+			total := len(m.accountCombos) + 1
 			if m.comboSel < total-1 {
 				m.comboSel++
 			}
@@ -767,10 +688,6 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// startTask launches the task runner goroutine. State that the Update loop
-// owns (running, cancel) is set here synchronously — never from inside the
-// returned cmd, which runs on the tea command goroutine and would race with
-// Update. Each submitted task gets exactly one fresh session.
 func (m *Model) startTask(prompt string) tea.Cmd {
 	if m.running {
 		return nil
@@ -796,95 +713,6 @@ func (m *Model) cancelTask() {
 	}
 }
 
-// fetchCombos loads the model combo list from the live OmniRoute catalog
-// (falling back to the built-in combos when unreachable). It also fetches
-// connected providers and the user's configured combos. Only auto/* combos
-// are shown in the picker (individual models are hidden).
-func (m *Model) fetchCombos() tea.Cmd {
-	rt := m.rt
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		defer cancel()
-		ids, err := rt.Gateway.ListCatalog(ctx)
-		if err != nil {
-			return combosMsg{Options: combo.List(nil), Live: false}
-		}
-		// Filter to only auto/* combos (hide individual models).
-		var autoOnly []string
-		for _, id := range ids {
-			if combo.IsAuto(id) {
-				autoOnly = append(autoOnly, id)
-			}
-		}
-		// Fetch connected providers.
-		var providers []providerInfo
-		if conns, err := rt.Gateway.ListProviders(ctx); err == nil {
-			for _, c := range conns {
-				providers = append(providers, providerInfo{
-					ID:     c.ID,
-					Name:   c.Name,
-					Status: c.Status,
-				})
-			}
-		}
-		// Fetch user's configured combos.
-		var accountCombos []accountCombo
-		for _, gc := range rt.Gateway.ListCombos(ctx) {
-			var models []string
-			for _, m := range gc.Models {
-				if m.Model != "" {
-					models = append(models, m.Model)
-				}
-			}
-			accountCombos = append(accountCombos, accountCombo{
-				Name:     gc.Name,
-				Strategy: gc.Strategy,
-				Models:   models,
-				Default:  gc.IsDefault,
-			})
-		}
-		return combosMsg{Options: combo.List(autoOnly), Live: true, Providers: providers, AccountCombos: accountCombos}
-	}
-}
-
-// pickCombo commits the selected picker entry: either an account combo,
-// a catalog combo, or the "type a provider/model id" entry.
-func (m *Model) pickCombo() tea.Cmd {
-	totalAccount := len(m.accountCombos)
-	totalCatalog := len(m.combos)
-	total := totalAccount + totalCatalog + 1 // +1 for custom entry
-
-	if m.comboSel < 0 || m.comboSel >= total {
-		return nil
-	}
-
-	// Account combos are listed first.
-	if m.comboSel < totalAccount {
-		ac := m.accountCombos[m.comboSel]
-		return m.applyCombo(ac.Name)
-	}
-
-	// Custom id entry (last row).
-	if m.comboSel == total-1 {
-		m.modelInput = true
-		m.view = ViewMain
-		m.input.SetValue("")
-		m.input.Placeholder = "provider/model id… (e.g. openai/gpt-5.4)"
-		m.inputFocused = true
-		return m.input.Focus()
-	}
-
-	// Catalog combos.
-	catalogIdx := m.comboSel - totalAccount
-	if catalogIdx >= 0 && catalogIdx < totalCatalog {
-		return m.applyCombo(m.combos[catalogIdx].ID)
-	}
-	return nil
-}
-
-// applyCombo sets the model combo (cfg.Models.Default), persists it when a
-// config path is known, and confirms in the chat thread. Validation is
-// structural only; OmniRoute surfaces routing failures at request time.
 func (m *Model) applyCombo(id string) tea.Cmd {
 	if id == "" {
 		return m.noteError(fmt.Errorf("empty model combo"))
@@ -895,7 +723,6 @@ func (m *Model) applyCombo(id string) tea.Cmd {
 	m.cfg.Models.Default = id
 	m.comboSel = 0
 	m.modelInput = false
-	m.view = ViewMain
 	m.input.Placeholder = "describe a task…"
 	m.chat(chatHarness, "combo → "+id+" — "+combo.Describe(id))
 	if m.configPath != "" {
@@ -911,16 +738,6 @@ func (m *Model) applyCombo(id string) tea.Cmd {
 	return nil
 }
 
-// startKeyInput switches the input bar to API key entry mode.
-func (m *Model) startKeyInput() tea.Cmd {
-	m.keyInput = true
-	m.input.SetValue("")
-	m.input.Placeholder = "paste your OmniRoute API key (sk-…)"
-	m.inputFocused = true
-	return m.input.Focus()
-}
-
-// applyKey stores the entered API key and persists it to the config file.
 func (m *Model) applyKey(key string) tea.Cmd {
 	m.keyInput = false
 	m.input.Placeholder = "describe a task…"
@@ -928,7 +745,6 @@ func (m *Model) applyKey(key string) tea.Cmd {
 		return m.noteError(fmt.Errorf("no API key provided"))
 	}
 	m.cfg.OmniRoute.APIKey = key
-	// Persist to config file so the key survives restarts.
 	if m.configPath != "" {
 		if err := m.cfg.Save(m.configPath); err != nil {
 			return m.noteError(fmt.Errorf("saved key but failed to persist: %w", err))
@@ -938,16 +754,6 @@ func (m *Model) applyKey(key string) tea.Cmd {
 	return nil
 }
 
-// startEndpointInput switches the input bar to endpoint URL entry mode.
-func (m *Model) startEndpointInput() tea.Cmd {
-	m.endpointInput = true
-	m.input.SetValue(m.cfg.OmniRoute.Endpoint)
-	m.input.Placeholder = "OmniRoute endpoint URL (e.g. http://localhost:20128)"
-	m.inputFocused = true
-	return m.input.Focus()
-}
-
-// applyEndpoint stores the entered endpoint URL and persists it.
 func (m *Model) applyEndpoint(url string) tea.Cmd {
 	m.endpointInput = false
 	m.input.SetValue("")
@@ -959,51 +765,47 @@ func (m *Model) applyEndpoint(url string) tea.Cmd {
 		return m.noteError(fmt.Errorf("endpoint must start with http:// or https://"))
 	}
 	m.cfg.OmniRoute.Endpoint = strings.TrimSuffix(url, "/")
-	// Persist to config file.
 	if m.configPath != "" {
 		if err := m.cfg.Save(m.configPath); err != nil {
 			return m.noteError(fmt.Errorf("saved endpoint but failed to persist: %w", err))
 		}
 	}
 	m.chat(chatHarness, "endpoint → "+m.cfg.OmniRoute.Endpoint+" — saved")
-	// Re-create the gateway client with the new endpoint.
 	if m.rt != nil && m.rt.Gateway != nil {
 		m.rt.Gateway = gateway.New(m.cfg.OmniRoute.Endpoint, m.cfg.OmniRoute.Timeout, m.cfg.OmniRoute.APIKey)
 	}
 	return nil
 }
 
-// handleCommand processes slash commands entered in the input bar.
 func (m *Model) handleCommand(cmd string) tea.Cmd {
 	args := strings.Fields(cmd)
 	if len(args) == 0 {
 		return nil
 	}
 	switch args[0] {
-	case "/init":
-		m.chat(chatHarness, "No local project config needed. Use 'p' to pick a model.")
 	case "/help":
-		m.view = ViewHelp
+		m.overlay = OverlayHelp
 	case "/settings":
 		m.chat(chatHarness, fmt.Sprintf("Endpoint: %s | Model: %s | Budget: $%.2f", m.cfg.OmniRoute.Endpoint, m.cfg.Models.Default, m.cfg.Budgets.MaxCostUSD))
 	case "/model":
 		if len(args) > 1 {
 			return m.applyCombo(args[1])
 		}
-		m.view = ViewCombo
+		m.overlay = OverlayModelPicker
 	case "/status":
 		m.chat(chatHarness, fmt.Sprintf("Status: %s | Agents: %d | Combo: %s", m.status, len(m.agents), m.cfg.Models.Default))
-	case "/diff":
-		m.chat(chatHarness, "No current diff available.")
-	case "/release-notes":
-		m.chat(chatHarness, "OmniHarness TUI v"+version.Version+" — Gemini-inspired dashboard, improved streaming.")
 	case "/key":
-		return m.startKeyInput()
+		m.keyInput = true
+		m.input.SetValue("")
+		m.input.Placeholder = "paste your OmniRoute API key (sk-…)"
+		m.inputFocused = true
+		return m.input.Focus()
 	case "/endpoint":
-		if len(args) > 1 {
-			return m.applyEndpoint(args[1])
-		}
-		return m.startEndpointInput()
+		m.endpointInput = true
+		m.input.SetValue(m.cfg.OmniRoute.Endpoint)
+		m.input.Placeholder = "OmniRoute endpoint URL (e.g. http://localhost:20128)"
+		m.inputFocused = true
+		return m.input.Focus()
 	default:
 		m.chat(chatError, "Unknown command: "+args[0])
 	}
@@ -1047,7 +849,6 @@ func (m *Model) resumeSession() tea.Cmd {
 	}
 }
 
-// applyEvent folds a runtime event into the view state.
 func (m *Model) applyEvent(e event.Event) {
 	if m.sessionID != "" && e.SessionID != m.sessionID {
 		return
@@ -1067,11 +868,7 @@ func (m *Model) applyEvent(e event.Event) {
 		m.strategy = d.Strategy
 		m.strategyReason = d.Reason
 		m.steps = d.Steps
-		reason := d.Reason
-		if reason == "" {
-			reason = "(no reason)"
-		}
-		m.chat(chatHarness, "strategy: "+d.Strategy+" — "+reason)
+		m.chat(chatHarness, "strategy: "+d.Strategy+" — "+d.Reason)
 	case event.AgentCreated:
 		var d event.AgentCreatedData
 		decode(e, &d)
@@ -1161,7 +958,6 @@ func (m *Model) applyEvent(e event.Event) {
 	m.pushEvent(e)
 }
 
-// resultText extracts the final, user-facing result text of a task.
 func resultText(t *task.Task) string {
 	if t == nil {
 		return ""
@@ -1177,9 +973,6 @@ func resultText(t *task.Task) string {
 	return t.Error
 }
 
-// recordModelStat updates (or creates) the per-model usage row for id.
-// The mutate fn runs with the row already existing; rows are kept in first-use
-// order so the sidebar can show the most recent model last.
 func (m *Model) recordModelStat(id string, mutate func(*modelStat)) {
 	if id == "" {
 		return
@@ -1193,7 +986,6 @@ func (m *Model) recordModelStat(id string, mutate func(*modelStat)) {
 	mutate(&m.modelStats[idx])
 }
 
-// chat appends a conversation bubble, keeping the thread bounded.
 func (m *Model) chat(k chatKind, text string) {
 	if text == "" {
 		return
@@ -1244,14 +1036,12 @@ func decode(e event.Event, out any) {
 	}
 }
 
-// approvalApprover bridges the policy engine to the TUI.
 type approvalApprover struct {
 	model *Model
 }
 
 func (a *approvalApprover) RequestApproval(_ context.Context, r policy.Request, reason string) (bool, error) {
 	req := &approvalReq{Tool: r.Tool, Risk: string(r.Risk), Reason: reason, Reply: make(chan bool, 1)}
-	// Deliver to the model through the tea program.
 	prog := a.model.program
 	if prog == nil {
 		return false, nil
