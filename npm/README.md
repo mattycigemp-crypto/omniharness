@@ -7,12 +7,14 @@ learns from past outcomes — while OmniRoute stays responsible for routing mode
 requests to providers.
 
 This package is a thin wrapper around the self-contained OmniHarness binary;
-the `omniharness` command is the binary itself.
+the `omniharness` command is installed by npm and forwards to the bundled binary.
 
 ## Install
 
 ```sh
 npm install -g omniharness-cli
+# If PowerShell still cannot find it, open a new terminal so npm's global bin
+# directory is reloaded into PATH.
 ```
 
 ## Quick start
