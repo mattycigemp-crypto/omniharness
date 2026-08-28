@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
 import Spinner from 'ink-spinner';
 import type { MastraEngine, HarnessEvent, ApprovalAction } from '../agent/mastraEngine.js';
 import type { AgentMode } from '../types/index.js';
+import { deleteAt, deleteBefore, insertAt, layoutEditor, lineEndAt, lineStartAt, moveHorizontal, moveVerticalWrapped, normalizePaste } from './editor.js';
 import { renderMarkdown, type MarkdownSegment } from './markdown.js';
+import { KITTY_POP, KITTY_PUSH, isEncodedKey, parseRawKey, translateCsiU } from './keys.js';
 
 interface Props { engine: MastraEngine }
 
@@ -67,8 +69,10 @@ function SegmentText({ segments, role }: { segments: readonly MarkdownSegment[];
 export function TerminalInterface({ engine }: Props): React.ReactElement {
   const { exit } = useApp();
   const { stdout } = useStdout();
+  const { stdin } = useStdin();
   const [width, setWidth] = useState(() => widthOf(stdout));
-  const [input, setInput] = useState('');
+  const [edit, setEdit] = useState({ value: '', cursor: 0 });
+  const inputWidth = Math.max(16, width - 12);
   const [lines, setLines] = useState<Line[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -87,6 +91,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   useEffect(() => {
     const onResize = (): void => setWidth(widthOf(stdout));
     stdout.on('resize', onResize);
+    stdout.write(KITTY_PUSH);
     const unsubscribe = engine.subscribe((event: HarnessEvent) => {
       switch (event.type) {
         case 'thinking_delta': setLiveThink((current) => current + event.delta); break;
@@ -114,9 +119,9 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       approvalResolve.current = resolve;
       setApproval(action);
     }));
-    const onUnload = (): void => engine.stop();
+    const onUnload = (): void => { engine.stop(); stdout.write(KITTY_POP); };
     process.on('exit', onUnload);
-    return () => { stdout.off('resize', onResize); unsubscribe(); process.off('exit', onUnload); };
+    return () => { stdout.off('resize', onResize); unsubscribe(); process.off('exit', onUnload); stdout.write(KITTY_POP); };
   }, [engine, stdout]);
 
   const loadCombos = async (): Promise<void> => {
@@ -140,24 +145,32 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   };
 
   useInput((value, key) => {
+    const translated = translateCsiU(value);
+    const submit = key.return || translated?.kind === 'submit';
+    const newline = value === '\n' || translated?.kind === 'newline';
+    const escape = key.escape || translated?.kind === 'escape';
+    const tab = key.tab || translated?.kind === 'tab';
+    const ctrlC = (key.ctrl && value === 'c') || translated?.kind === 'ctrlC';
+    const ctrlM = (key.ctrl && value.toLowerCase() === 'm') || translated?.kind === 'ctrlM';
+    const ctrlO = (key.ctrl && value.toLowerCase() === 'o') || translated?.kind === 'ctrlO';
     if (approval) {
       const resolve = approvalResolve.current;
-      if (value === 'y' || value === 'Y' || key.return) { setApproval(null); approvalResolve.current = null; resolve?.(true); }
-      else if (value === 'n' || value === 'N' || key.escape) { setApproval(null); approvalResolve.current = null; resolve?.(false); }
+      if (value === 'y' || value === 'Y' || submit) { setApproval(null); approvalResolve.current = null; resolve?.(true); }
+      else if (value === 'n' || value === 'N' || escape) { setApproval(null); approvalResolve.current = null; resolve?.(false); }
       return;
     }
-    if (key.ctrl && value === 'c') { exit(); return; }
-    if (key.ctrl && value.toLowerCase() === 'm') { cycleMode(); return; }
-    if (key.ctrl && value.toLowerCase() === 'o') {
+    if (ctrlC) { exit(); return; }
+    if (ctrlM) { cycleMode(); return; }
+    if (ctrlO) {
       setPickerOpen(true);
       void loadCombos();
       return;
     }
     if (pickerOpen) {
-      if (key.escape) { setPickerOpen(false); return; }
+      if (escape) { setPickerOpen(false); return; }
       if (key.upArrow || value === 'k') { setComboIndex((current) => clamp(current - 1, 0, Math.max(0, combos.length - 1))); return; }
       if (key.downArrow || value === 'j') { setComboIndex((current) => clamp(current + 1, 0, Math.max(0, combos.length - 1))); return; }
-      if (key.return && combos.length > 0) {
+      if (submit && combos.length > 0) {
         const selected = combos[comboIndex];
         engine.selectModel(selected);
         setPickerOpen(false);
@@ -165,10 +178,11 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       }
       return;
     }
-    if (key.return) {
-      const prompt = input.trim();
+    if (tab) { setEdit((current) => insertAt(current.value, current.cursor, '\t')); return; }
+    if (submit) {
+      const prompt = edit.value.trim();
       if (!prompt || busy) return;
-      setInput(''); setBusy(true); setError(undefined);
+      setEdit({ value: '', cursor: 0 }); setBusy(true); setError(undefined);
       setLines((current) => [...current, { role: 'user', text: prompt }]);
       void engine.run(prompt).then(() => {
         /* answer is streamed live via text_delta / text events */
@@ -178,9 +192,29 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       }).finally(() => setBusy(false));
       return;
     }
-    if (key.backspace || key.delete) { setInput((current) => current.slice(0, -1)); return; }
-    if (!key.ctrl && !key.meta && value) setInput((current) => current + value);
+    if (newline) { setEdit((current) => insertAt(current.value, current.cursor, '\n')); return; }
+    if (key.backspace) { setEdit((current) => deleteBefore(current.value, current.cursor)); return; }
+    if (key.delete) { setEdit((current) => deleteAt(current.value, current.cursor)); return; }
+    if (key.leftArrow) { setEdit((current) => ({ ...current, cursor: moveHorizontal(current.value, current.cursor, -1) })); return; }
+    if (key.rightArrow) { setEdit((current) => ({ ...current, cursor: moveHorizontal(current.value, current.cursor, +1) })); return; }
+    if (key.upArrow) { setEdit((current) => ({ ...current, cursor: moveVerticalWrapped(current.value, current.cursor, -1, inputWidth) })); return; }
+    if (key.downArrow) { setEdit((current) => ({ ...current, cursor: moveVerticalWrapped(current.value, current.cursor, +1, inputWidth) })); return; }
+    if (value.length > 1 && !isEncodedKey(value)) { setEdit((current) => insertAt(current.value, current.cursor, normalizePaste(value))); return; }
+    if (!key.ctrl && !key.meta && value && !isEncodedKey(value)) setEdit((current) => insertAt(current.value, current.cursor, value));
   });
+
+  useEffect(() => {
+    if (!stdin) return;
+    const onData = (chunk: Buffer): void => {
+      const key = parseRawKey(chunk.toString());
+      if (!key) return;
+      setEdit((current) => key === 'home'
+        ? { ...current, cursor: lineStartAt(current.value, current.cursor) }
+        : { ...current, cursor: lineEndAt(current.value, current.cursor) });
+    };
+    stdin.on('data', onData);
+    return () => { stdin.off('data', onData); };
+  }, [stdin]);
 
   const metrics = engine.client.snapshotMetrics();
   const compression = metrics.compression.inputTokens > 0 ? `${Math.round((1 - metrics.compression.ratio) * 100)}% ${metrics.compression.strategy.toUpperCase()}` : '—';
@@ -232,9 +266,11 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       <Text dimColor>args: {clip(typeof approval.input === 'string' ? approval.input : JSON.stringify(approval.input), contentWidth)}</Text>
       <Text dimColor>y approve · n deny</Text>
     </Box>}
-    <Box borderStyle="round" borderColor={error ? 'red' : 'cyan'} paddingX={1} marginTop={1}>
-      <Text color="cyan">› </Text><Text>{clip(input || 'type a task and press enter', contentWidth)}</Text>
+    <Box borderStyle="round" borderColor={error ? 'red' : 'cyan'} paddingX={1} marginTop={1} flexDirection="column">
+      {edit.value === ''
+        ? <Text color="cyan">› <Text dimColor>type a task and press enter</Text></Text>
+        : layoutEditor(edit.value, edit.cursor, inputWidth).lines.map((text, index) => <Text key={index} color="cyan">{index === 0 ? '› ' : '  '}{text}</Text>)}
     </Box>
-    <Box justifyContent="space-between"><Text dimColor>Ctrl+O combos · Ctrl+M mode · Ctrl+C quit</Text><Text dimColor>{mode} · {engine.state.activeModel} · compression {compression}</Text></Box>
+    <Box justifyContent="space-between"><Text dimColor>Enter send · Shift+Enter new line · ←→↑↓ move · Ctrl+O combos · Ctrl+M mode · Ctrl+C quit</Text><Text dimColor>{mode} · {engine.state.activeModel} · compression {compression}</Text></Box>
   </Box>;
 }

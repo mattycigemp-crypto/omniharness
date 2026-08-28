@@ -13,7 +13,6 @@ export function insertAt(value: string, cursor: number, text: string): { value: 
 export function deleteBefore(value: string, cursor: number): { value: string; cursor: number } {
   const at = clampIndex(cursor, value);
   if (at === 0) return { value, cursor: at };
-  if (value.charCodeAt(at - 1) === 0x0a) return { value: value.slice(0, at - 1) + value.slice(at), cursor: at - 1 };
   return { value: value.slice(0, at - 1) + value.slice(at), cursor: at - 1 };
 }
 
@@ -29,30 +28,55 @@ export function moveHorizontal(value: string, cursor: number, delta: number): nu
   return clamp(cursor + delta, 0, value.length);
 }
 
-/** Visual index of the caret on the current line (0-based). */
-function columnAt(value: string, cursor: number): number {
+/** Index of the start of the logical line containing `cursor`. */
+export function lineStartAt(value: string, cursor: number): number {
   const at = clampIndex(cursor, value);
-  const lineStart = value.lastIndexOf('\n', at - 1) + 1;
-  return at - lineStart;
+  return value.lastIndexOf('\n', at - 1) + 1;
 }
 
-/** Move the cursor to the same visual column on an adjacent line. Returns clamped index. */
-export function moveVertical(value: string, cursor: number, delta: number): number {
+/** Index just past the last char of the logical line containing `cursor`. */
+export function lineEndAt(value: string, cursor: number): number {
   const at = clampIndex(cursor, value);
-  const target = columnAt(value, at);
-  if (delta < 0) {
-    const lineStart = value.lastIndexOf('\n', at - 1);
-    if (lineStart === -1) return 0;
-    const prevStart = value.lastIndexOf('\n', lineStart - 1) + 1;
-    const upTo = lineStart + 1;
-    return prevStart + Math.min(target, upTo - prevStart - 1);
+  const nl = value.indexOf('\n', at);
+  return nl === -1 ? value.length : nl;
+}
+
+interface RowSpan { start: number; end: number }
+
+/** Char-wrap `value` into rendered rows at `width`, matching `layoutEditor`. */
+function charRows(value: string, width: number): RowSpan[] {
+  const rows: RowSpan[] = [];
+  const w = Math.max(1, width);
+  let offset = 0;
+  for (const para of value.split('\n')) {
+    for (let s = 0; s < para.length; s += w) {
+      rows.push({ start: offset + s, end: offset + Math.min(s + w, para.length) });
+    }
+    if (para.length === 0) rows.push({ start: offset, end: offset });
+    offset += para.length + 1; // + newline
   }
-  const nextNl = value.indexOf('\n', at);
-  if (nextNl === -1) return value.length;
-  const nextStart = nextNl + 1;
-  const nextEnd = value.indexOf('\n', nextStart);
-  const lineEnd = nextEnd === -1 ? value.length : nextEnd;
-  return nextStart + Math.min(target, lineEnd - nextStart);
+  if (rows.length === 0) rows.push({ start: 0, end: 0 });
+  return rows;
+}
+
+/**
+ * Move the cursor to the same column on the adjacent rendered row (matching the
+ * char-wrapped layout the box renders with). Clamped to the text bounds and to
+ * the target row's length.
+ */
+export function moveVerticalWrapped(value: string, cursor: number, delta: number, width: number): number {
+  const at = clampIndex(cursor, value);
+  const rows = charRows(value, width);
+  let row = rows.length - 1;
+  let col = 0;
+  for (let r = 0; r < rows.length; r += 1) {
+    const span = rows[r]!;
+    if (at >= span.start && at <= span.end) { row = r; col = at - span.start; break; }
+    if (at < span.start) { row = r; col = 0; break; }
+  }
+  const target = clamp(row + delta, 0, rows.length - 1);
+  const span = rows[target]!;
+  return span.start + Math.min(col, span.end - span.start);
 }
 
 function clampIndex(cursor: number, value: string): number {
@@ -113,51 +137,30 @@ export interface EditorLayout {
 
 /**
  * Lay a multi-line string out across `width` characters per row (char-wrapping
- * exactly so the caret lands on the correct column) and place a `cursorChar`
- * caret at the given cursor offset.
+ * exactly like `charRows`, so the caret lands on the correct column) and place
+ * a caret marker at the given cursor offset.
  */
 export function layoutEditor(text: string, cursor: number, width: number): EditorLayout {
-  const w = Math.max(1, width);
+  const rows = charRows(text, width);
   const at = clamp(cursor, 0, text.length);
-  const lines: string[] = [];
-  let cursorLine = 0;
-  let cursorCol = 0;
-  let placed = false;
-
-  const paragraphs = text.split('\n');
-  let offset = 0;
-  for (let p = 0; p < paragraphs.length; p += 1) {
-    const para = paragraphs[p]!;
-    for (let start = 0; start <= para.length; start += w) {
-      const chunk = para.slice(start, start + w);
-      const chunkStart = offset + start;
-      const chunkEnd = chunkStart + chunk.length;
-      if (!placed && at >= chunkStart && at <= chunkEnd && !(at === chunkEnd && para.length > chunkEnd)) {
-        lines.push(chunk.slice(0, at - chunkStart) + CURSOR + chunk.slice(at - chunkStart));
-        placed = true;
-        cursorLine = lines.length - 1;
-        cursorCol = at - chunkStart;
-        continue;
-      }
-      lines.push(chunk);
+  let line = rows.length - 1;
+  let col = rows[line]!.end - rows[line]!.start;
+  for (let r = 0; r < rows.length; r += 1) {
+    const span = rows[r]!;
+    if (at >= span.start && at <= span.end && !(at === span.end && r + 1 < rows.length && rows[r + 1]!.start === at)) {
+      line = r;
+      col = at - span.start;
+      break;
     }
-    offset += para.length + 1; // + newline
-    if (p < paragraphs.length - 1) {
-      // place caret on an empty trailing row when it sits exactly at a newline
-      if (!placed && at === offset - 1) {
-        if (cursorLine < lines.length) lines[cursorLine] = lines[cursorLine]! + (para.length === 0 || para.length % w === 0 ? CURSOR : '');
-        placed = true;
-      } else {
-        lines.push('');
-      }
+    if (at < span.start) {
+      line = r;
+      col = 0;
+      break;
     }
   }
-  if (!placed) {
-    lines.push(CURSOR);
-    cursorLine = lines.length - 1;
-    cursorCol = 0;
-  }
-  return { lines, cursorLine, cursorCol };
+  const lines = rows.map((span) => text.slice(span.start, span.end));
+  lines[line] = lines[line]!.slice(0, col) + CURSOR + lines[line]!.slice(col);
+  return { lines, cursorLine: line, cursorCol: col };
 }
 
 const CURSOR = '▍';
