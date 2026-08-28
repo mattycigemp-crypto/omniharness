@@ -85,12 +85,11 @@ type modelStat struct {
 	Reason    string
 }
 
-// combosMsg carries the fetched model combo list.
+// combosMsg carries the fetched account combos.
 type combosMsg struct {
-	Options       []combo.Option
-	Live          bool
-	Providers     []providerInfo
 	AccountCombos []accountCombo
+	Err           error
+	Refresh       uint64
 }
 
 // providerInfo describes a connected provider.
@@ -433,10 +432,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case combosMsg:
-		m.combos = msg.Options
-		m.providers = msg.Providers
 		m.accountCombos = msg.AccountCombos
 		m.combosLoading = false
+		if msg.Err != nil {
+			m.chat(chatError, "could not load account combos: "+msg.Err.Error())
+		}
 		if m.comboSel >= len(m.accountCombos) {
 			m.comboSel = 0
 		}
@@ -632,7 +632,7 @@ func (m *Model) loadAccountCombos() tea.Cmd {
 		defer cancel()
 		combos, err := rt.Gateway.ListCombos(ctx)
 		if err != nil {
-			return combosMsg{AccountCombos: nil}
+			return combosMsg{Err: err}
 		}
 		accountCombos := make([]accountCombo, 0, len(combos))
 		for _, combo := range combos {

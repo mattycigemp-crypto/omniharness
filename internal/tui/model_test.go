@@ -133,6 +133,14 @@ func TestModelComboPickerSelects(t *testing.T) {
 	}
 }
 
+func TestModelComboLoadErrorIsVisible(t *testing.T) {
+	m, _ := newTestModel(t)
+	m2, _ := update(t, m, combosMsg{Err: os.ErrNotExist})
+	if !strings.Contains(m2.View(), "could not load account combos") {
+		t.Fatal("combo load error should be visible")
+	}
+}
+
 func TestModelComboPickerHasNoSelectionWhenAccountIsEmpty(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.accountCombos = nil
