@@ -5,7 +5,7 @@ import type { MastraEngine, HarnessEvent, ApprovalAction } from '../agent/mastra
 import type { AgentMode } from '../types/index.js';
 import { deleteAt, deleteBefore, insertAt, layoutEditor, lineEndAt, lineStartAt, moveHorizontal, moveVerticalWrapped, normalizePaste } from './editor.js';
 import { renderMarkdown, type MarkdownSegment } from './markdown.js';
-import { KITTY_POP, KITTY_PUSH, isEncodedKey, parseRawKey, translateCsiU } from './keys.js';
+import { KITTY_POP, KITTY_PUSH, KITTY_QUERY, isEncodedKey, isKittyQueryResponse, parseRawKey, type KeyAction } from './keys.js';
 
 interface Props { engine: MastraEngine }
 
@@ -87,11 +87,27 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
 
   const [liveThink, setLiveThink] = useState('');
   const [liveAnswer, setLiveAnswer] = useState('');
+  const [kitty, setKitty] = useState<boolean | null>(null);
 
   useEffect(() => {
     const onResize = (): void => setWidth(widthOf(stdout));
     stdout.on('resize', onResize);
     stdout.write(KITTY_PUSH);
+    let kittyTimer: ReturnType<typeof setTimeout> | undefined;
+    // Terminals with kitty support answer the query (ESC[? flags u); others ignore it.
+    const onKitty = (chunk: Buffer): void => {
+      if (!isKittyQueryResponse(chunk.toString())) return;
+      if (kittyTimer) clearTimeout(kittyTimer);
+      stdin?.off('data', onKitty);
+      setKitty(true);
+    };
+    if (stdin) {
+      stdin.on('data', onKitty);
+      kittyTimer = setTimeout(() => { setKitty(false); stdin.off('data', onKitty); }, 300);
+      stdout.write(KITTY_QUERY);
+    } else {
+      setKitty(false);
+    }
     const unsubscribe = engine.subscribe((event: HarnessEvent) => {
       switch (event.type) {
         case 'thinking_delta': setLiveThink((current) => current + event.delta); break;
@@ -121,8 +137,15 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     }));
     const onUnload = (): void => { engine.stop(); stdout.write(KITTY_POP); };
     process.on('exit', onUnload);
-    return () => { stdout.off('resize', onResize); unsubscribe(); process.off('exit', onUnload); stdout.write(KITTY_POP); };
-  }, [engine, stdout]);
+    return () => {
+      if (kittyTimer) clearTimeout(kittyTimer);
+      stdin?.off('data', onKitty);
+      stdout.off('resize', onResize);
+      unsubscribe();
+      process.off('exit', onUnload);
+      stdout.write(KITTY_POP);
+    };
+  }, [engine, stdout, stdin]);
 
   const loadCombos = async (): Promise<void> => {
     setComboError(undefined);
@@ -144,77 +167,108 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     setLines((current) => [...current, { role: 'tool', text: `mode → ${next}`, toolName: 'mode' }]);
   };
 
+  const approve = (ok: boolean): void => {
+    const resolve = approvalResolve.current;
+    setApproval(null); approvalResolve.current = null;
+    resolve?.(ok);
+  };
+
+  /** Apply a semantic key action, honoring the active overlay (approval, picker). */
+  const applyAction = (action: KeyAction): void => {
+    if (approval && action.kind !== 'submit' && action.kind !== 'escape') return;
+    if (pickerOpen && action.kind !== 'submit' && action.kind !== 'escape' && action.kind !== 'up' && action.kind !== 'down') return;
+    switch (action.kind) {
+      case 'submit':
+        if (approval) { approve(true); return; }
+        if (pickerOpen) {
+          const selected = combos[comboIndex];
+          if (selected) {
+            engine.selectModel(selected);
+            setPickerOpen(false);
+            setLines((current) => [...current, { role: 'assistant', text: `combo selected: ${selected} (saved as default)` }]);
+          }
+          return;
+        }
+        {
+          const prompt = edit.value.trim();
+          if (!prompt || busy) return;
+          setEdit({ value: '', cursor: 0 }); setBusy(true); setError(undefined);
+          setLines((current) => [...current, { role: 'user', text: prompt }]);
+          void engine.run(prompt).then(() => {
+            /* answer is streamed live via text_delta / text events */
+          }).catch((reason: unknown) => {
+            const message = reason instanceof Error ? reason.message : String(reason);
+            setError(message); setLines((current) => [...current, { role: 'error', text: message }]);
+          }).finally(() => setBusy(false));
+        }
+        return;
+      case 'escape':
+        if (approval) { approve(false); return; }
+        if (pickerOpen) { setPickerOpen(false); return; }
+        return;
+      case 'ctrlC': exit(); return;
+      case 'ctrlM': cycleMode(); return;
+      case 'ctrlO': setPickerOpen(true); void loadCombos(); return;
+      case 'up':
+        if (pickerOpen) { setComboIndex((current) => clamp(current - 1, 0, Math.max(0, combos.length - 1))); return; }
+        setEdit((current) => ({ ...current, cursor: moveVerticalWrapped(current.value, current.cursor, -1, inputWidth) }));
+        return;
+      case 'down':
+        if (pickerOpen) { setComboIndex((current) => clamp(current + 1, 0, Math.max(0, combos.length - 1))); return; }
+        setEdit((current) => ({ ...current, cursor: moveVerticalWrapped(current.value, current.cursor, +1, inputWidth) }));
+        return;
+      case 'left': setEdit((current) => ({ ...current, cursor: moveHorizontal(current.value, current.cursor, -1) })); return;
+      case 'right': setEdit((current) => ({ ...current, cursor: moveHorizontal(current.value, current.cursor, +1) })); return;
+      case 'home': setEdit((current) => ({ ...current, cursor: lineStartAt(current.value, current.cursor) })); return;
+      case 'end': setEdit((current) => ({ ...current, cursor: lineEndAt(current.value, current.cursor) })); return;
+      case 'newline': setEdit((current) => insertAt(current.value, current.cursor, '\n')); return;
+      case 'backspace': setEdit((current) => deleteBefore(current.value, current.cursor)); return;
+      case 'delete': setEdit((current) => deleteAt(current.value, current.cursor)); return;
+      case 'tab': setEdit((current) => insertAt(current.value, current.cursor, '\t')); return;
+    }
+  };
+
+  // Legacy keys Ink parses correctly (\r, \n, \x08, ESC[A arrows, ctrl+letters) plus text and paste.
   useInput((value, key) => {
-    const translated = translateCsiU(value);
-    const submit = key.return || translated?.kind === 'submit';
-    const newline = value === '\n' || translated?.kind === 'newline';
-    const escape = key.escape || translated?.kind === 'escape';
-    const tab = key.tab || translated?.kind === 'tab';
-    const ctrlC = (key.ctrl && value === 'c') || translated?.kind === 'ctrlC';
-    const ctrlM = (key.ctrl && value.toLowerCase() === 'm') || translated?.kind === 'ctrlM';
-    const ctrlO = (key.ctrl && value.toLowerCase() === 'o') || translated?.kind === 'ctrlO';
     if (approval) {
-      const resolve = approvalResolve.current;
-      if (value === 'y' || value === 'Y' || submit) { setApproval(null); approvalResolve.current = null; resolve?.(true); }
-      else if (value === 'n' || value === 'N' || escape) { setApproval(null); approvalResolve.current = null; resolve?.(false); }
+      if (value === 'y' || value === 'Y' || key.return) applyAction({ kind: 'submit' });
+      else if (value === 'n' || value === 'N' || key.escape) applyAction({ kind: 'escape' });
       return;
     }
-    if (ctrlC) { exit(); return; }
-    if (ctrlM) { cycleMode(); return; }
-    if (ctrlO) {
-      setPickerOpen(true);
-      void loadCombos();
-      return;
-    }
+    if (key.ctrl && value === 'c') { applyAction({ kind: 'ctrlC' }); return; }
+    if (key.ctrl && value.toLowerCase() === 'm') { applyAction({ kind: 'ctrlM' }); return; }
+    if (key.ctrl && value.toLowerCase() === 'o') { applyAction({ kind: 'ctrlO' }); return; }
     if (pickerOpen) {
-      if (escape) { setPickerOpen(false); return; }
-      if (key.upArrow || value === 'k') { setComboIndex((current) => clamp(current - 1, 0, Math.max(0, combos.length - 1))); return; }
-      if (key.downArrow || value === 'j') { setComboIndex((current) => clamp(current + 1, 0, Math.max(0, combos.length - 1))); return; }
-      if (submit && combos.length > 0) {
-        const selected = combos[comboIndex];
-        engine.selectModel(selected);
-        setPickerOpen(false);
-        setLines((current) => [...current, { role: 'assistant', text: `combo selected: ${selected} (saved as default)` }]);
-      }
+      if (key.escape) { applyAction({ kind: 'escape' }); return; }
+      if (key.upArrow || value === 'k') { applyAction({ kind: 'up' }); return; }
+      if (key.downArrow || value === 'j') { applyAction({ kind: 'down' }); return; }
+      if (key.return) { applyAction({ kind: 'submit' }); return; }
       return;
     }
-    if (tab) { setEdit((current) => insertAt(current.value, current.cursor, '\t')); return; }
-    if (submit) {
-      const prompt = edit.value.trim();
-      if (!prompt || busy) return;
-      setEdit({ value: '', cursor: 0 }); setBusy(true); setError(undefined);
-      setLines((current) => [...current, { role: 'user', text: prompt }]);
-      void engine.run(prompt).then(() => {
-        /* answer is streamed live via text_delta / text events */
-      }).catch((reason: unknown) => {
-        const message = reason instanceof Error ? reason.message : String(reason);
-        setError(message); setLines((current) => [...current, { role: 'error', text: message }]);
-      }).finally(() => setBusy(false));
-      return;
-    }
-    if (newline) { setEdit((current) => insertAt(current.value, current.cursor, '\n')); return; }
-    if (key.backspace) { setEdit((current) => deleteBefore(current.value, current.cursor)); return; }
-    if (key.delete) { setEdit((current) => deleteAt(current.value, current.cursor)); return; }
-    if (key.leftArrow) { setEdit((current) => ({ ...current, cursor: moveHorizontal(current.value, current.cursor, -1) })); return; }
-    if (key.rightArrow) { setEdit((current) => ({ ...current, cursor: moveHorizontal(current.value, current.cursor, +1) })); return; }
-    if (key.upArrow) { setEdit((current) => ({ ...current, cursor: moveVerticalWrapped(current.value, current.cursor, -1, inputWidth) })); return; }
-    if (key.downArrow) { setEdit((current) => ({ ...current, cursor: moveVerticalWrapped(current.value, current.cursor, +1, inputWidth) })); return; }
+    if (key.tab) { applyAction({ kind: 'tab' }); return; }
+    if (key.return) { applyAction({ kind: 'submit' }); return; }
+    if (value === '\n') { applyAction({ kind: 'newline' }); return; }
+    if (key.backspace) { applyAction({ kind: 'backspace' }); return; }
+    if (key.escape) { applyAction({ kind: 'escape' }); return; }
+    if (key.upArrow) { applyAction({ kind: 'up' }); return; }
+    if (key.downArrow) { applyAction({ kind: 'down' }); return; }
+    if (key.leftArrow) { applyAction({ kind: 'left' }); return; }
+    if (key.rightArrow) { applyAction({ kind: 'right' }); return; }
+    // 0x7f is Backspace on Windows ConPTY and the kitty-encoded keys are owned by the raw stdin listener.
     if (value.length > 1 && !isEncodedKey(value)) { setEdit((current) => insertAt(current.value, current.cursor, normalizePaste(value))); return; }
     if (!key.ctrl && !key.meta && value && !isEncodedKey(value)) setEdit((current) => insertAt(current.value, current.cursor, value));
   });
 
+  // Raw stdin: disambiguate Windows Backspace (0x7f), the real Delete key, and kitty-protocol keys.
   useEffect(() => {
     if (!stdin) return;
     const onData = (chunk: Buffer): void => {
-      const key = parseRawKey(chunk.toString());
-      if (!key) return;
-      setEdit((current) => key === 'home'
-        ? { ...current, cursor: lineStartAt(current.value, current.cursor) }
-        : { ...current, cursor: lineEndAt(current.value, current.cursor) });
+      const action = parseRawKey(chunk.toString());
+      if (action) applyAction(action);
     };
     stdin.on('data', onData);
     return () => { stdin.off('data', onData); };
-  }, [stdin]);
+  }, [stdin, applyAction]);
 
   const metrics = engine.client.snapshotMetrics();
   const compression = metrics.compression.inputTokens > 0 ? `${Math.round((1 - metrics.compression.ratio) * 100)}% ${metrics.compression.strategy.toUpperCase()}` : '—';
@@ -271,6 +325,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
         ? <Text color="cyan">› <Text dimColor>type a task and press enter</Text></Text>
         : layoutEditor(edit.value, edit.cursor, inputWidth).lines.map((text, index) => <Text key={index} color="cyan">{index === 0 ? '› ' : '  '}{text}</Text>)}
     </Box>
-    <Box justifyContent="space-between"><Text dimColor>Enter send · Shift+Enter new line · ←→↑↓ move · Ctrl+O combos · Ctrl+M mode · Ctrl+C quit</Text><Text dimColor>{mode} · {engine.state.activeModel} · compression {compression}</Text></Box>
+    {kitty !== null && <Text dimColor>{kitty ? 'kitty protocol active — Shift+Enter makes a new line' : 'this terminal can\'t distinguish Shift+Enter from Enter — use Ctrl+J for a new line'}</Text>}
+    <Box justifyContent="space-between"><Text dimColor>Enter send · Shift+Enter / Ctrl+J new line · ←→↑↓ move · Ctrl+O combos · Ctrl+M mode · Ctrl+C quit</Text><Text dimColor>{mode} · {engine.state.activeModel} · compression {compression}</Text></Box>
   </Box>;
 }
