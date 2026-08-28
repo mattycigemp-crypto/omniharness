@@ -35,6 +35,13 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false # never cache in release builds
 
+      # Validate the package entry point before building and publishing.
+      - name: Validate npm package metadata
+        working-directory: npm
+        run: |
+          node -e 'const p=require("./package.json"); if (p.bin?.omniharness !== "cli.js") throw new Error("npm bin must point to cli.js")'
+          test -f cli.js
+
       # Bump the version, verify (vet + full test suite), build, and publish.
       # npm CLI detects the OIDC environment and authenticates via trusted
       # publishing without any token.
