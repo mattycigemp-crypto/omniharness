@@ -5,10 +5,30 @@ import type { MastraEngine } from '../agent/mastraEngine.js';
 
 interface Props { engine: MastraEngine }
 interface Line { role: 'user' | 'assistant' | 'error'; text: string; model?: string }
+interface Row { role: 'user' | 'assistant' | 'error'; text: string; label: string; first: boolean }
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 const widthOf = (stdout: NodeJS.WriteStream): number => Math.max(48, stdout.columns ?? 80);
 const clip = (text: string, width: number): string => text.length <= width ? text : `${text.slice(0, Math.max(0, width - 1))}…`;
+
+/** Word-wrap text to width, honoring existing newlines and hard-breaking long words. */
+function wrap(text: string, width: number): string[] {
+  const out: string[] = [];
+  for (const paragraph of text.split('\n')) {
+    if (paragraph === '') { out.push(''); continue; }
+    let current = '';
+    for (const word of paragraph.split(' ')) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (candidate.length <= width) { current = candidate; continue; }
+      if (current) { out.push(current); current = ''; }
+      let rest = word;
+      while (rest.length > width) { out.push(rest.slice(0, width)); rest = rest.slice(width); }
+      current = rest;
+    }
+    if (current) out.push(current);
+  }
+  return out.length > 0 ? out : [''];
+}
 
 export function TerminalInterface({ engine }: Props): React.ReactElement {
   const { exit } = useApp();
@@ -81,7 +101,18 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const metrics = engine.client.snapshotMetrics();
   const compression = metrics.compression.inputTokens > 0 ? `${Math.round((1 - metrics.compression.ratio) * 100)}% ${metrics.compression.strategy.toUpperCase()}` : '—';
   const contentWidth = Math.max(20, width - 8);
-  const visibleLines = useMemo(() => lines.slice(-Math.max(4, (stdout.rows ?? 24) - 8)), [lines, stdout.rows]);
+  const messageHeight = Math.max(4, (stdout.rows ?? 24) - 9);
+
+  // Flatten messages into wrapped rows, keep the tail that fits the viewport.
+  const rows = useMemo<Row[]>(() => {
+    const out: Row[] = [];
+    for (const line of lines) {
+      const label = line.role === 'user' ? 'you' : line.role === 'error' ? 'error' : (line.model ?? 'harness');
+      const wrapped = wrap(line.text, contentWidth);
+      wrapped.forEach((text, index) => out.push({ role: line.role, text, label, first: index === 0 }));
+    }
+    return out.slice(-messageHeight);
+  }, [lines, contentWidth, messageHeight]);
 
   return <Box flexDirection="column" width={width} height={stdout.rows ?? 24} paddingX={2}>
     <Box justifyContent="space-between" paddingY={1}>
@@ -89,11 +120,13 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       <Text dimColor>OMNIROUTE :20128</Text>
     </Box>
     <Box flexDirection="column" flexGrow={1}>
-      {visibleLines.length === 0 && <Box flexDirection="column" marginTop={2}><Text color="cyan" bold>Ready when you are.</Text><Text dimColor>Describe the work. OmniHarness will route it through your OmniRoute account.</Text></Box>}
-      {visibleLines.map((line, index) => <Box key={`${index}-${line.role}`} flexDirection="column" marginBottom={1}>
-        <Text color={line.role === 'user' ? 'blue' : line.role === 'error' ? 'red' : 'green'} bold>{line.role === 'user' ? 'you' : line.role === 'error' ? 'error' : (line.model ?? 'harness')}</Text>
-        <Text>{clip(line.text, contentWidth)}</Text>
-      </Box>)}
+      {lines.length === 0 && <Box flexDirection="column" marginTop={2}><Text color="cyan" bold>Ready when you are.</Text><Text dimColor>Describe the work. OmniHarness will route it through your OmniRoute account.</Text></Box>}
+      {rows.map((row, index) => row.first
+        ? <Box key={index} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
+            <Text color={row.role === 'user' ? 'blue' : row.role === 'error' ? 'red' : 'green'} bold>{row.label}</Text>
+            <Text>{row.text}</Text>
+          </Box>
+        : <Text key={index}>{row.text}</Text>)}
       {busy && <Text color="cyan"><Spinner type="dots" /> working through {engine.state.activeModel}</Text>}
     </Box>
     {pickerOpen && <Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={2} paddingY={1}>

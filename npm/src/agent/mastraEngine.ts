@@ -70,7 +70,7 @@ export function createMastraEngine(config: MastraEngineConfig): MastraEngine {
   const activeModel = config.model ?? 'auto/best-coding';
   const agent = new Agent({
     name: 'omniharness-developer',
-    instructions: 'You are a careful autonomous developer. Inspect context before editing. Explain actions briefly, use tools only inside the workspace, and never claim verification without running it.',
+    instructions: 'You are OmniHarness, an autonomous developer agent running in the user\'s terminal and routed through the OmniRoute gateway. Inspect context before editing. Explain actions briefly, use tools only inside the workspace, and never claim verification without running it.',
     model: omniRouteModel(client, activeModel),
     tools: {
       read_file: mastraTool(tools.readFile, z.object({ path: z.string().min(1) }), z.object({ path: z.string(), content: z.string() })),
@@ -91,7 +91,11 @@ export function createMastraEngine(config: MastraEngineConfig): MastraEngine {
       state.prompt = prompt;
       state.taskStatus = 'running';
       const messages: HarnessMessage[] = [...state.messages, { role: 'user', content: prompt, createdAt: new Date().toISOString() }];
-      const result = await client.chat(state.activeModel, messages.map(({ role, content }) => ({ role: role === 'user' ? 'user' : 'assistant', content })), signal);
+      const payload = [
+        { role: 'system' as const, content: `You are OmniHarness, an autonomous developer agent running inside the user's terminal (the OmniHarness CLI, powered by the OmniRoute gateway at ${client.endpoint}). Current workspace: ${state.workspace.root}. Be concise and act carefully.` },
+        ...messages.map(({ role, content }) => ({ role: role === 'user' ? 'user' as const : 'assistant' as const, content })),
+      ];
+      const result = await client.chat(state.activeModel, payload, signal);
       state.taskStatus = 'completed';
       state.metrics = client.snapshotMetrics();
       state.messages = [...messages, { role: 'assistant', content: result.content, createdAt: new Date().toISOString() }];
