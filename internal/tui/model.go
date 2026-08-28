@@ -437,7 +437,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.providers = msg.Providers
 		m.accountCombos = msg.AccountCombos
 		m.combosLoading = false
-		m.comboSel = 0
+		if m.comboSel >= len(m.accountCombos) {
+			m.comboSel = 0
+		}
 		return m, nil
 
 	case approvalMsg:
@@ -500,6 +502,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleKey routes keys by context.
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Boot screen: any key skips to home.
+	if m.overlay == OverlayBoot && !m.bootDone {
+		return m, nil
+	}
 	if m.overlay == OverlayBoot && m.bootDone {
 		m.overlay = OverlayNone
 		m.inputFocused = true
@@ -571,7 +576,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+o", "ctrl+O":
 		m.overlay = OverlayModelPicker
 		m.comboSel = 0
-		return m, nil
+		return m, m.loadAccountCombos()
 	case "ctrl+a", "ctrl+A":
 		m.overlay = OverlaySessions
 		m.refreshSessions()
@@ -620,9 +625,32 @@ func (m *Model) handleOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) loadAccountCombos() tea.Cmd {
+	rt := m.rt
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+		combos, err := rt.Gateway.ListCombos(ctx)
+		if err != nil {
+			return combosMsg{AccountCombos: nil}
+		}
+		accountCombos := make([]accountCombo, 0, len(combos))
+		for _, combo := range combos {
+			models := make([]string, 0, len(combo.Models))
+			for _, model := range combo.Models {
+				if model.Model != "" {
+					models = append(models, model.Model)
+				}
+			}
+			accountCombos = append(accountCombos, accountCombo{Name: combo.Name, Strategy: combo.Strategy, Models: models, Default: combo.IsDefault})
+		}
+		return combosMsg{AccountCombos: accountCombos}
+	}
+}
+
 // handleModelPickerKey handles the model picker overlay.
 func (m *Model) handleModelPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	total := len(m.accountCombos) + 1 // +1 for custom entry
+	total := len(m.accountCombos)
 	switch msg.String() {
 	case "esc":
 		m.overlay = OverlayNone
@@ -643,13 +671,7 @@ func (m *Model) handleModelPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.overlay = OverlayNone
 			return m, m.applyCombo(ac.Name)
 		}
-		// Custom entry.
-		m.overlay = OverlayNone
-		m.modelInput = true
-		m.input.SetValue("")
-		m.input.Placeholder = "provider/model id… (e.g. openai/gpt-5.4)"
-		m.inputFocused = true
-		return m, m.input.Focus()
+		return m, nil
 	}
 	return m, nil
 }
@@ -693,7 +715,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	case tea.MouseWheelDown:
 		if m.overlay == OverlayModelPicker {
-			total := len(m.accountCombos) + 1
+			total := len(m.accountCombos)
 			if m.comboSel < total-1 {
 				m.comboSel++
 			}

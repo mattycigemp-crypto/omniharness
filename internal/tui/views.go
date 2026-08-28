@@ -363,15 +363,6 @@ func (m *Model) renderModelPicker() string {
 		}
 	}
 
-	// Custom entry.
-	marker := "  "
-	label := m.styles.muted.Render("type a provider/model id…")
-	if m.comboSel == len(m.accountCombos) {
-		marker = m.styles.accent.Render("▸ ")
-		label = m.styles.accent.Render("type a provider/model id…")
-	}
-	fmt.Fprintf(&b, "\n%s%s\n", marker, label)
-
 	b.WriteString("\n" + m.styles.muted.Render("current: "+m.cfg.Models.Default))
 	return b.String()
 }

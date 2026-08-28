@@ -133,6 +133,20 @@ func TestModelComboPickerSelects(t *testing.T) {
 	}
 }
 
+func TestModelComboPickerHasNoSelectionWhenAccountIsEmpty(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.accountCombos = nil
+	m.overlay = OverlayModelPicker
+	m.comboSel = 0
+	m2, _ := update(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	if m2.comboSel != 0 {
+		t.Fatalf("comboSel = %d, want 0 for empty account", m2.comboSel)
+	}
+	if strings.Contains(m2.View(), "provider/model id") {
+		t.Fatal("picker must not offer raw model selection")
+	}
+}
+
 func TestModelComboPickerNavigation(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.accountCombos = []accountCombo{
