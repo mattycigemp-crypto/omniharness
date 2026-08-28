@@ -17,14 +17,15 @@ function server(handler: (request: Request) => Response): { url: string; close: 
   return { url: `http://localhost:${address.port}`, close: () => instance.close() };
 }
 
-test('normalizes endpoint and sends OmniRoute headers and auth', async () => {
+test('normalizes endpoint, sends OmniRoute headers and auth, reports the model that answered', async () => {
   let received: Request | undefined;
-  const live = server((request) => { received = request; return Response.json({ choices: [{ message: { content: 'ok' } }] }); });
+  const live = server((request) => { received = request; return Response.json({ model: 'aion/aion-labs/aion-3.0', choices: [{ message: { content: 'ok' } }] }); });
   try {
     const client = new OmniRouteClient({ endpoint: `${live.url}/`, apiKey: 'secret' });
     const result = await client.chat('custom/combo', [{ role: 'user', content: 'hello' }]);
     assert.equal(client.endpoint, live.url);
     assert.equal(result.content, 'ok');
+    assert.equal(result.model, 'aion/aion-labs/aion-3.0');
     assert.equal(received?.headers.get('authorization'), 'Bearer secret');
     assert.equal(received?.headers.get('x-omniharness-metrics'), 'tokens,compression,fallback,quota');
   } finally { live.close(); }
