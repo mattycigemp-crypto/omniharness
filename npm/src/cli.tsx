@@ -4,6 +4,7 @@ import { render } from 'ink';
 import { createMastraEngine } from './agent/mastraEngine.js';
 import { TerminalInterface } from './ui/terminalInterface.js';
 import { ownVersion, runUpdate } from './update.js';
+import { readActiveCombo } from './config/settings.js';
 
 const command = process.argv[2];
 
@@ -12,6 +13,9 @@ if (command === 'update') {
 } else if (command === '--version' || command === '-v' || command === 'version') {
   console.log(`omniharness ${ownVersion()}`);
 } else {
-  const engine = createMastraEngine({ workspaceRoot: process.cwd() });
-  render(<TerminalInterface engine={engine} />);
+  void (async () => {
+    const saved = await readActiveCombo();
+    const engine = await createMastraEngine({ workspaceRoot: process.cwd(), model: saved });
+    render(<TerminalInterface engine={engine} />);
+  })();
 }

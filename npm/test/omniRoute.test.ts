@@ -50,3 +50,27 @@ test('decodes empty and wrapped combo responses, and classifies HTTP errors', as
   try { await assert.rejects(() => new OmniRouteClient({ endpoint: live.url }).listCombos(), (error: unknown) => error instanceof OmniRouteError && error.status === 401); }
   finally { live.close(); }
 });
+
+test('chat() forwards tools and surfaces reasoning, finish_reason and tool_calls', async () => {
+  let received: Request | undefined;
+  const live = server((request) => {
+    received = request;
+    return Response.json({ model: 'test/model', choices: [{ finish_reason: 'tool_calls', message: {
+      role: 'assistant', content: '', reasoning: 'I will read it',
+      tool_calls: [{ id: 'call_9', type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } }],
+    } }] });
+  });
+  try {
+    const client = new OmniRouteClient({ endpoint: live.url });
+    const result = await client.chat('combo', [{ role: 'user', content: 'hi' }], {
+      tools: [{ type: 'function', function: { name: 'read_file', description: 'read', parameters: { type: 'object', properties: {} } } }],
+    });
+    assert.equal(result.finishReason, 'tool_calls');
+    assert.equal(result.reasoning, 'I will read it');
+    assert.equal(result.toolCalls?.[0]?.function.name, 'read_file');
+    assert.equal(result.toolCalls?.[0]?.id, 'call_9');
+    const body = JSON.parse(await received!.text());
+    assert.equal(body.tools[0].function.name, 'read_file');
+    assert.equal(body.stream, false);
+  } finally { live.close(); }
+});
