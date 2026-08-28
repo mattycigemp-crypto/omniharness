@@ -19,7 +19,7 @@ export interface MastraEngine {
   readonly client: OmniRouteClient;
   readonly tools: SystemTools;
   readonly state: HarnessState;
-  run(prompt: string, signal?: AbortSignal): Promise<string>;
+  run(prompt: string, signal?: AbortSignal): Promise<{ content: string; model: string }>;
 }
 
 function mastraTool<TInput extends z.ZodTypeAny, TOutput extends z.ZodTypeAny>(tool: AgentToolDeclaration<z.infer<TInput>, z.infer<TOutput>>, inputSchema: TInput, outputSchema: TOutput) {
@@ -95,7 +95,7 @@ export function createMastraEngine(config: MastraEngineConfig): MastraEngine {
       state.taskStatus = 'completed';
       state.metrics = client.snapshotMetrics();
       state.messages = [...messages, { role: 'assistant', content: result.content, createdAt: new Date().toISOString() }];
-      return result.content;
+      return { content: result.content, model: result.model };
     },
   };
 }

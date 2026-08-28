@@ -81,9 +81,12 @@ export class OmniRouteClient {
     const choice = payload.choices[0];
     const message = this.isRecord(choice) && this.isRecord(choice.message) ? choice.message : {};
     const usage = this.isRecord(payload.usage) ? payload.usage : undefined;
+    // OpenAI-compatible responses report the model that actually answered
+    // (the combo may have routed anywhere); fall back to the requested id.
+    const answered = typeof payload.model === 'string' && payload.model.trim() !== '' ? payload.model : model;
     return {
       content: typeof message.content === 'string' ? message.content : '',
-      model,
+      model: answered,
       usage: usage ? {
         inputTokens: this.number(usage.prompt_tokens),
         outputTokens: this.number(usage.completion_tokens),

@@ -4,7 +4,7 @@ import Spinner from 'ink-spinner';
 import type { MastraEngine } from '../agent/mastraEngine.js';
 
 interface Props { engine: MastraEngine }
-interface Line { role: 'user' | 'assistant' | 'error'; text: string }
+interface Line { role: 'user' | 'assistant' | 'error'; text: string; model?: string }
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 const widthOf = (stdout: NodeJS.WriteStream): number => Math.max(48, stdout.columns ?? 80);
@@ -67,7 +67,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       setInput(''); setBusy(true); setError(undefined);
       setLines((current) => [...current, { role: 'user', text: prompt }]);
       void engine.run(prompt).then((answer) => {
-        setLines((current) => [...current, { role: 'assistant', text: answer }]);
+        setLines((current) => [...current, { role: 'assistant', text: answer.content, model: answer.model }]);
       }).catch((reason: unknown) => {
         const message = reason instanceof Error ? reason.message : String(reason);
         setError(message); setLines((current) => [...current, { role: 'error', text: message }]);
@@ -91,7 +91,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     <Box flexDirection="column" flexGrow={1}>
       {visibleLines.length === 0 && <Box flexDirection="column" marginTop={2}><Text color="cyan" bold>Ready when you are.</Text><Text dimColor>Describe the work. OmniHarness will route it through your OmniRoute account.</Text></Box>}
       {visibleLines.map((line, index) => <Box key={`${index}-${line.role}`} flexDirection="column" marginBottom={1}>
-        <Text color={line.role === 'user' ? 'blue' : line.role === 'error' ? 'red' : 'green'} bold>{line.role === 'user' ? 'you' : line.role === 'error' ? 'error' : 'harness'}</Text>
+        <Text color={line.role === 'user' ? 'blue' : line.role === 'error' ? 'red' : 'green'} bold>{line.role === 'user' ? 'you' : line.role === 'error' ? 'error' : (line.model ?? 'harness')}</Text>
         <Text>{clip(line.text, contentWidth)}</Text>
       </Box>)}
       {busy && <Text color="cyan"><Spinner type="dots" /> working through {engine.state.activeModel}</Text>}
