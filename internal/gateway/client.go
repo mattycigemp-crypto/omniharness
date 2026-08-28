@@ -523,13 +523,21 @@ func (c *Client) ListCombos(ctx context.Context) ([]Combo, error) {
 	if err := json.Unmarshal(raw, &combos); err == nil {
 		return combos, nil
 	}
-	// Some responses wrap in {"combos":[...]}.
+	// OpenAI-style envelopes: {"data":[...]} (OmniRoute's actual shape) and
+	// {"combos":[...]}.
 	var wrapped struct {
+		Data   []Combo `json:"data"`
 		Combos []Combo `json:"combos"`
 	}
-	if err := json.Unmarshal(raw, &wrapped); err == nil {
+	if err := json.Unmarshal(raw, &wrapped); err == nil && (wrapped.Data != nil || wrapped.Combos != nil) {
+		if wrapped.Data != nil {
+			return wrapped.Data, nil
+		}
 		return wrapped.Combos, nil
-	} else {
-		return nil, c.errf(KindBadRequest, 0, "decode combos: %v", err)
 	}
+	trimmed := strings.TrimSpace(string(raw))
+	if len(trimmed) > 200 {
+		trimmed = trimmed[:200]
+	}
+	return nil, c.errf(KindBadRequest, 0, "decode combos: %s", trimmed)
 }

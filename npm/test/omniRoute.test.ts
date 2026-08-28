@@ -31,9 +31,18 @@ test('normalizes endpoint and sends OmniRoute headers and auth', async () => {
 });
 
 test('decodes empty and wrapped combo responses, and classifies HTTP errors', async () => {
-  for (const payload of [[], { combos: [{ name: 'coding', models: [] }] }]) {
+  const envelopes: unknown[] = [
+    [],
+    { combos: [{ name: 'coding', models: [] }] },
+    { object: 'list', data: [{ name: 'free-stack', strategy: 'auto', models: [{ kind: 'model', model: 'if/kimi-k2-thinking' }] }] },
+  ];
+  for (const payload of envelopes) {
     const live = server(() => Response.json(payload));
-    try { assert.deepEqual(await new OmniRouteClient({ endpoint: live.url }).listCombos(), payload.length === 0 ? [] : [{ name: 'coding', models: [] }]); }
+    try {
+      const combos = await new OmniRouteClient({ endpoint: live.url }).listCombos();
+      assert.equal(combos.length, Array.isArray(payload) ? 0 : 1);
+      if (!Array.isArray(payload)) assert.equal(combos[0]?.name, 'combos' in (payload as object) ? 'coding' : 'free-stack');
+    }
     finally { live.close(); }
   }
   const live = server(() => new Response('denied', { status: 401 }));

@@ -63,6 +63,7 @@ export class OmniRouteClient {
     const payload: unknown = await response.json();
     if (Array.isArray(payload)) return payload as OmniRouteCombo[];
     if (this.isRecord(payload) && Array.isArray(payload.combos)) return payload.combos as OmniRouteCombo[];
+    if (this.isRecord(payload) && Array.isArray(payload.data)) return payload.data as OmniRouteCombo[];
     throw new OmniRouteError(response.status, 'invalid combos response');
   }
 
