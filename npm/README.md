@@ -6,8 +6,7 @@ models, drives capability-based agents, verifies results, repairs failures, and
 learns from past outcomes — while OmniRoute stays responsible for routing model
 requests to providers.
 
-This package is a thin wrapper around the self-contained OmniHarness binary;
-the `omniharness` command is installed by npm and forwards to the bundled binary.
+This package installs the TypeScript/Ink OmniHarness terminal UI; the `omniharness` command launches the bundled CLI.
 
 ## Install
 
@@ -44,8 +43,7 @@ config, sessions, logs, or telemetry. The key is redacted from all output;
 
 ## Notes
 
-- Only `win32-x64` is shipped in this version; other platforms can be added by
-  building the Go binary and publishing a new release.
+- Node.js 20 or newer is required to run the CLI.
 - Publishing is automatic: every push to `main` on GitHub runs
   `.github/workflows/publish.yml`, which bumps the version, verifies
   (vet + tests), builds, and publishes via **npm trusted publishing (OIDC)**
