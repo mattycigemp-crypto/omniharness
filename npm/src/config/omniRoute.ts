@@ -1,4 +1,16 @@
-import type { CompressionTracker, OmniRouteMetrics } from '../types/index.js';
+import type { ChatWireMessage, CompressionTracker, OmniRouteMetrics, ToolCallRequest } from '../types/index.js';
+
+/** Deltas surfaced incrementally while a streaming completion is in flight. */
+export type StreamDelta =
+  | { type: 'reasoning'; delta: string }
+  | { type: 'text'; delta: string }
+  | { type: 'tool_call'; call: ToolCallRequest };
+
+export interface ChatStreamOptions {
+  signal?: AbortSignal;
+  tools?: readonly ChatTool[];
+  onDelta?: (delta: StreamDelta) => void;
+}
 
 export interface OmniRouteConfig {
   endpoint?: string;
@@ -13,14 +25,19 @@ export interface OmniRouteCombo {
   isDefault?: boolean;
 }
 
-export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+export type ChatMessage = ChatWireMessage;
+
+export interface ChatTool {
+  type: 'function';
+  function: { name: string; description?: string; parameters: unknown };
 }
 
 export interface ChatResult {
   content: string;
   model: string;
+  finishReason: 'stop' | 'tool_calls' | 'length' | 'content_filter' | string;
+  reasoning?: string;
+  toolCalls?: readonly ToolCallRequest[];
   usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
   headers: Headers;
 }
@@ -67,12 +84,107 @@ export class OmniRouteClient {
     throw new OmniRouteError(response.status, 'invalid combos response');
   }
 
-  public async chat(model: string, messages: readonly ChatMessage[], signal?: AbortSignal): Promise<ChatResult> {
+  /** Stream a completion, surfacing deltas as they arrive and returning the accumulated result. */
+  public async chatStream(model: string, messages: readonly ChatMessage[], options: ChatStreamOptions = {}): Promise<ChatResult> {
     const response = await this.request('/chat/completions', {
       method: 'POST',
-      signal,
+      signal: options.signal,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model, messages, stream: false }),
+      body: JSON.stringify({ model, messages, stream: true, tools: options.tools }),
+    });
+    const usage: { inputTokens: number; outputTokens: number; totalTokens: number } = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    let finishReason: ChatResult['finishReason'] = 'stop';
+    let content = '';
+    let reasoning = '';
+    let answered = model;
+    let lineBuffer = '';
+    // Partially-accumulated tool calls keyed by stream index.
+    const toolStreams = new Map<number, { id: string; name: string; argsFragments: string[] }>();
+
+    const flushData = (line: string): void => {
+      const sep = line.indexOf(':');
+      if (sep === -1) return;
+      if (line.slice(0, sep) !== 'data') return;
+      const payload = line.slice(sep + 1).trim();
+      if (payload === '[DONE]') return;
+      const chunk = this.safeParse(payload);
+      if (!chunk || !Array.isArray(chunk.choices)) return;
+      if (typeof chunk.model === 'string' && chunk.model !== '' && chunk.model !== 'omniroute') answered = chunk.model;
+      if (this.isRecord(chunk.usage)) {
+        usage.inputTokens = this.number(chunk.usage.prompt_tokens);
+        usage.outputTokens = this.number(chunk.usage.completion_tokens);
+        usage.totalTokens = this.number(chunk.usage.total_tokens);
+      }
+      for (const choice of chunk.choices) {
+        if (!this.isRecord(choice)) continue;
+        if (typeof choice.finish_reason === 'string' && choice.finish_reason !== '') finishReason = choice.finish_reason;
+        const delta = this.isRecord(choice.delta) ? choice.delta : {};
+        if (typeof delta.reasoning === 'string' && delta.reasoning !== '') {
+          reasoning += delta.reasoning;
+          options.onDelta?.({ type: 'reasoning', delta: delta.reasoning });
+        }
+        if (typeof delta.content === 'string' && delta.content !== '') {
+          content += delta.content;
+          options.onDelta?.({ type: 'text', delta: delta.content });
+        }
+        if (Array.isArray(delta.tool_calls)) {
+          for (const raw of delta.tool_calls) {
+            if (!this.isRecord(raw)) continue;
+            const idx = typeof raw.index === 'number' ? raw.index : 0;
+            const existing = toolStreams.get(idx) ?? { id: '', name: '', argsFragments: [] };
+            const fn = this.isRecord(raw.function) ? raw.function : {};
+            if (typeof raw.id === 'string' && raw.id !== '') existing.id = raw.id;
+            if (typeof fn.name === 'string' && fn.name !== '') existing.name = fn.name;
+            if (typeof fn.arguments === 'string' && fn.arguments !== '') existing.argsFragments.push(fn.arguments);
+            toolStreams.set(idx, existing);
+            // Whole-argument chunks (as produced by OmniRoute) complete a call immediately.
+            if (existing.id !== '' && existing.name !== '' && existing.argsFragments.some((frag) => this.isValidJson(frag))) {
+              const call: ToolCallRequest = { id: existing.id, type: 'function', function: { name: existing.name, arguments: existing.argsFragments.join('') } };
+              options.onDelta?.({ type: 'tool_call', call });
+            }
+          }
+        }
+      }
+    };
+
+    const body = response.body;
+    if (body) {
+      const reader = body.getReader();
+      const decoder = new TextDecoder();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          lineBuffer += decoder.decode(value, { stream: true });
+          let newline: number;
+          while ((newline = lineBuffer.indexOf('\n')) !== -1) {
+            const line = lineBuffer.slice(0, newline);
+            lineBuffer = lineBuffer.slice(newline + 1);
+            const trimmed = line.replace(/\r$/, '');
+            if (trimmed.trim() !== '') flushData(trimmed);
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    } else {
+      // Non-streaming fallback when no body stream is exposed.
+      const fallback = await this.chat(model, messages, options);
+      return fallback;
+    }
+
+    const toolCalls: ToolCallRequest[] = [...toolStreams.values()]
+      .filter((entry) => entry.id !== '' && entry.name !== '')
+      .map((entry) => ({ id: entry.id, type: 'function', function: { name: entry.name, arguments: entry.argsFragments.join('') } }));
+    return { content, model: answered, finishReason, reasoning: reasoning || undefined, toolCalls, usage, headers: response.headers };
+  }
+
+  public async chat(model: string, messages: readonly ChatMessage[], options: { signal?: AbortSignal; tools?: readonly ChatTool[] } = {}): Promise<ChatResult> {
+    const response = await this.request('/chat/completions', {
+      method: 'POST',
+      signal: options.signal,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model, messages, stream: false, tools: options.tools }),
     });
     const payload: unknown = await response.json();
     if (!this.isRecord(payload) || !Array.isArray(payload.choices) || payload.choices.length === 0) {
@@ -84,9 +196,13 @@ export class OmniRouteClient {
     // OpenAI-compatible responses report the model that actually answered
     // (the combo may have routed anywhere); fall back to the requested id.
     const answered = typeof payload.model === 'string' && payload.model.trim() !== '' ? payload.model : model;
+    const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls.map((call: unknown) => this.asToolCall(call)).filter((call): call is ToolCallRequest => call !== null) : undefined;
     return {
       content: typeof message.content === 'string' ? message.content : '',
       model: answered,
+      finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : 'stop',
+      reasoning: typeof message.reasoning === 'string' ? message.reasoning : undefined,
+      toolCalls,
       usage: usage ? {
         inputTokens: this.number(usage.prompt_tokens),
         outputTokens: this.number(usage.completion_tokens),
@@ -151,6 +267,23 @@ export class OmniRouteClient {
 
   private number(value: unknown): number {
     return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  }
+
+  private safeParse(text: string): Record<string, unknown> | null {
+    try { return JSON.parse(text) as Record<string, unknown>; }
+    catch { return null; }
+  }
+
+  private isValidJson(text: string): boolean {
+    try { JSON.parse(text); return true; }
+    catch { return false; }
+  }
+
+  private asToolCall(value: unknown): ToolCallRequest | null {
+    if (!this.isRecord(value) || typeof value.id !== 'string' || value.type !== 'function') return null;
+    const fn = this.isRecord(value.function) ? value.function : {};
+    if (typeof fn.name !== 'string' || typeof fn.arguments !== 'string') return null;
+    return { id: value.id, type: 'function', function: { name: fn.name, arguments: fn.arguments } };
   }
 
   private isRecord(value: unknown): value is Record<string, unknown> {

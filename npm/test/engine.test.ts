@@ -10,14 +10,19 @@ test('run() introduces OmniHarness in a system message and reports the answering
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
     body = JSON.parse(Buffer.concat(chunks).toString()) as typeof body;
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ model: 'aion/aion-labs/aion-3.0', choices: [{ message: { content: 'hey' } }] }));
+    const sse = [
+      'data: ' + JSON.stringify({ model: 'aion/aion-labs/aion-3.0', choices: [{ index: 0, delta: { content: 'hey' }, finish_reason: null }] }),
+      'data: ' + JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
+      'data: [DONE]',
+    ].join('\n');
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(sse);
   });
   instance.listen(0);
   const address = instance.address();
   if (!address || typeof address === 'string') throw new Error('server did not bind');
   try {
-    const engine = createMastraEngine({ workspaceRoot: os.tmpdir(), endpoint: `http://localhost:${address.port}` });
+    const engine = await createMastraEngine({ workspaceRoot: os.tmpdir(), endpoint: `http://localhost:${address.port}` });
     const result = await engine.run('hi');
     assert.equal(result.content, 'hey');
     assert.equal(result.model, 'aion/aion-labs/aion-3.0');
