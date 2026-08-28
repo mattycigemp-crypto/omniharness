@@ -196,6 +196,56 @@ func TestListProvidersAndModels(t *testing.T) {
 	}
 }
 
+func TestListCombosDecodesOpenAIEnvelope(t *testing.T) {
+	_, c := fakeOmniRoute(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/combos" {
+			w.WriteHeader(404)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"object": "list",
+			"data": []map[string]any{{
+				"name":     "free-stack",
+				"strategy": "auto",
+				"models":   []map[string]any{{"kind": "model", "model": "if/kimi-k2-thinking", "providerId": "if"}},
+			}},
+		})
+	})
+	combos, err := c.ListCombos(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(combos) != 1 || combos[0].Name != "free-stack" || len(combos[0].Models) != 1 || combos[0].Models[0].Model != "if/kimi-k2-thinking" {
+		t.Fatalf("combos %+v", combos)
+	}
+}
+
+func TestListCombosDecodesBareArray(t *testing.T) {
+	_, c := fakeOmniRoute(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/combos" {
+			w.WriteHeader(404)
+			return
+		}
+		json.NewEncoder(w).Encode([]map[string]any{{"name": "coding", "strategy": "priority", "models": []map[string]any{}}})
+	})
+	combos, err := c.ListCombos(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(combos) != 1 || combos[0].Name != "coding" {
+		t.Fatalf("combos %+v", combos)
+	}
+}
+
+func TestListCombosRejectsUnknownShape(t *testing.T) {
+	_, c := fakeOmniRoute(t, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"unexpected": true})
+	})
+	if _, err := c.ListCombos(context.Background()); err == nil {
+		t.Fatal("expected decode error for unknown response shape")
+	}
+}
+
 func TestSplitModel(t *testing.T) {
 	p, m := SplitModel("cursor/claude-x")
 	if p != "cursor" || m != "claude-x" {
