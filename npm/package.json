@@ -12,7 +12,7 @@
   },
   "files": [
     "cli.js",
-    "vendor/",
+    "dist/",
     "README.md"
   ],
   "scripts": {
