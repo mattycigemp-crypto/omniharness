@@ -6,13 +6,9 @@ import type { MastraEngine } from '../agent/mastraEngine.js';
 interface Props { engine: MastraEngine }
 interface Line { role: 'user' | 'assistant' | 'error'; text: string }
 
-function widthOf(stdout: NodeJS.WriteStream): number {
-  return Math.max(48, stdout.columns ?? 80);
-}
-
-function clip(text: string, width: number): string {
-  return text.length <= width ? text : `${text.slice(0, Math.max(0, width - 1))}…`;
-}
+const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
+const widthOf = (stdout: NodeJS.WriteStream): number => Math.max(48, stdout.columns ?? 80);
+const clip = (text: string, width: number): string => text.length <= width ? text : `${text.slice(0, Math.max(0, width - 1))}…`;
 
 export function TerminalInterface({ engine }: Props): React.ReactElement {
   const { exit } = useApp();
@@ -21,7 +17,11 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const [input, setInput] = useState('');
   const [lines, setLines] = useState<Line[]>([]);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | undefined>();
+  const [error, setError] = useState<string>();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [combos, setCombos] = useState<readonly string[]>([]);
+  const [comboIndex, setComboIndex] = useState(0);
+  const [comboError, setComboError] = useState<string>();
 
   useEffect(() => {
     const onResize = (): void => setWidth(widthOf(stdout));
@@ -29,8 +29,38 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     return () => { stdout.off('resize', onResize); };
   }, [stdout]);
 
+  const loadCombos = async (): Promise<void> => {
+    setComboError(undefined);
+    try {
+      const accountCombos = await engine.client.listCombos();
+      const names = accountCombos.map((combo) => combo.name).filter((name) => name.trim() !== '');
+      setCombos(names);
+      setComboIndex(0);
+    } catch (reason: unknown) {
+      setCombos([]);
+      setComboError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
   useInput((value, key) => {
     if (key.ctrl && value === 'c') { exit(); return; }
+    if (key.ctrl && value.toLowerCase() === 'o') {
+      setPickerOpen(true);
+      void loadCombos();
+      return;
+    }
+    if (pickerOpen) {
+      if (key.escape) { setPickerOpen(false); return; }
+      if (key.upArrow || value === 'k') { setComboIndex((current) => clamp(current - 1, 0, Math.max(0, combos.length - 1))); return; }
+      if (key.downArrow || value === 'j') { setComboIndex((current) => clamp(current + 1, 0, Math.max(0, combos.length - 1))); return; }
+      if (key.return && combos.length > 0) {
+        const selected = combos[comboIndex];
+        engine.state.activeModel = selected;
+        setPickerOpen(false);
+        setLines((current) => [...current, { role: 'assistant', text: `combo selected: ${selected}` }]);
+      }
+      return;
+    }
     if (key.return) {
       const prompt = input.trim();
       if (!prompt || busy) return;
@@ -44,37 +74,38 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       }).finally(() => setBusy(false));
       return;
     }
-    if (key.backspace) { setInput((current) => current.slice(0, -1)); return; }
+    if (key.backspace || key.delete) { setInput((current) => current.slice(0, -1)); return; }
     if (!key.ctrl && !key.meta && value) setInput((current) => current + value);
   });
 
-  const contentWidth = Math.max(20, width - 6);
   const metrics = engine.client.snapshotMetrics();
-  const compression = metrics.compression.inputTokens > 0 ? `${Math.round((1 - metrics.compression.ratio) * 100)}% via ${metrics.compression.strategy.toUpperCase()}` : 'pending';
-  const visibleLines = useMemo(() => lines.slice(-Math.max(3, (stdout.rows ?? 24) - 9)), [lines, stdout.rows]);
+  const compression = metrics.compression.inputTokens > 0 ? `${Math.round((1 - metrics.compression.ratio) * 100)}% ${metrics.compression.strategy.toUpperCase()}` : '—';
+  const contentWidth = Math.max(20, width - 8);
+  const visibleLines = useMemo(() => lines.slice(-Math.max(4, (stdout.rows ?? 24) - 8)), [lines, stdout.rows]);
 
-  return <Box flexDirection="column" width={width} paddingX={1}>
-    <Box borderStyle="round" borderColor="cyan" paddingX={1} justifyContent="space-between">
-      <Text bold color="cyan">OmniHarness v2.0</Text>
-      <Text dimColor>OmniRoute Local :20128</Text>
+  return <Box flexDirection="column" width={width} height={stdout.rows ?? 24} paddingX={2}>
+    <Box justifyContent="space-between" paddingY={1}>
+      <Text bold color="cyan">OMNIHARNESS <Text dimColor>· local cockpit</Text></Text>
+      <Text dimColor>OMNIROUTE :20128</Text>
     </Box>
-    <Box marginTop={1} flexDirection="row">
-      <Box flexDirection="column" width={Math.max(24, Math.floor(width * 0.27))} borderStyle="single" borderColor="gray" paddingX={1}>
-        <Text bold>ROUTE</Text><Text>provider: {metrics.fallback.activeProvider ?? 'auto'}</Text>
-        <Text>compression: {compression}</Text><Text>cooldown: {metrics.fallback.cooldownUntil ?? 'none'}</Text>
-        <Text>requests: {metrics.requestCount}</Text>
-      </Box>
-      <Box flexDirection="column" flexGrow={1} marginLeft={1} borderStyle="single" borderColor="gray" paddingX={1}>
-        {visibleLines.length === 0 && <Text dimColor>Describe a task to begin.</Text>}
-        {visibleLines.map((line, index) => <Text key={`${index}-${line.role}`} color={line.role === 'user' ? 'blue' : line.role === 'error' ? 'red' : undefined}>
-          {line.role === 'user' ? 'YOU  ' : line.role === 'error' ? 'ERR  ' : 'AGENT'} {clip(line.text, contentWidth)}
-        </Text>)}
-        {busy && <Text color="cyan"><Spinner type="dots" /> working through OmniRoute…</Text>}
-      </Box>
+    <Box flexDirection="column" flexGrow={1}>
+      {visibleLines.length === 0 && <Box flexDirection="column" marginTop={2}><Text color="cyan" bold>Ready when you are.</Text><Text dimColor>Describe the work. OmniHarness will route it through your OmniRoute account.</Text></Box>}
+      {visibleLines.map((line, index) => <Box key={`${index}-${line.role}`} flexDirection="column" marginBottom={1}>
+        <Text color={line.role === 'user' ? 'blue' : line.role === 'error' ? 'red' : 'green'} bold>{line.role === 'user' ? 'you' : line.role === 'error' ? 'error' : 'harness'}</Text>
+        <Text>{clip(line.text, contentWidth)}</Text>
+      </Box>)}
+      {busy && <Text color="cyan"><Spinner type="dots" /> working through {engine.state.activeModel}</Text>}
     </Box>
-    <Box marginTop={1} borderStyle="round" borderColor={error ? 'red' : 'cyan'} paddingX={1}>
+    {pickerOpen && <Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={2} paddingY={1}>
+      <Text bold color="magenta">Choose an OmniRoute combo</Text>
+      <Text dimColor>↑↓ / j k navigate · enter select · esc close</Text>
+      {comboError && <Text color="red">{clip(comboError, contentWidth)}</Text>}
+      {combos.length === 0 && !comboError && <Text dimColor>No account combos returned by OmniRoute.</Text>}
+      {combos.map((combo, index) => <Text key={combo} color={index === comboIndex ? 'cyan' : undefined}>{index === comboIndex ? '› ' : '  '}{combo}{combo === engine.state.activeModel ? '  ✓' : ''}</Text>)}
+    </Box>}
+    <Box borderStyle="round" borderColor={error ? 'red' : 'cyan'} paddingX={1} marginTop={1}>
       <Text color="cyan">› </Text><Text>{clip(input || 'type a task and press enter', contentWidth)}</Text>
     </Box>
-    <Text dimColor>Ctrl+C quit · model {engine.state.activeModel}</Text>
+    <Box justifyContent="space-between"><Text dimColor>Ctrl+O combos · Ctrl+C quit</Text><Text dimColor>model {engine.state.activeModel} · compression {compression}</Text></Box>
   </Box>;
 }

@@ -89,7 +89,6 @@ type modelStat struct {
 type combosMsg struct {
 	AccountCombos []accountCombo
 	Err           error
-	Refresh       uint64
 }
 
 // providerInfo describes a connected provider.
@@ -181,10 +180,7 @@ type Model struct {
 	streamIdx      int
 
 	// Model combo picker.
-	combos        []combo.Option
-	combosLoading bool
-	comboSel      int
-	modelInput    bool
+	comboSel int
 
 	// Connected providers and user's combos.
 	providers     []providerInfo
@@ -246,18 +242,16 @@ func New(cfg config.Config, rt *runtime.Runtime, configPath string) *Model {
 	}
 
 	return &Model{
-		cfg:           cfg,
-		configPath:    configPath,
-		rt:            rt,
-		overlay:       OverlayBoot,
-		input:         in,
-		inputFocused:  false,
-		status:        task.StatusPending,
-		styles:        makeStyles(cfg.TUI.Color),
-		modelStatID:   map[string]int{},
-		combos:        combo.List(nil),
-		combosLoading: true,
-		conversation:  convo,
+		cfg:          cfg,
+		configPath:   configPath,
+		rt:           rt,
+		overlay:      OverlayBoot,
+		input:        in,
+		inputFocused: false,
+		status:       task.StatusPending,
+		styles:       makeStyles(cfg.TUI.Color),
+		modelStatID:  map[string]int{},
+		conversation: convo,
 	}
 }
 
@@ -433,7 +427,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case combosMsg:
 		m.accountCombos = msg.AccountCombos
-		m.combosLoading = false
 		if msg.Err != nil {
 			m.chat(chatError, "could not load account combos: "+msg.Err.Error())
 		}
@@ -546,14 +539,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if strings.HasPrefix(val, "/") {
 				return m, m.handleCommand(val)
 			}
-			if m.modelInput {
-				m.modelInput = false
-				return m, m.applyCombo(val)
-			}
 			return m, m.startTask(val)
 		case "esc":
 			m.inputFocused = false
-			m.modelInput = false
 			m.keyInput = false
 			m.endpointInput = false
 			m.input.Placeholder = "describe a task…"
@@ -759,7 +747,6 @@ func (m *Model) applyCombo(id string) tea.Cmd {
 	}
 	m.cfg.Models.Default = id
 	m.comboSel = 0
-	m.modelInput = false
 	m.input.Placeholder = "describe a task…"
 	m.chat(chatHarness, "combo → "+id+" — "+combo.Describe(id))
 	if m.configPath != "" {
