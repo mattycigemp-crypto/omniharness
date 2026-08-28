@@ -84,6 +84,35 @@ export class OmniRouteClient {
     throw new OmniRouteError(response.status, 'invalid combos response');
   }
 
+  /** Embed one or more texts via the gateway; returns one vector per input. */
+  public async embed(inputs: readonly string[], model = 'gemini-embedding-001', signal?: AbortSignal): Promise<number[][]> {
+    const response = await this.request('/v1/embeddings', {
+      method: 'POST',
+      signal,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model, input: inputs }),
+    });
+    const payload: unknown = await response.json();
+    if (!this.isRecord(payload) || !Array.isArray(payload.data)) throw new OmniRouteError(response.status, 'invalid embeddings response');
+    return payload.data.map((entry: unknown) => {
+      if (!this.isRecord(entry) || !Array.isArray(entry.embedding)) throw new OmniRouteError(response.status, 'invalid embeddings response');
+      return entry.embedding.map((value: unknown) => this.number(value));
+    });
+  }
+
+  /** List every model id the gateway exposes, including `auto/*` virtual combos and individual providers. */
+  public async listModels(signal?: AbortSignal): Promise<readonly string[]> {
+    const response = await this.request('/v1/models', { method: 'GET', signal });
+    const payload: unknown = await response.json();
+    const data = this.isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
+    const ids: string[] = [];
+    for (const entry of data) {
+      if (this.isRecord(entry) && typeof entry.id === 'string' && entry.id.trim() !== '') ids.push(entry.id);
+    }
+    if (ids.length === 0) throw new OmniRouteError(response.status, 'invalid models response');
+    return ids;
+  }
+
   /** Stream a completion, surfacing deltas as they arrive and returning the accumulated result. */
   public async chatStream(model: string, messages: readonly ChatMessage[], options: ChatStreamOptions = {}): Promise<ChatResult> {
     const response = await this.request('/chat/completions', {

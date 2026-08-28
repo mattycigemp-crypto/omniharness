@@ -34,7 +34,8 @@ export type KeyAction =
   | { kind: 'tab' }
   | { kind: 'ctrlC' }
   | { kind: 'ctrlM' }
-  | { kind: 'ctrlO' };
+  | { kind: 'ctrlO' }
+  | { kind: 'ctrlE' };
 
 /** Enable the kitty keyboard protocol (disambiguate escape codes). */
 export const KITTY_PUSH = '\x1b[>1u';
@@ -89,8 +90,9 @@ export function parseRawKey(chunk: string): KeyAction | null {
     if (code === 1) return { kind: 'home' };
     if (code === 4) return { kind: 'end' };
     if (code === 99 && modifier === 5) return { kind: 'ctrlC' }; // ctrl+c
-    if (code === 109 && modifier === 5) return { kind: 'ctrlM' }; // ctrl+m
+    if (code === 109 && modifier === 5) return { kind: 'ctrlM' }; // ctrl+m (kitty-only: legacy Ctrl+M is \r)
     if (code === 111 && modifier === 5) return { kind: 'ctrlO' }; // ctrl+o
+    if (code === 101 && modifier === 5) return { kind: 'ctrlE' }; // ctrl+e
     return null; // other kitty-encoded keys (letters, F-keys, …) — not bound
   }
   return null;

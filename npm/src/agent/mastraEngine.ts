@@ -1,10 +1,14 @@
 import { exec, spawn, type ChildProcess } from 'node:child_process';
+import { readdir, readFile, stat } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import type { LanguageModelV1 } from '@ai-sdk/provider';
+import { attachmentBlock, kindFromName, type AttachmentInput } from '../attachments.js';
 import { OmniRouteClient, type ChatTool } from '../config/omniRoute.js';
 import { saveActiveCombo } from '../config/settings.js';
-import type { AgentMode, ChatWireMessage, HarnessMessage, HarnessState, PreviewServer, ToolCallRequest, ToolCallResult } from '../types/index.js';
+import type { AgentMode, ChatContentPart, ChatWireMessage, HarnessMessage, HarnessState, PreviewServer, ToolCallRequest, ToolCallResult } from '../types/index.js';
 import { createSystemTools, type SystemTools } from '../tools/systemTools.js';
 import { loadSkills, renderSkillCommand, skillSchema, type Skill } from '../skills.js';
+import { chunkText, cosineSimilarity, type IndexedChunk } from '../search.js';
 
 export interface MastraEngineConfig {
   workspaceRoot: string;
@@ -23,7 +27,8 @@ export type HarnessEvent =
   | { type: 'tool_result'; tool: string; summary: string }
   | { type: 'approval_requested'; tool: string; input: Record<string, unknown> }
   | { type: 'text'; content: string }
-  | { type: 'preview'; url: string };
+  | { type: 'preview'; url: string }
+  | { type: 'attach'; name: string; kind: AttachmentInput['kind']; size: number };
 
 export interface ApprovalAction {
   tool: string;
@@ -37,6 +42,7 @@ export interface MastraEngine {
   readonly skills: readonly Skill[];
   subscribe(listener: (event: HarnessEvent) => void): () => void;
   selectModel(model: string): Promise<void>;
+  attach(paths: readonly string[]): Promise<readonly AttachmentInput[]>;
   setApprovalHandler(handler: (action: ApprovalAction) => Promise<boolean>): void;
   run(prompt: string, signal?: AbortSignal): Promise<{ content: string; model: string }>;
   stop(): void;
@@ -88,6 +94,8 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
   let preview: PreviewServer | null = null;
   let previewChild: ChildProcess | null = null;
   let approvalHandler: ((action: ApprovalAction) => Promise<boolean>) | null = null;
+  let pendingAttachments: readonly (AttachmentInput & { dataUrl?: string })[] = [];
+  const semanticCache = new Map<string, { mtimeMs: number; chunks: IndexedChunk[] }>();
 
   const state: HarnessState = {
     taskStatus: 'idle', prompt: '', mode: config.mode ?? 'build', activeModel,
@@ -127,6 +135,23 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
     git_diff: {
       name: 'git_diff', description: tools.gitDiff.description, highRisk: false, parameters: { type: 'object', properties: {} },
       execute: async (_, signal) => { const r = await tools.gitDiff.execute(undefined, signal); return r === '' ? '(no diff)' : r; },
+    },
+    semantic_search: {
+      name: 'semantic_search', description: 'Embed the workspace and search it by meaning, returning the most relevant files with matching snippets. Use instead of guessing which file holds a concept.', highRisk: false, parameters: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer' }, refresh: { type: 'boolean' } }, required: ['query'] },
+      execute: async (input, signal) => {
+        const query = String(input.query ?? '').trim();
+        if (query === '') return 'error: query is required';
+        if (input.refresh === true) semanticCache.clear();
+        const limit = typeof input.limit === 'number' && input.limit > 0 ? Math.min(input.limit, 10) : 5;
+        const chunks = await indexWorkspaceSemantics(client, semanticCache, state.workspace.root);
+        if (chunks.length === 0) return 'no indexable text files in the workspace';
+        const [queryVector] = await client.embed([query], undefined, signal);
+        const ranked = chunks
+          .map((chunk) => ({ chunk, score: cosineSimilarity(queryVector, chunk.embedding) }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit);
+        return ranked.map(({ chunk, score }) => `${chunk.path} (${score.toFixed(3)})\n  ${chunk.text.slice(0, 200)}`).join('\n');
+      },
     },
     start_preview: {
       name: 'start_preview', description: 'Start a local preview server for the workspace and report its URL. Provide the command to run.', highRisk: true, parameters: { type: 'object', properties: { command: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, port: { type: 'integer' } }, required: ['command'] },
@@ -209,6 +234,31 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
       state.activeModel = model;
       try { await saveActiveCombo(model); } catch { /* persistence is best-effort */ }
     },
+    async attach(paths) {
+      const loaded: (AttachmentInput & { dataUrl?: string })[] = [];
+      const failures: string[] = [];
+      for (const raw of paths) {
+        const full = resolve(state.workspace.root, raw);
+        try {
+          const info = await stat(full);
+          if (!info.isFile()) { failures.push(`${raw}: not a file`); continue; }
+          const kind = kindFromName(raw);
+          const base: AttachmentInput = { name: raw, size: info.size, kind };
+          const attachment: typeof base & { dataUrl?: string } = base;
+          if (kind === 'image' && info.size <= 10 * 1024 * 1024) {
+            const bytes = await readFile(full);
+            attachment.dataUrl = `data:image/${mimeFromName(raw)};base64,${bytes.toString('base64')}`;
+          }
+          loaded.push(attachment);
+          emit({ type: 'attach', name: raw, kind, size: info.size });
+        } catch (reason: unknown) {
+          failures.push(`${raw}: ${reason instanceof Error ? reason.message : String(reason)}`);
+        }
+      }
+      if (failures.length > 0) throw new Error(`attach failed: ${failures.join('; ')}`);
+      pendingAttachments = loaded;
+      return loaded.map(({ dataUrl: _dataUrl, ...rest }) => rest);
+    },
     stop() { void stopPreviewChild(); listeners.clear(); },
     async run(prompt, signal) {
       state.prompt = prompt;
@@ -220,6 +270,16 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
         { role: 'system', content: SYSTEM_FRAME(client.endpoint, state.workspace.root, state.mode, skills.map((skill) => skill.name)) },
         ...state.messages.map(asWireMessage),
       ];
+      if (pendingAttachments.length > 0) {
+        const note = attachmentBlock(pendingAttachments);
+        const images: ChatContentPart[] = pendingAttachments
+          .filter((a): a is AttachmentInput & { dataUrl: string } => a.dataUrl !== undefined)
+          .map((a) => ({ type: 'image_url', image_url: { url: a.dataUrl } }));
+        wire[wire.length - 1] = images.length > 0
+          ? { role: 'user', content: [{ type: 'text', text: `${note}${prompt}` }, ...images] }
+          : { role: 'user', content: `${note}${prompt}` };
+        pendingAttachments = [];
+      }
 
       const results: ToolCallResult[] = [];
       let turn = 0;
@@ -308,6 +368,64 @@ function asWireMessage(message: HarnessMessage): ChatWireMessage {
   return { role: 'assistant', content: message.content };
 }
 
+function mimeFromName(name: string): string {
+  const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
+  return ext === 'jpg' ? 'jpeg' : ext === 'svg' ? 'svg+xml' : ext;
+}
+
 function truncate(text: string, max = 4000): string {
   return text.length <= max ? text : `${text.slice(0, max)}\n… (truncated ${text.length - max} chars)`;
+}
+
+const MAX_INDEX_FILES = 200;
+const MAX_INDEX_BYTES = 256 * 1024;
+
+/** Reuse cached embeddings for unchanged files; embed new/changed ones, batched. */
+async function indexWorkspaceSemantics(client: OmniRouteClient, cache: Map<string, { mtimeMs: number; chunks: IndexedChunk[] }>, root: string): Promise<IndexedChunk[]> {
+  const files: { path: string; mtimeMs: number }[] = [];
+  async function walk(directory: string): Promise<void> {
+    if (files.length >= MAX_INDEX_FILES) return;
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (files.length >= MAX_INDEX_FILES) return;
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+      const target = resolve(directory, entry.name);
+      if (entry.isDirectory()) await walk(target);
+      else if (entry.isFile()) {
+        try {
+          const info = await stat(target);
+          if (info.size > 0 && info.size <= MAX_INDEX_BYTES) files.push({ path: target, mtimeMs: info.mtimeMs });
+        } catch { /* unreadable file: skip */ }
+      }
+    }
+  }
+  await walk(root);
+  const results: IndexedChunk[] = [];
+  const changed = new Map<string, { mtimeMs: number; chunks: IndexedChunk[] }>();
+  for (const file of files) {
+    const cached = cache.get(file.path);
+    if (cached && cached.mtimeMs === file.mtimeMs) {
+      results.push(...cached.chunks);
+      continue;
+    }
+    try {
+      const text = await readFile(file.path, 'utf8');
+      changed.set(file.path, { mtimeMs: file.mtimeMs, chunks: [] });
+      for (const piece of chunkText(text)) changed.get(file.path)!.chunks.push({ path: file.path, text: piece, embedding: [] });
+    } catch { /* binary/unreadable: skip */ }
+  }
+  const toEmbed: IndexedChunk[] = [];
+  for (const entry of changed.values()) toEmbed.push(...entry.chunks);
+  for (let i = 0; i < toEmbed.length; i += 16) {
+    const batch = toEmbed.slice(i, i + 16);
+    const vectors = await client.embed(batch.map((chunk) => chunk.text));
+    batch.forEach((chunk, index) => { chunk.embedding = vectors[index]!; });
+  }
+  for (const file of files) {
+    const entry = changed.get(file.path);
+    if (entry) {
+      cache.set(file.path, entry);
+      results.push(...entry.chunks);
+    }
+  }
+  return results;
 }

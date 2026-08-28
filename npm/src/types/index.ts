@@ -64,10 +64,15 @@ export interface ToolCallRequest {
   function: { name: string; arguments: string };
 }
 
+/** A multimodal content part accepted by OmniRoute's /chat/completions (modality bridge). */
+export type ChatContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 /** Wire message shapes accepted by OmniRoute /chat/completions. */
 export interface ChatWireMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  content: string | readonly ChatContentPart[];
   tool_calls?: readonly ToolCallRequest[];
   tool_call_id?: string;
 }

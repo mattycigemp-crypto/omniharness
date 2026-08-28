@@ -74,3 +74,22 @@ test('chat() forwards tools and surfaces reasoning, finish_reason and tool_calls
     assert.equal(body.stream, false);
   } finally { live.close(); }
 });
+
+test('embed() posts to /v1/embeddings and returns vectors, rejecting invalid shapes', async () => {
+  let received: Request | undefined;
+  const live = server((request) => {
+    received = request;
+    return Response.json({ data: [{ embedding: [0.1, 0.2] }, { embedding: [0.3, 0.4] }] });
+  });
+  try {
+    const client = new OmniRouteClient({ endpoint: live.url });
+    const vectors = await client.embed(['alpha', 'beta']);
+    assert.deepEqual(vectors, [[0.1, 0.2], [0.3, 0.4]]);
+    const body = JSON.parse(await received!.text());
+    assert.equal(body.model, 'gemini-embedding-001');
+    assert.deepEqual(body.input, ['alpha', 'beta']);
+  } finally { live.close(); }
+  const bad = server(() => Response.json({ error: 'nope' }));
+  try { await assert.rejects(() => new OmniRouteClient({ endpoint: bad.url }).embed(['x']), (error: unknown) => error instanceof OmniRouteError && error.status === 200); }
+  finally { bad.close(); }
+});

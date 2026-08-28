@@ -66,7 +66,7 @@ test('run() sends tools, executes a tool call, threads the result back, and emit
     const first = live.calls[0];
     assert.equal(first.model, 'auto/best-coding');
     assert.deepEqual((first.tools as Array<{ function: { name: string } }>).map((entry) => entry.function.name),
-      ['read_file', 'write_file', 'run_command', 'index_workspace', 'git_diff', 'start_preview']);
+      ['read_file', 'write_file', 'run_command', 'index_workspace', 'git_diff', 'semantic_search', 'start_preview']);
 
     // Model's tool_calls message is fed back, then a tool result with the call id.
     const second = live.calls[1];
