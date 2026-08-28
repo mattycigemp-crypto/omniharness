@@ -3,12 +3,13 @@ import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import Spinner from 'ink-spinner';
 import type { MastraEngine, HarnessEvent, ApprovalAction } from '../agent/mastraEngine.js';
 import type { AgentMode } from '../types/index.js';
+import { renderMarkdown, type MarkdownSegment } from './markdown.js';
 
 interface Props { engine: MastraEngine }
 
 type LineRole = 'user' | 'assistant' | 'error' | 'thinking' | 'tool';
 interface Line { role: LineRole; text: string; model?: string; toolName?: string; url?: string }
-interface Row { role: LineRole; text: string; label: string; first: boolean }
+interface Row { role: LineRole; segments: readonly MarkdownSegment[]; label: string; first: boolean }
 interface LiveIndices { think: number | null; answer: number | null }
 
 const MODE_SEQ: AgentMode[] = ['plan', 'build', 'research'];
@@ -54,6 +55,13 @@ function colorFor(role: LineRole): string {
     case 'tool': return 'magenta';
     default: return 'green';
   }
+}
+
+function SegmentText({ segments, role }: { segments: readonly MarkdownSegment[]; role: LineRole }): React.ReactElement {
+  const base = role === 'thinking' ? 'yellow' : role === 'tool' ? 'magenta' : undefined;
+  return <Text color={base}>{segments.map((segment, index) => (
+    <Text key={index} bold={segment.bold} italic={segment.italic} strikethrough={segment.strikethrough} underline={segment.underline} dimColor={segment.dim} color={segment.color}>{segment.text}</Text>
+  ))}</Text>;
 }
 
 export function TerminalInterface({ engine }: Props): React.ReactElement {
@@ -183,11 +191,17 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     const out: Row[] = [];
     for (const line of lines) {
       const label = labelFor(line.role, line.model, line.toolName);
-      const wrapped = wrap(line.text, contentWidth);
-      wrapped.forEach((text, index) => out.push({ role: line.role, text, label, first: index === 0 }));
+      const markdown = line.role !== 'tool' && line.role !== 'error';
+      const wrapped: MarkdownSegment[][] = markdown
+        ? renderMarkdown(line.text, contentWidth)
+        : wrap(line.text, contentWidth).map((text) => [{ text }]);
+      wrapped.forEach((segments, index) => out.push({ role: line.role, segments, label, first: index === 0 }));
     }
     return out.slice(-messageHeight);
   }, [lines, contentWidth, messageHeight]);
+
+  const liveThinkLines = useMemo(() => renderMarkdown(liveThink, contentWidth), [liveThink, contentWidth]);
+  const liveAnswerLines = useMemo(() => renderMarkdown(liveAnswer, contentWidth), [liveAnswer, contentWidth]);
 
   return <Box flexDirection="column" width={width} height={stdout.rows ?? 24} paddingX={2}>
     <Box justifyContent="space-between" paddingY={1}>
@@ -199,10 +213,10 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       {rows.map((row, index) => row.first
         ? <Box key={index} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
             <Text color={colorFor(row.role)} bold>{row.label}</Text>
-            <Text color={row.role === 'thinking' ? 'yellow' : row.role === 'tool' ? 'magenta' : undefined}>{row.text}</Text>
-          </Box>          : <Text key={index} color={row.role === 'thinking' ? 'yellow' : row.role === 'tool' ? 'magenta' : undefined}>{row.text}</Text>)}
-      {liveThink !== '' && <Box flexDirection="column" marginTop={1}><Text color="yellow" bold>think</Text><Text color="yellow">{liveThink}</Text></Box>}
-      {liveAnswer !== '' && <Box flexDirection="column" marginTop={1}><Text color="green" bold>harness</Text><Text>{liveAnswer}</Text></Box>}
+            <SegmentText segments={row.segments} role={row.role} />
+          </Box>          : <SegmentText key={index} segments={row.segments} role={row.role} />)}
+      {liveThink !== '' && <Box flexDirection="column" marginTop={1}><Text color="yellow" bold>think</Text>{liveThinkLines.map((segments, index) => <SegmentText key={index} segments={segments} role="thinking" />)}</Box>}
+      {liveAnswer !== '' && <Box flexDirection="column" marginTop={1}><Text color="green" bold>harness</Text>{liveAnswerLines.map((segments, index) => <SegmentText key={index} segments={segments} role="assistant" />)}</Box>}
       {engine.state.preview && <Text color="green" dimColor>preview live · {engine.state.preview.url}</Text>}
       {busy && <Text color="cyan"><Spinner type="dots" /> working in {mode} mode on {engine.state.activeModel}</Text>}
     </Box>
