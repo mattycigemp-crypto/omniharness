@@ -12,6 +12,7 @@
 #
 #                   export OMNIROUTE_URL=http://127.0.0.1:20128
 #                   export OMNIROUTE_API_KEY=sk-…    # OmniRoute API key
+#                   export OMNIROUTE_MGMT_TOKEN=sk-… # management token (manage scope): enables MCP tool discovery
 #
 #   OmniHarness authenticates to OmniRoute with `Authorization: Bearer <key>`
 #   on every request (verified against the OmniRoute server source). The key

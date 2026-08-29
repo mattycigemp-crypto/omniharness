@@ -92,6 +92,51 @@ test('approval gate approves a risky write and the file is created', async () =>
   } finally { live.close(); await fs.rm(workspace, { recursive: true, force: true }); }
 });
 
+test('attachments ride the modality bridge as image parts and are listed', async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'oh-attach-'));
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  await fs.writeFile(path.join(workspace, 'pic.png'), png);
+  const live = chatServer(() => stop);
+  try {
+    const engine = await createMastraEngine({ workspaceRoot: workspace, endpoint: live.url });
+    const emitted: HarnessEvent[] = [];
+    engine.subscribe((event) => emitted.push(event));
+    const attached = await engine.attach(['pic.png']);
+    assert.deepEqual(attached, [{ name: 'pic.png', kind: 'image', size: png.length }]);
+    assert.ok(emitted.some((e) => e.type === 'attach' && e.name === 'pic.png' && e.kind === 'image'));
+    await engine.run('describe it');
+    const user = live.calls[0].messages[1] as { content: unknown };
+    assert.ok(Array.isArray(user.content));
+    const parts = user.content as Array<Record<string, unknown>>;
+    assert.ok(parts.some((p) => p.type === 'text' && String(p.text).includes('pic.png')));
+    const image = parts.find((p) => p.type === 'image_url') as { image_url?: { url: string } };
+    assert.ok(image?.image_url?.url.startsWith('data:image/png;base64,'));
+  } finally { live.close(); await fs.rm(workspace, { recursive: true, force: true }); }
+});
+
+test('non-image attachments are passed as a text note without data URLs', async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'oh-attach2-'));
+  await fs.writeFile(path.join(workspace, 'notes.txt'), 'hello');
+  const live = chatServer(() => stop);
+  try {
+    const engine = await createMastraEngine({ workspaceRoot: workspace, endpoint: live.url });
+    await engine.attach(['notes.txt']);
+    await engine.run('read it');
+    const user = live.calls[0].messages[1] as { content: unknown };
+    assert.equal(typeof user.content, 'string');
+    assert.match(String(user.content), /notes\.txt/);
+  } finally { live.close(); await fs.rm(workspace, { recursive: true, force: true }); }
+});
+
+test('attach fails loudly for missing files', async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'oh-attach3-'));
+  const live = chatServer(() => stop);
+  try {
+    const engine = await createMastraEngine({ workspaceRoot: workspace, endpoint: live.url });
+    await assert.rejects(engine.attach(['nope.txt']), /attach failed/);
+  } finally { live.close(); await fs.rm(workspace, { recursive: true, force: true }); }
+});
+
 test('skills from OMNIHARNESS.md are loaded, offered to the model, and executable', async () => {
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'oh-skill-'));
   await fs.writeFile(path.join(workspace, 'OMNIHARNESS.md'), [

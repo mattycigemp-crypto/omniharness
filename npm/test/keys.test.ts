@@ -45,6 +45,7 @@ test('kitty-protocol escape, tab and ctrl letters map correctly', () => {
   assert.deepEqual(parseRawKey('\x1b[99;5u'), { kind: 'ctrlC' });
   assert.deepEqual(parseRawKey('\x1b[109;5u'), { kind: 'ctrlM' });
   assert.deepEqual(parseRawKey('\x1b[111;5u'), { kind: 'ctrlO' });
+  assert.deepEqual(parseRawKey('\x1b[101;5u'), { kind: 'ctrlE' }); // kitty ctrl+e (mode cycle on legacy terminals)
 });
 
 test('plain text and keys handled by useInput return null', () => {

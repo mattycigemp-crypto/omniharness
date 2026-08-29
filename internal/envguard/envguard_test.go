@@ -8,6 +8,7 @@ import (
 
 func TestFilterStripsCredentialVars(t *testing.T) {
 	t.Setenv("OMNIROUTE_API_KEY", "sk-top-secret")
+	t.Setenv("OMNIROUTE_MGMT_TOKEN", "sk-mgmt-secret")
 	t.Setenv("OMNIHARNESS_API_KEY", "sk-legacy-secret")
 	t.Setenv("ROUTER_API_KEY", "sk-router-secret")
 	t.Setenv("PATH", "/usr/bin:/bin")
@@ -15,7 +16,7 @@ func TestFilterStripsCredentialVars(t *testing.T) {
 
 	env := Filter()
 	joined := strings.Join(env, "\n")
-	for _, secret := range []string{"sk-top-secret", "sk-legacy-secret", "sk-router-secret"} {
+	for _, secret := range []string{"sk-top-secret", "sk-mgmt-secret", "sk-legacy-secret", "sk-router-secret"} {
 		if strings.Contains(joined, secret) {
 			t.Fatalf("credential leaked into subprocess env: %s", secret)
 		}

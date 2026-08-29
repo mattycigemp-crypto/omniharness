@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
 import Spinner from 'ink-spinner';
 import type { MastraEngine, HarnessEvent, ApprovalAction } from '../agent/mastraEngine.js';
-import type { AgentMode } from '../types/index.js';
+import type { AgentMode, TodoItem } from '../types/index.js';
 import { deleteAt, deleteBefore, insertAt, layoutEditor, lineEndAt, lineStartAt, moveHorizontal, moveVerticalWrapped, normalizePaste } from './editor.js';
 import { renderMarkdown, type MarkdownSegment } from './markdown.js';
 import { KITTY_POP, KITTY_PUSH, KITTY_QUERY, isEncodedKey, isKittyQueryResponse, parseRawKey, type KeyAction } from './keys.js';
@@ -10,11 +10,12 @@ import { KITTY_POP, KITTY_PUSH, KITTY_QUERY, isEncodedKey, isKittyQueryResponse,
 interface Props { engine: MastraEngine }
 
 type LineRole = 'user' | 'assistant' | 'error' | 'thinking' | 'tool';
-interface Line { role: LineRole; text: string; model?: string; toolName?: string; url?: string }
-interface Row { role: LineRole; segments: readonly MarkdownSegment[]; label: string; first: boolean }
+interface Line { role: LineRole; text: string; model?: string; toolName?: string; url?: string; saved?: string }
+interface Row { role: LineRole; segments: readonly MarkdownSegment[]; label: string; first: boolean; saved?: string }
 interface LiveIndices { think: number | null; answer: number | null }
+interface PickerItem { id: string; group: 'combos' | 'auto'; strategy?: string }
 
-const MODE_SEQ: AgentMode[] = ['plan', 'build', 'research'];
+const MODE_SEQ: AgentMode[] = ['plan', 'build', 'research', 'crazy'];
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 const widthOf = (stdout: NodeJS.WriteStream): number => Math.max(48, stdout.columns ?? 80);
@@ -39,13 +40,13 @@ function wrap(text: string, width: number): string[] {
   return out.length > 0 ? out : [''];
 }
 
-function labelFor(role: LineRole, model?: string, toolName?: string): string {
+function labelFor(role: LineRole, model?: string, toolName?: string, fallback?: string): string {
   switch (role) {
     case 'user': return 'you';
     case 'error': return 'error';
     case 'thinking': return 'think';
     case 'tool': return toolName ? `tool · ${toolName}` : 'tool';
-    default: return model ?? 'harness';
+    default: return model ?? fallback ?? 'assistant';
   }
 }
 
@@ -77,9 +78,9 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [combos, setCombos] = useState<readonly string[]>([]);
-  const [comboIndex, setComboIndex] = useState(0);
-  const [comboError, setComboError] = useState<string>();
+  const [pickerItems, setPickerItems] = useState<readonly PickerItem[]>([]);
+  const [pickerIndex, setPickerIndex] = useState(0);
+  const [pickerError, setPickerError] = useState<string>();
   const [mode, setMode] = useState<AgentMode>(engine.state.mode);
   const liveRef = useRef<LiveIndices>({ think: null, answer: null });
   const [approval, setApproval] = useState<ApprovalAction | null>(null);
@@ -88,6 +89,8 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const [liveThink, setLiveThink] = useState('');
   const [liveAnswer, setLiveAnswer] = useState('');
   const [kitty, setKitty] = useState<boolean | null>(null);
+  const [taskQueue, setTaskQueue] = useState<readonly TodoItem[]>(engine.state.taskQueue);
+  const [currentTool, setCurrentTool] = useState<string>();
 
   useEffect(() => {
     const onResize = (): void => setWidth(widthOf(stdout));
@@ -117,17 +120,27 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
           setLiveThink('');
           break;
         case 'text':
-          setLines((current) => [...current, { role: 'assistant', text: event.content }]);
+          setLines((current) => [...current, {
+            role: 'assistant', text: event.content, model: event.model,
+            saved: event.compression ? `${Math.round((1 - event.compression.ratio) * 100)}% saved (${event.compression.strategy.toUpperCase()}) · ${event.compression.savedTokens.toLocaleString()} tokens` : undefined,
+          }]);
           setLiveAnswer('');
           break;
         case 'tool_start':
           setLines((current) => [...current, { role: 'tool', text: event.tool, toolName: `${event.tool} →` }]);
+          setCurrentTool(event.tool);
           break;
         case 'tool_result':
           setLines((current) => [...current, { role: 'tool', text: `  ${event.summary}`, toolName: 'result' }]);
           break;
+        case 'todos':
+          setTaskQueue(event.todos);
+          break;
         case 'preview':
           setLines((current) => [...current, { role: 'tool', text: `preview: ${event.url}`, toolName: 'preview', url: event.url }]);
+          break;
+        case 'attach':
+          setLines((current) => [...current, { role: 'tool', text: `attached: ${event.name} (${event.kind}, ${event.size} bytes)`, toolName: 'attach' }]);
           break;
       }
     });
@@ -147,16 +160,24 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     };
   }, [engine, stdout, stdin]);
 
-  const loadCombos = async (): Promise<void> => {
-    setComboError(undefined);
+  const loadPicker = async (): Promise<void> => {
+    setPickerError(undefined);
     try {
-      const accountCombos = await engine.client.listCombos();
-      const names = accountCombos.map((combo) => combo.name).filter((name) => name.trim() !== '');
-      setCombos(names);
-      setComboIndex(0);
+      const [accountCombos, modelIds] = await Promise.all([engine.client.listCombos(), engine.client.listModels()]);
+      const items: PickerItem[] = [];
+      for (const combo of accountCombos) {
+        if (combo.name.trim() !== '' && !items.some((item) => item.id === combo.name)) {
+          items.push({ id: combo.name, group: 'combos', strategy: combo.strategy });
+        }
+      }
+      for (const id of [...new Set(modelIds.filter((id) => id.startsWith('auto/')))].sort()) {
+        if (!items.some((item) => item.id === id)) items.push({ id, group: 'auto' });
+      }
+      setPickerItems(items);
+      setPickerIndex(Math.max(0, items.findIndex((item) => item.id === engine.state.activeModel)));
     } catch (reason: unknown) {
-      setCombos([]);
-      setComboError(reason instanceof Error ? reason.message : String(reason));
+      setPickerItems([]);
+      setPickerError(reason instanceof Error ? reason.message : String(reason));
     }
   };
 
@@ -181,25 +202,32 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       case 'submit':
         if (approval) { approve(true); return; }
         if (pickerOpen) {
-          const selected = combos[comboIndex];
+          const selected = pickerItems[pickerIndex];
           if (selected) {
-            engine.selectModel(selected);
+            void engine.selectModel(selected.id);
             setPickerOpen(false);
-            setLines((current) => [...current, { role: 'assistant', text: `combo selected: ${selected} (saved as default)` }]);
+            setLines((current) => [...current, { role: 'assistant', text: `model selected: ${selected.id} (saved as default)` }]);
           }
           return;
         }
         {
-          const prompt = edit.value.trim();
-          if (!prompt || busy) return;
+          const attachMatch = /^\/attach\s+(.+)$/.exec(edit.value.trim());
+          const prompt = attachMatch ? '' : edit.value.trim();
+          if (busy || (!prompt && !attachMatch)) return;
           setEdit({ value: '', cursor: 0 }); setBusy(true); setError(undefined);
-          setLines((current) => [...current, { role: 'user', text: prompt }]);
-          void engine.run(prompt).then(() => {
-            /* answer is streamed live via text_delta / text events */
-          }).catch((reason: unknown) => {
-            const message = reason instanceof Error ? reason.message : String(reason);
-            setError(message); setLines((current) => [...current, { role: 'error', text: message }]);
-          }).finally(() => setBusy(false));
+          if (!attachMatch) setLines((current) => [...current, { role: 'user', text: prompt }]);
+          void (async (): Promise<void> => {
+            try {
+              if (attachMatch) await engine.attach(attachMatch[1]!.split(/\s+/).filter(Boolean));
+              await engine.run(prompt);
+              /* answer is streamed live via text_delta / text events */
+            } catch (reason: unknown) {
+              const message = reason instanceof Error ? reason.message : String(reason);
+              setError(message); setLines((current) => [...current, { role: 'error', text: message }]);
+            } finally {
+              setBusy(false);
+            }
+          })();
         }
         return;
       case 'escape':
@@ -208,13 +236,14 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
         return;
       case 'ctrlC': exit(); return;
       case 'ctrlM': cycleMode(); return;
-      case 'ctrlO': setPickerOpen(true); void loadCombos(); return;
+      case 'ctrlO': setPickerOpen(true); void loadPicker(); return;
+      case 'ctrlE': cycleMode(); return;
       case 'up':
-        if (pickerOpen) { setComboIndex((current) => clamp(current - 1, 0, Math.max(0, combos.length - 1))); return; }
+        if (pickerOpen) { setPickerIndex((current) => clamp(current - 1, 0, Math.max(0, pickerItems.length - 1))); return; }
         setEdit((current) => ({ ...current, cursor: moveVerticalWrapped(current.value, current.cursor, -1, inputWidth) }));
         return;
       case 'down':
-        if (pickerOpen) { setComboIndex((current) => clamp(current + 1, 0, Math.max(0, combos.length - 1))); return; }
+        if (pickerOpen) { setPickerIndex((current) => clamp(current + 1, 0, Math.max(0, pickerItems.length - 1))); return; }
         setEdit((current) => ({ ...current, cursor: moveVerticalWrapped(current.value, current.cursor, +1, inputWidth) }));
         return;
       case 'left': setEdit((current) => ({ ...current, cursor: moveHorizontal(current.value, current.cursor, -1) })); return;
@@ -238,6 +267,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     if (key.ctrl && value === 'c') { applyAction({ kind: 'ctrlC' }); return; }
     if (key.ctrl && value.toLowerCase() === 'm') { applyAction({ kind: 'ctrlM' }); return; }
     if (key.ctrl && value.toLowerCase() === 'o') { applyAction({ kind: 'ctrlO' }); return; }
+    if (key.ctrl && value.toLowerCase() === 'e') { applyAction({ kind: 'ctrlE' }); return; }
     if (pickerOpen) {
       if (key.escape) { applyAction({ kind: 'escape' }); return; }
       if (key.upArrow || value === 'k') { applyAction({ kind: 'up' }); return; }
@@ -270,20 +300,31 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     return () => { stdin.off('data', onData); };
   }, [stdin, applyAction]);
 
+  // Legacy Ctrl+M is the CR byte — identical to Enter — so mode cycling needs a
+  // distinguishable key (Ctrl+E works everywhere); kitty terminals also keep Ctrl+M.
+  const modeKey = kitty === true ? 'M' : 'E';
+
   const metrics = engine.client.snapshotMetrics();
   const compression = metrics.compression.inputTokens > 0 ? `${Math.round((1 - metrics.compression.ratio) * 100)}% ${metrics.compression.strategy.toUpperCase()}` : '—';
+  const hud = [mode, engine.state.activeModel];
+  if (metrics.fallback.activeProvider) hud.push(metrics.fallback.activeProvider);
+  if (metrics.remainingQuota !== undefined) hud.push(`quota ${metrics.remainingQuota}`);
+  if (metrics.fallback.attempts > 0) hud.push(`fb ${metrics.fallback.attempts}`);
+  hud.push(`saved ${compression}`);
   const contentWidth = Math.max(20, width - 8);
   const messageHeight = Math.max(4, (stdout.rows ?? 24) - 9);
 
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = [];
     for (const line of lines) {
-      const label = labelFor(line.role, line.model, line.toolName);
+      const label = labelFor(line.role, line.model, line.toolName, engine.state.activeModel);
       const markdown = line.role !== 'tool' && line.role !== 'error';
       const wrapped: MarkdownSegment[][] = markdown
         ? renderMarkdown(line.text, contentWidth)
         : wrap(line.text, contentWidth).map((text) => [{ text }]);
       wrapped.forEach((segments, index) => out.push({ role: line.role, segments, label, first: index === 0 }));
+      // A dim one-line savings note right under the assistant's answer.
+      if (line.saved) out.push({ role: 'assistant', segments: [{ text: line.saved }], label: '', first: false, saved: line.saved });
     }
     return out.slice(-messageHeight);
   }, [lines, contentWidth, messageHeight]);
@@ -297,23 +338,41 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       <Text dimColor>OMNIROUTE :20128</Text>
     </Box>
     <Box flexDirection="column" flexGrow={1}>
-      {lines.length === 0 && <Box flexDirection="column" marginTop={2}><Text color="cyan" bold>Ready when you are.</Text><Text dimColor>Describe the work. OmniHarness routes it through your OmniRoute account. Ctrl+M cycles plan · build · research.</Text></Box>}
-      {rows.map((row, index) => row.first
-        ? <Box key={index} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
-            <Text color={colorFor(row.role)} bold>{row.label}</Text>
-            <SegmentText segments={row.segments} role={row.role} />
-          </Box>          : <SegmentText key={index} segments={row.segments} role={row.role} />)}
+      {lines.length === 0 && <Box flexDirection="column" marginTop={2}><Text color="cyan" bold>Ready when you are.</Text><Text dimColor>Describe the work. OmniHarness routes it through your OmniRoute account. Ctrl+{modeKey} cycles plan · build · research · crazy.</Text></Box>}
+      {rows.map((row, index) => row.saved
+        ? row.saved !== '' ? <Text key={index} dimColor>{row.saved}</Text> : null
+        : row.first
+          ? <Box key={index} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
+              <Text color={colorFor(row.role)} bold>{row.label}</Text>
+              <SegmentText segments={row.segments} role={row.role} />
+            </Box>
+          : <SegmentText key={index} segments={row.segments} role={row.role} />)}
       {liveThink !== '' && <Box flexDirection="column" marginTop={1}><Text color="yellow" bold>think</Text>{liveThinkLines.map((segments, index) => <SegmentText key={index} segments={segments} role="thinking" />)}</Box>}
-      {liveAnswer !== '' && <Box flexDirection="column" marginTop={1}><Text color="green" bold>harness</Text>{liveAnswerLines.map((segments, index) => <SegmentText key={index} segments={segments} role="assistant" />)}</Box>}
+      {liveAnswer !== '' && <Box flexDirection="column" marginTop={1}><Text color="green" bold>{engine.state.activeModel}</Text>{liveAnswerLines.map((segments, index) => <SegmentText key={index} segments={segments} role="assistant" />)}</Box>}
       {engine.state.preview && <Text color="green" dimColor>preview live · {engine.state.preview.url}</Text>}
-      {busy && <Text color="cyan"><Spinner type="dots" /> working in {mode} mode on {engine.state.activeModel}</Text>}
+      {busy && <Text color="cyan"><Spinner type="dots" /> working in {mode} mode on {engine.state.activeModel}{currentTool ? ` · now ${currentTool}` : ''}</Text>}
     </Box>
+    {taskQueue.length > 0 && <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={2} paddingY={1} marginTop={1}>
+      <Box justifyContent="space-between"><Text bold color="cyan">plan</Text><Text dimColor>{taskQueue.filter((item) => item.status === 'done').length}/{taskQueue.length} done</Text></Box>
+      {taskQueue.slice(-6).map((item) => {
+        const marker = item.status === 'done' ? '✓' : item.status === 'active' ? '▸' : '○';
+        const color = item.status === 'done' ? 'green' : item.status === 'active' ? 'cyan' : undefined;
+        return <Text key={item.id} color={color} dimColor={item.status === 'done'}>{marker} {clip(item.title, contentWidth - 4)}</Text>;
+      })}
+    </Box>}
     {pickerOpen && <Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={2} paddingY={1}>
-      <Text bold color="magenta">Choose an OmniRoute combo</Text>
+      <Text bold color="magenta">Choose an OmniRoute model</Text>
       <Text dimColor>↑↓ / j k navigate · enter select · esc close</Text>
-      {comboError && <Text color="red">{clip(comboError, contentWidth)}</Text>}
-      {combos.length === 0 && !comboError && <Text dimColor>No account combos returned by OmniRoute.</Text>}
-      {combos.map((combo, index) => <Text key={combo} color={index === comboIndex ? 'cyan' : undefined}>{index === comboIndex ? '› ' : '  '}{combo}{combo === engine.state.activeModel ? '  ✓' : ''}</Text>)}
+      {pickerError && <Text color="red">{clip(pickerError, contentWidth)}</Text>}
+      {pickerItems.length === 0 && !pickerError && <Text dimColor>No models returned by OmniRoute.</Text>}
+      {pickerItems.map((item, index) => {
+        const header = index === 0 || pickerItems[index - 1]!.group !== item.group
+          ? <Text key={`h-${item.group}`} dimColor bold>{item.group === 'combos' ? 'your combos' : 'auto engine'}</Text>
+          : null;
+        return <Box key={item.id} flexDirection="column">{header}
+          <Text color={index === pickerIndex ? 'cyan' : undefined}>{index === pickerIndex ? '› ' : '  '}{item.id}{item.strategy ? <Text dimColor>  · {item.strategy}</Text> : null}{item.id === engine.state.activeModel ? '  ✓' : ''}</Text>
+        </Box>;
+      })}
     </Box>}
     {approval && <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={2} paddingY={1} marginTop={1}>
       <Text bold color="yellow">Approve {approval.tool}?</Text>
@@ -326,6 +385,6 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
         : layoutEditor(edit.value, edit.cursor, inputWidth).lines.map((text, index) => <Text key={index} color="cyan">{index === 0 ? '› ' : '  '}{text}</Text>)}
     </Box>
     {kitty !== null && <Text dimColor>{kitty ? 'kitty protocol active — Shift+Enter makes a new line' : 'this terminal can\'t distinguish Shift+Enter from Enter — use Ctrl+J for a new line'}</Text>}
-    <Box justifyContent="space-between"><Text dimColor>Enter send · Shift+Enter / Ctrl+J new line · ←→↑↓ move · Ctrl+O combos · Ctrl+M mode · Ctrl+C quit</Text><Text dimColor>{mode} · {engine.state.activeModel} · compression {compression}</Text></Box>
+    <Box justifyContent="space-between"><Text dimColor>Enter send · Shift+Enter / Ctrl+J new line · ←→↑↓ move · Ctrl+O models · Ctrl+{modeKey} mode · Ctrl+C quit</Text><Text dimColor>{hud.join(' · ')}</Text></Box>
   </Box>;
 }

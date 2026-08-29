@@ -92,43 +92,6 @@ export function isPaste(value: string): boolean {
   return value.length > 1 || value.includes('\n');
 }
 
-export interface SlashCommand {
-  command: string;
-  arg: string;
-}
-
-/** Distinguish a leading slash command (e.g. `/attach file.txt`) from plain text. */
-export function parseSlashCommand(text: string): SlashCommand | null {
-  const trimmed = text.trim();
-  const match = /^\/([a-z][a-z0-9_-]*)(?:\s+(.*))?$/i.exec(trimmed);
-  if (!match) return null;
-  return { command: match[1]!.toLowerCase(), arg: (match[2] ?? '').trim() };
-}
-
-export type AttachKind = 'file' | 'image' | 'video';
-
-export interface AttachmentInput {
-  name: string;
-  size: number;
-  kind: AttachKind;
-}
-
-const IMAGE_EXT = /^\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
-const VIDEO_EXT = /^\.(mp4|webm|mov|mkv|avi)$/i;
-
-export function kindFromName(name: string): AttachKind {
-  if (IMAGE_EXT.test(name)) return 'image';
-  if (VIDEO_EXT.test(name)) return 'video';
-  return 'file';
-}
-
-/** Format the attachments block prepended to a prompt so the agent knows what was attached. */
-export function attachmentBlock(attachments: readonly AttachmentInput[]): string {
-  if (attachments.length === 0) return '';
-  const rows = attachments.map((a) => `- ${a.name} (${a.kind}, ${a.size} bytes)`).join('\n');
-  return `The user attached these files to this request:\n${rows}\nYou may read_file them from the workspace or user path as needed.\n---\n`;
-}
-
 export interface EditorLayout {
   lines: readonly string[];
   cursorLine: number;
