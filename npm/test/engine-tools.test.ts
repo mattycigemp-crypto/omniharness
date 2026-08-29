@@ -66,7 +66,7 @@ test('run() sends tools, executes a tool call, threads the result back, and emit
     const first = live.calls[0];
     assert.equal(first.model, 'auto/best-coding');
     assert.deepEqual((first.tools as Array<{ function: { name: string } }>).map((entry) => entry.function.name),
-      ['read_file', 'write_file', 'run_command', 'index_workspace', 'git_diff', 'semantic_search', 'start_preview']);
+      ['read_file', 'write_file', 'run_command', 'index_workspace', 'git_diff', 'semantic_search', 'update_todo', 'write_memory', 'start_preview']);
 
     // Model's tool_calls message is fed back, then a tool result with the call id.
     const second = live.calls[1];
@@ -117,5 +117,74 @@ test('tool loop is capped to avoid runaway turns', async () => {
     const engine = await createMastraEngine({ workspaceRoot: os.tmpdir(), endpoint: live.url });
     const result = await engine.run('loop forever');
     assert.match(result.content, /too many tool turns/);
+  } finally { live.close(); }
+});
+
+test('a management token exposes OmniRoute MCP tools to the agent', async () => {
+  // One server serving both the chat endpoint and the MCP stream surface.
+  const chatResponses: ResponseEnvelope[] = [
+    { choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: '', tool_calls: [{ id: 'call_mcp', type: 'function', function: { name: 'omniroute_check_quota', arguments: '{}' } }] } }] },
+    { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'quota checked' } }] },
+  ];
+  let mcpAuth: string | undefined;
+  const mcpArgs: unknown[] = [];
+  const instance = http.createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const rawBody = chunks.length ? Buffer.concat(chunks) : undefined;
+    if (req.url?.startsWith('/api/mcp/stream')) {
+      mcpAuth = req.headers.authorization;
+      const raw = rawBody ? JSON.parse(rawBody.toString()) as { method?: string } : {};
+      let body: Response;
+      if (raw.method === 'initialize') {
+        body = Response.json({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-03-26', capabilities: {}, serverInfo: { name: 'omniroute', version: '3.8.50' } } });
+        body.headers.set('mcp-session-id', 'sess-1');
+      } else if (raw.method === 'notifications/initialized') {
+        body = new Response(null, { status: 202 });
+      } else if (raw.method === 'tools/list') {
+        body = Response.json({ jsonrpc: '2.0', id: 2, result: { tools: [{ name: 'omniroute_check_quota', description: 'Quota used/total', inputSchema: { type: 'object', properties: {} } }] } });
+      } else {
+        mcpArgs.push((raw as { params?: unknown }).params);
+        body = Response.json({ jsonrpc: '2.0', id: 2, result: { content: [{ type: 'text', text: 'quota ok' }] } });
+      }
+      res.writeHead(body.status, Object.fromEntries(body.headers));
+      res.end(await body.text());
+      return;
+    }
+    const body = JSON.parse(rawBody!.toString()) as { model: string; messages: unknown[]; tools: unknown };
+    toolLists.push(body.tools as Array<{ function: { name: string } }>);
+    const payload = chatResponses.shift() ?? { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'done' } }] };
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(toSSE(payload));
+  });
+  const toolLists: Array<Array<{ function: { name: string } }>> = [];
+  instance.listen(0);
+  const address = instance.address();
+  if (!address || typeof address === 'string') throw new Error('server did not bind');
+  const url = `http://localhost:${address.port}`;
+  const close = () => instance.close();
+
+  try {
+    const engine = await createMastraEngine({ workspaceRoot: os.tmpdir(), endpoint: url, mgmtToken: 'sk-mgmt' });
+    assert.equal(engine.mcpTools.length, 1);
+    assert.equal(engine.mcpTools[0]?.name, 'omniroute_check_quota');
+    const result = await engine.run('check quota');
+    assert.equal(result.content, 'quota checked');
+    assert.equal(mcpAuth, 'Bearer sk-mgmt');
+    assert.equal(mcpArgs.length, 1); // the agent's tool call reached tools/call
+    // The MCP tool is advertised to the model.
+    const names = toolLists.flat().map((entry) => entry.function.name);
+    assert.ok(names.includes('omniroute_check_quota'));
+  } finally { close(); }
+});
+
+test('without a management token no MCP tools are exposed', async () => {
+  const live = chatServer(() => ({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }] }));
+  try {
+    const engine = await createMastraEngine({ workspaceRoot: os.tmpdir(), endpoint: live.url });
+    assert.deepEqual(engine.mcpTools, []);
+    await engine.run('hi');
+    const names = (live.calls[0].tools as Array<{ function: { name: string } }>).map((entry) => entry.function.name);
+    assert.ok(!names.includes('omniroute_check_quota'));
   } finally { live.close(); }
 });

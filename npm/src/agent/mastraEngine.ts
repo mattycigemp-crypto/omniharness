@@ -1,14 +1,15 @@
 import { exec, spawn, type ChildProcess } from 'node:child_process';
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { appendFile, mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import type { LanguageModelV1 } from '@ai-sdk/provider';
 import { attachmentBlock, kindFromName, type AttachmentInput } from '../attachments.js';
-import { OmniRouteClient, type ChatTool } from '../config/omniRoute.js';
+import { OmniRouteClient, type ChatTool, type CompressionInfo, type McpToolDescriptor } from '../config/omniRoute.js';
 import { saveActiveCombo } from '../config/settings.js';
-import type { AgentMode, ChatContentPart, ChatWireMessage, HarnessMessage, HarnessState, PreviewServer, ToolCallRequest, ToolCallResult } from '../types/index.js';
+import type { AgentMode, ChatContentPart, ChatWireMessage, HarnessMessage, HarnessState, PreviewServer, TodoAction, TodoItem, TodoSnapshot, ToolCallRequest, ToolCallResult } from '../types/index.js';
 import { createSystemTools, type SystemTools } from '../tools/systemTools.js';
 import { loadSkills, renderSkillCommand, skillSchema, type Skill } from '../skills.js';
 import { chunkText, cosineSimilarity, type IndexedChunk } from '../search.js';
+import { loadSemanticIndex, saveSemanticIndex, type SemanticCacheEntry } from '../semanticStore.js';
 
 export interface MastraEngineConfig {
   workspaceRoot: string;
@@ -16,6 +17,8 @@ export interface MastraEngineConfig {
   mode?: AgentMode;
   endpoint?: string;
   apiKey?: string;
+  /** OmniRoute management token: when set, OmniRoute MCP tools are discovered and exposed to the agent. */
+  mgmtToken?: string;
   shellAllowed?: boolean;
 }
 
@@ -26,9 +29,10 @@ export type HarnessEvent =
   | { type: 'tool_start'; tool: string; input: unknown }
   | { type: 'tool_result'; tool: string; summary: string }
   | { type: 'approval_requested'; tool: string; input: Record<string, unknown> }
-  | { type: 'text'; content: string }
+  | { type: 'text'; content: string; model?: string; compression?: CompressionInfo }
   | { type: 'preview'; url: string }
-  | { type: 'attach'; name: string; kind: AttachmentInput['kind']; size: number };
+  | { type: 'attach'; name: string; kind: AttachmentInput['kind']; size: number }
+  | { type: 'todos'; todos: readonly TodoItem[] };
 
 export interface ApprovalAction {
   tool: string;
@@ -40,6 +44,7 @@ export interface MastraEngine {
   readonly tools: SystemTools;
   readonly state: HarnessState;
   readonly skills: readonly Skill[];
+  readonly mcpTools: readonly McpToolDescriptor[];
   subscribe(listener: (event: HarnessEvent) => void): () => void;
   selectModel(model: string): Promise<void>;
   attach(paths: readonly string[]): Promise<readonly AttachmentInput[]>;
@@ -73,21 +78,25 @@ const MODE_PROMPT: Record<AgentMode, string> = {
   plan: 'You are in PLAN mode: investigate the workspace, name risks and steps, and produce a concrete plan. Do not edit files or run commands. Use read_file, index_workspace, and git_diff.',
   build: 'You are in BUILD mode: implement the request with minimal, correct changes. The full work discipline below is MANDATORY.',
   research: 'You are in RESEARCH mode: investigate and answer with evidence from the workspace. Use read_file, index_workspace, and git_diff. Do not modify files or run commands.',
+  crazy: 'You are in CRAZY MODE: a fully autonomous agent (OpenClaw/Hermes style) that works continuously without asking for permission — every tool call is auto-approved. Decide your own next steps, keep the visible task queue current with update_todo, persist important facts with write_memory, and keep working until the task is genuinely complete. Verify your own work and iterate.',
 };
 
-const SYSTEM_FRAME = (endpoint: string, root: string, mode: AgentMode, skillNames: readonly string[]): string =>
+const MEMORY_FILE = 'memory.md';
+
+const SYSTEM_FRAME = (endpoint: string, root: string, mode: AgentMode, skillNames: readonly string[], memory: string): string =>
   'You are OmniHarness, an autonomous developer agent running inside the user\'s terminal (OmniHarness CLI, powered by the OmniRoute gateway at '
   + `${endpoint}). Workspace: ${root}. Act carefully and concretely; use the provided tools rather than guessing at file contents. `
   + MODE_PROMPT[mode]
   + (mode === 'build' ? VERIFY_RULES : '')
+  + (mode === 'crazy' && memory !== '' ? `\n\nPERSISTENT MEMORY (from previous sessions):\n${memory}` : '')
   + (skillNames.length > 0 ? `\nCustom skills available: ${skillNames.map((name) => `\`${name}\``).join(', ')}.` : '');
 
-const MAX_TURNS = 24;
+const MAX_TURNS: Record<AgentMode, number> = { plan: 12, build: 24, research: 12, crazy: 120 };
 const MAX_OUTPUT = 32_000;
 const RISKY_TOOLS = new Set(['write_file', 'run_command', 'start_preview']);
 
 export async function createMastraEngine(config: MastraEngineConfig): Promise<MastraEngine> {
-  const client = new OmniRouteClient({ endpoint: config.endpoint, apiKey: config.apiKey });
+  const client = new OmniRouteClient({ endpoint: config.endpoint, apiKey: config.apiKey, mgmtToken: config.mgmtToken });
   const tools = createSystemTools(config.workspaceRoot, config.shellAllowed ?? false);
   const activeModel = config.model ?? 'auto/best-coding';
   const listeners = new Set<(event: HarnessEvent) => void>();
@@ -95,12 +104,68 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
   let previewChild: ChildProcess | null = null;
   let approvalHandler: ((action: ApprovalAction) => Promise<boolean>) | null = null;
   let pendingAttachments: readonly (AttachmentInput & { dataUrl?: string })[] = [];
-  const semanticCache = new Map<string, { mtimeMs: number; chunks: IndexedChunk[] }>();
+  const semanticCache = await loadSemanticIndex(config.workspaceRoot);
 
   const state: HarnessState = {
     taskStatus: 'idle', prompt: '', mode: config.mode ?? 'build', activeModel,
     workspace: { root: config.workspaceRoot, indexedAt: null, files: [], contextLocked: false },
-    metrics: client.snapshotMetrics(), messages: [], preview: null,
+    metrics: client.snapshotMetrics(), messages: [], preview: null, taskQueue: [],
+  };
+
+  const memoryPath = join(state.workspace.root, '.omniharness', MEMORY_FILE);
+
+  let memory = '';
+  try { memory = (await readFile(memoryPath, 'utf8')).trim(); } catch { /* no memory yet */ }
+
+  const emitTodos = (): void => {
+    const snapshot: TodoSnapshot = { todos: [...state.taskQueue], updatedAt: new Date().toISOString() };
+    state.lastTodoUpdate = snapshot;
+    emit({ type: 'todos', todos: snapshot.todos });
+  };
+
+  const applyTodo = (action: TodoAction): string => {
+    const queue = [...state.taskQueue];
+    switch (action.action) {
+      case 'add': {
+        const id = `t${Date.now().toString(36)}${queue.length.toString(36)}`;
+        queue.push({ id, title: action.title, status: 'pending' });
+        state.taskQueue = queue;
+        emitTodos();
+        return `todo added: ${action.title}`;
+      }
+      case 'update': {
+        const item = queue.find((entry) => entry.id === action.id);
+        if (!item) return `error: no todo with id ${action.id}`;
+        item.title = action.title ?? item.title;
+        state.taskQueue = queue;
+        emitTodos();
+        return `todo updated: ${item.title}`;
+      }
+      case 'start': {
+        const target = (action.id ? queue.find((entry) => entry.id === action.id) : undefined) ?? queue.find((entry) => entry.status === 'pending');
+        if (!target) return 'error: no pending todo to start';
+        for (const entry of queue) entry.status = entry.id === target.id ? 'active' : entry.status === 'active' ? 'pending' : entry.status;
+        state.taskQueue = queue;
+        emitTodos();
+        return `started: ${target.title}`;
+      }
+      case 'complete': {
+        const target = (action.id ? queue.find((entry) => entry.id === action.id) : undefined) ?? queue.find((entry) => entry.status !== 'done');
+        if (!target) return 'error: no todo to complete';
+        target.status = 'done';
+        state.taskQueue = queue;
+        emitTodos();
+        return `completed: ${target.title}`;
+      }
+      case 'remove': {
+        const before = queue.length;
+        state.taskQueue = queue.filter((entry) => entry.id !== action.id);
+        if (state.taskQueue.length === before) return `error: no todo with id ${action.id}`;
+        emitTodos();
+        return `todo removed`;
+      }
+      default: return 'error: unknown todo action';
+    }
   };
 
   const emit = (event: HarnessEvent): void => { for (const listener of listeners) listener(event); };
@@ -144,6 +209,7 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
         if (input.refresh === true) semanticCache.clear();
         const limit = typeof input.limit === 'number' && input.limit > 0 ? Math.min(input.limit, 10) : 5;
         const chunks = await indexWorkspaceSemantics(client, semanticCache, state.workspace.root);
+        void saveSemanticIndex(state.workspace.root, semanticCache).catch(() => { /* persistence best-effort */ });
         if (chunks.length === 0) return 'no indexable text files in the workspace';
         const [queryVector] = await client.embed([query], undefined, signal);
         const ranked = chunks
@@ -151,6 +217,21 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
           .sort((a, b) => b.score - a.score)
           .slice(0, limit);
         return ranked.map(({ chunk, score }) => `${chunk.path} (${score.toFixed(3)})\n  ${chunk.text.slice(0, 200)}`).join('\n');
+      },
+    },
+    update_todo: {
+      name: 'update_todo', description: 'Maintain the visible task queue the user watches: add a step, start it, complete it, or remove it. Keep steps small and current as you work.', highRisk: false, parameters: { type: 'object', properties: { action: { type: 'string', enum: ['add', 'update', 'start', 'complete', 'remove'] }, title: { type: 'string' }, id: { type: 'string' } }, required: ['action'] },
+      execute: async (input) => applyTodo(input as TodoAction),
+    },
+    write_memory: {
+      name: 'write_memory', description: 'Persist a fact to long-term memory so future sessions remember it. Use for decisions, learned constraints, and project state worth keeping.', highRisk: false, parameters: { type: 'object', properties: { fact: { type: 'string' } }, required: ['fact'] },
+      execute: async (input) => {
+        const fact = String(input.fact ?? '').trim();
+        if (fact === '') return 'error: fact is required';
+        await mkdir(join(state.workspace.root, '.omniharness'), { recursive: true });
+        await appendFile(memoryPath, `- ${new Date().toISOString()}: ${fact}\n`, 'utf8');
+        memory = `${memory}${memory === '' ? '' : '\n'}- ${fact}`;
+        return 'memory saved';
       },
     },
     start_preview: {
@@ -201,6 +282,26 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
     };
   }
 
+  // When an OmniRoute management token is configured, discover the gateway's MCP
+  // tools and expose them to the agent. Best-effort: a discovery failure (gateway
+  // down, disabled MCP transport, wrong scopes) simply leaves the built-in tools.
+  let mcpTools: readonly McpToolDescriptor[] = [];
+  if (client.hasMcpToken) {
+    try {
+      mcpTools = await client.listMcpTools();
+      for (const descriptor of mcpTools) {
+        if (systemTools[descriptor.name]) continue; // never shadow a built-in tool
+        systemTools[descriptor.name] = {
+          name: descriptor.name, description: descriptor.description ?? '', highRisk: false,
+          parameters: descriptor.inputSchema ?? { type: 'object', properties: {} },
+          execute: (input, signal) => client.callMcpTool(descriptor.name, input, signal),
+        };
+      }
+    } catch {
+      mcpTools = [];
+    }
+  }
+
   const toolSchemas: ChatTool[] = Object.values(systemTools).map((entry) => ({
     type: 'function', function: { name: entry.name, description: entry.description, parameters: entry.parameters },
   }));
@@ -217,7 +318,7 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
     let parsed: Record<string, unknown> = {};
     try { parsed = call.function.arguments ? JSON.parse(call.function.arguments) as Record<string, unknown> : {}; }
     catch { parsed = {}; }
-    if (approvalHandler && registered.highRisk) {
+    if (state.mode !== 'crazy' && approvalHandler && registered.highRisk) {
       emit({ type: 'approval_requested', tool: call.function.name, input: parsed });
       const approved = await approvalHandler({ tool: call.function.name, input: parsed });
       if (!approved) return 'user denied this tool call';
@@ -227,7 +328,7 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
   }
 
   return {
-    client, tools, state, skills,
+    client, tools, state, skills, mcpTools,
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     setApprovalHandler(handler) { approvalHandler = handler; },
     async selectModel(model) {
@@ -267,7 +368,7 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
       state.messages = [...state.messages, userMessage];
 
       const wire: ChatWireMessage[] = [
-        { role: 'system', content: SYSTEM_FRAME(client.endpoint, state.workspace.root, state.mode, skills.map((skill) => skill.name)) },
+        { role: 'system', content: SYSTEM_FRAME(client.endpoint, state.workspace.root, state.mode, skills.map((skill) => skill.name), memory) },
         ...state.messages.map(asWireMessage),
       ];
       if (pendingAttachments.length > 0) {
@@ -287,6 +388,7 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
       let content = '';
       let reasoning = '';
       let toolCalls: ToolCallRequest[] = [];
+      let compression: CompressionInfo | undefined;
 
       const finishRound = async (): Promise<void> => {
         content = ''; reasoning = ''; toolCalls = [];
@@ -302,6 +404,7 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
           },
         });
         if (result.model) model = result.model;
+        if (result.compression) compression = result.compression;
       };
 
       await finishRound();
@@ -315,8 +418,8 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
         for (const call of toolCalls) {
           if (signal?.aborted) break;
           turn += 1;
-          if (turn > MAX_TURNS) {
-            const error = `too many tool turns (limit ${MAX_TURNS})`;
+          if (turn > MAX_TURNS[state.mode]) {
+            const error = `too many tool turns (limit ${MAX_TURNS[state.mode]})`;
             state.messages = [...state.messages, { role: 'error', content: error, createdAt: new Date().toISOString() }];
             state.taskStatus = 'failed';
             return { content: error + '; latest text: ' + content, model: activeModel };
@@ -343,10 +446,18 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
           },
         });
         if (next.model) model = next.model;
+        if (next.compression) compression = next.compression;
       }
 
       state.taskStatus = 'completed';
       state.metrics = client.snapshotMetrics();
+      if (state.mode === 'crazy') {
+        const summary = content.split('\n')[0]?.slice(0, 160) ?? '';
+        try {
+          await mkdir(join(state.workspace.root, '.omniharness'), { recursive: true });
+          await appendFile(memoryPath, `- ${new Date().toISOString()}: ran "${prompt.slice(0, 80)}" → ${summary}\n`, 'utf8');
+        } catch { /* memory persistence is best-effort */ }
+      }
       const answer = content;
       if (reasoning) {
         emit({ type: 'thinking', text: reasoning });
@@ -356,7 +467,7 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
         const tool = result.call.function.name;
         state.messages = [...state.messages, { role: 'tool', content: result.output.slice(0, 500), toolName: tool, createdAt: new Date().toISOString() }];
       }
-      emit({ type: 'text', content: answer });
+      emit({ type: 'text', content: answer, model, compression });
       state.messages = [...state.messages, { role: 'assistant', content: answer, model, createdAt: new Date().toISOString() }];
       return { content: answer, model };
     },
@@ -381,7 +492,7 @@ const MAX_INDEX_FILES = 200;
 const MAX_INDEX_BYTES = 256 * 1024;
 
 /** Reuse cached embeddings for unchanged files; embed new/changed ones, batched. */
-async function indexWorkspaceSemantics(client: OmniRouteClient, cache: Map<string, { mtimeMs: number; chunks: IndexedChunk[] }>, root: string): Promise<IndexedChunk[]> {
+async function indexWorkspaceSemantics(client: OmniRouteClient, cache: Map<string, SemanticCacheEntry>, root: string): Promise<IndexedChunk[]> {
   const files: { path: string; mtimeMs: number }[] = [];
   async function walk(directory: string): Promise<void> {
     if (files.length >= MAX_INDEX_FILES) return;
@@ -426,6 +537,11 @@ async function indexWorkspaceSemantics(client: OmniRouteClient, cache: Map<strin
       cache.set(file.path, entry);
       results.push(...entry.chunks);
     }
+  }
+  // Drop cached entries for files no longer present so the persisted index stays clean.
+  const present = new Set(files.map((file) => file.path));
+  for (const path of [...cache.keys()]) {
+    if (!present.has(path)) cache.delete(path);
   }
   return results;
 }

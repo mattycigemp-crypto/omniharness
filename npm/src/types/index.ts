@@ -2,7 +2,26 @@ export type TaskStatus = 'idle' | 'planning' | 'running' | 'waiting' | 'complete
 export type ToolRisk = 'low' | 'medium' | 'high' | 'critical';
 
 /** High-level working modes that shape the system prompt and allowed skills. */
-export type AgentMode = 'plan' | 'build' | 'research';
+export type AgentMode = 'plan' | 'build' | 'research' | 'crazy';
+
+/** A step in the agent's visible task queue. */
+export interface TodoItem {
+  id: string;
+  title: string;
+  status: 'pending' | 'active' | 'done';
+}
+
+export type TodoAction =
+  | { action: 'add'; title: string }
+  | { action: 'update'; id: string; title?: string }
+  | { action: 'start'; id?: string }
+  | { action: 'complete'; id?: string }
+  | { action: 'remove'; id: string };
+
+export interface TodoSnapshot {
+  todos: readonly TodoItem[];
+  updatedAt: string;
+}
 
 export interface WorkspaceFile {
   path: string;
@@ -92,6 +111,8 @@ export interface HarnessState {
   activeModel: string;
   messages: readonly HarnessMessage[];
   preview: PreviewServer | null;
+  taskQueue: readonly TodoItem[];
+  lastTodoUpdate?: TodoSnapshot;
 }
 
 export interface HarnessMessage {

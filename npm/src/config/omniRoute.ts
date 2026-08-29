@@ -15,7 +15,15 @@ export interface ChatStreamOptions {
 export interface OmniRouteConfig {
   endpoint?: string;
   apiKey?: string;
+  /** OmniRoute management token (manage scope) used to reach the MCP surface. */
+  mgmtToken?: string;
   timeoutMs?: number;
+}
+
+export interface McpToolDescriptor {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
 }
 
 export interface OmniRouteCombo {
@@ -32,6 +40,19 @@ export interface ChatTool {
   function: { name: string; description?: string; parameters: unknown };
 }
 
+export interface McpToolCallResult {
+  content: { type?: string; text?: string }[];
+  isError?: boolean;
+}
+
+export interface CompressionInfo {
+  ratio: number;
+  strategy: string;
+  inputTokens: number;
+  compressedTokens: number;
+  savedTokens: number;
+}
+
 export interface ChatResult {
   content: string;
   model: string;
@@ -40,6 +61,7 @@ export interface ChatResult {
   toolCalls?: readonly ToolCallRequest[];
   usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
   headers: Headers;
+  compression?: CompressionInfo;
 }
 
 export class OmniRouteError extends Error {
@@ -54,6 +76,8 @@ const DEFAULT_ENDPOINT = 'http://localhost:20128';
 export class OmniRouteClient {
   public readonly endpoint: string;
   private readonly timeoutMs: number;
+  private mcpSession: string | null = null;
+  private readonly mgmtToken: string;
   private apiKey: string;
   private readonly metrics: OmniRouteMetrics = {
     compression: { inputTokens: 0, compressedTokens: 0, ratio: 1, strategy: 'none', updatedAt: new Date().toISOString() },
@@ -64,11 +88,81 @@ export class OmniRouteClient {
   public constructor(config: OmniRouteConfig = {}) {
     this.endpoint = (config.endpoint ?? process.env.OMNIROUTE_URL ?? DEFAULT_ENDPOINT).replace(/\/$/, '');
     this.apiKey = config.apiKey ?? process.env.OMNIROUTE_API_KEY ?? '';
+    this.mgmtToken = config.mgmtToken ?? process.env.OMNIROUTE_MGMT_TOKEN ?? '';
     this.timeoutMs = config.timeoutMs ?? 120_000;
   }
 
   public setApiKey(apiKey: string): void {
     this.apiKey = apiKey.trim();
+  }
+
+  /** True when an MCP management token is configured, so the MCP surface can be reached. */
+  public get hasMcpToken(): boolean {
+    return this.mgmtToken.trim() !== '';
+  }
+
+  /** Discover the MCP tools OmniRoute exposes. Returns an empty list when no management token is set. */
+  public async listMcpTools(signal?: AbortSignal): Promise<readonly McpToolDescriptor[]> {
+    if (!this.hasMcpToken) return [];
+    const result = await this.mcpRpc<{ tools?: { name?: unknown; description?: unknown; inputSchema?: unknown }[] }>('tools/list', {}, signal);
+    return (result.tools ?? []).map((tool) => ({
+      name: typeof tool.name === 'string' ? tool.name : '',
+      description: typeof tool.description === 'string' ? tool.description : undefined,
+      inputSchema: tool.inputSchema,
+    })).filter((tool) => tool.name !== '');
+  }
+
+  /** Invoke an MCP tool and return its text content. */
+  public async callMcpTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+    const result = await this.mcpRpc<McpToolCallResult>('tools/call', { name, arguments: args }, signal);
+    const text = (result.content ?? [])
+      .filter((part) => part.type === 'text' && typeof part.text === 'string')
+      .map((part) => part.text as string)
+      .filter((part) => part !== '')
+      .join('\n');
+    return result.isError ? (text !== '' ? `MCP error: ${text}` : `MCP tool ${name} failed`) : text;
+  }
+
+  /** Minimal MCP streamable-HTTP JSON-RPC call, establishing a session on first use. */
+  private async mcpRpc<T>(method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+    if (!this.mcpSession) {
+      const init = await this.mcpRequest('/api/mcp/stream', {
+        method: 'POST', signal,
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0', id: 1, method: 'initialize',
+          params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'omniharness', version: '0' } },
+        }),
+      });
+      const session = init.headers.get('mcp-session-id');
+      if (!session) throw new OmniRouteError(init.status, 'MCP session not established');
+      this.mcpSession = session;
+      // The spec requires notifying the server that initialization completed before other calls.
+      await this.mcpRequest('/api/mcp/stream', {
+        method: 'POST', signal,
+        headers: { 'content-type': 'application/json', accept: 'application/json', 'mcp-session-id': session },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+      }).catch(() => { /* best-effort notification */ });
+    }
+    const response = await this.mcpRequest('/api/mcp/stream', {
+      method: 'POST', signal,
+      headers: { 'content-type': 'application/json', accept: 'application/json', 'mcp-session-id': this.mcpSession },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method, params }),
+    });
+    const payload: unknown = await response.json();
+    if (this.isRecord(payload) && this.isRecord(payload.result)) return payload.result as T;
+    if (this.isRecord(payload) && this.isRecord(payload.error)) {
+      throw new OmniRouteError(response.status, `MCP ${method} failed: ${String(payload.error.message ?? 'rpc error')}`);
+    }
+    throw new OmniRouteError(response.status, `invalid MCP ${method} response`);
+  }
+
+  private async mcpRequest(path: string, init: RequestInit): Promise<Response> {
+    const headers = new Headers(init.headers);
+    headers.set('authorization', `Bearer ${this.mgmtToken}`);
+    const response = await fetch(`${this.endpoint}${path}`, { ...init, headers });
+    if (!response.ok) throw new OmniRouteError(response.status, await this.safeBody(response));
+    return response;
   }
 
   public snapshotMetrics(): OmniRouteMetrics {
@@ -205,7 +299,7 @@ export class OmniRouteClient {
     const toolCalls: ToolCallRequest[] = [...toolStreams.values()]
       .filter((entry) => entry.id !== '' && entry.name !== '')
       .map((entry) => ({ id: entry.id, type: 'function', function: { name: entry.name, arguments: entry.argsFragments.join('') } }));
-    return { content, model: answered, finishReason, reasoning: reasoning || undefined, toolCalls, usage, headers: response.headers };
+    return { content, model: answered, finishReason, reasoning: reasoning || undefined, toolCalls, usage, headers: response.headers, compression: this.compressionFrom(response.headers) };
   }
 
   public async chat(model: string, messages: readonly ChatMessage[], options: { signal?: AbortSignal; tools?: readonly ChatTool[] } = {}): Promise<ChatResult> {
@@ -238,6 +332,20 @@ export class OmniRouteClient {
         totalTokens: this.number(usage.total_tokens),
       } : undefined,
       headers: response.headers,
+      compression: this.compressionFrom(response.headers),
+    };
+  }
+
+  private compressionFrom(headers: Headers): CompressionInfo | undefined {
+    const input = this.headerNumber(headers, 'x-omniroute-input-tokens');
+    const compressed = this.headerNumber(headers, 'x-omniroute-compressed-tokens');
+    if (input === undefined || compressed === undefined || input <= 0 || compressed >= input) return undefined;
+    return {
+      ratio: compressed / input,
+      strategy: headers.get('x-omniroute-compression') ?? '',
+      inputTokens: input,
+      compressedTokens: compressed,
+      savedTokens: input - compressed,
     };
   }
 

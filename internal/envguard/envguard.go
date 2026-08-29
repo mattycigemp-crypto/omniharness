@@ -13,6 +13,7 @@ import (
 // process. Kept lowercase for matching.
 var secretVars = []string{
 	"OMNIROUTE_API_KEY",
+	"OMNIROUTE_MGMT_TOKEN",
 	"OMNIHARNESS_API_KEY",
 	"ROUTER_API_KEY",
 }

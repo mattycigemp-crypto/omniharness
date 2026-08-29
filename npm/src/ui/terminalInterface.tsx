@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
 import Spinner from 'ink-spinner';
 import type { MastraEngine, HarnessEvent, ApprovalAction } from '../agent/mastraEngine.js';
-import type { AgentMode } from '../types/index.js';
+import type { AgentMode, TodoItem } from '../types/index.js';
 import { deleteAt, deleteBefore, insertAt, layoutEditor, lineEndAt, lineStartAt, moveHorizontal, moveVerticalWrapped, normalizePaste } from './editor.js';
 import { renderMarkdown, type MarkdownSegment } from './markdown.js';
 import { KITTY_POP, KITTY_PUSH, KITTY_QUERY, isEncodedKey, isKittyQueryResponse, parseRawKey, type KeyAction } from './keys.js';
@@ -10,12 +10,12 @@ import { KITTY_POP, KITTY_PUSH, KITTY_QUERY, isEncodedKey, isKittyQueryResponse,
 interface Props { engine: MastraEngine }
 
 type LineRole = 'user' | 'assistant' | 'error' | 'thinking' | 'tool';
-interface Line { role: LineRole; text: string; model?: string; toolName?: string; url?: string }
-interface Row { role: LineRole; segments: readonly MarkdownSegment[]; label: string; first: boolean }
+interface Line { role: LineRole; text: string; model?: string; toolName?: string; url?: string; saved?: string }
+interface Row { role: LineRole; segments: readonly MarkdownSegment[]; label: string; first: boolean; saved?: string }
 interface LiveIndices { think: number | null; answer: number | null }
 interface PickerItem { id: string; group: 'combos' | 'auto'; strategy?: string }
 
-const MODE_SEQ: AgentMode[] = ['plan', 'build', 'research'];
+const MODE_SEQ: AgentMode[] = ['plan', 'build', 'research', 'crazy'];
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 const widthOf = (stdout: NodeJS.WriteStream): number => Math.max(48, stdout.columns ?? 80);
@@ -40,13 +40,13 @@ function wrap(text: string, width: number): string[] {
   return out.length > 0 ? out : [''];
 }
 
-function labelFor(role: LineRole, model?: string, toolName?: string): string {
+function labelFor(role: LineRole, model?: string, toolName?: string, fallback?: string): string {
   switch (role) {
     case 'user': return 'you';
     case 'error': return 'error';
     case 'thinking': return 'think';
     case 'tool': return toolName ? `tool · ${toolName}` : 'tool';
-    default: return model ?? 'harness';
+    default: return model ?? fallback ?? 'assistant';
   }
 }
 
@@ -89,6 +89,8 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const [liveThink, setLiveThink] = useState('');
   const [liveAnswer, setLiveAnswer] = useState('');
   const [kitty, setKitty] = useState<boolean | null>(null);
+  const [taskQueue, setTaskQueue] = useState<readonly TodoItem[]>(engine.state.taskQueue);
+  const [currentTool, setCurrentTool] = useState<string>();
 
   useEffect(() => {
     const onResize = (): void => setWidth(widthOf(stdout));
@@ -118,14 +120,21 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
           setLiveThink('');
           break;
         case 'text':
-          setLines((current) => [...current, { role: 'assistant', text: event.content }]);
+          setLines((current) => [...current, {
+            role: 'assistant', text: event.content, model: event.model,
+            saved: event.compression ? `${Math.round((1 - event.compression.ratio) * 100)}% saved (${event.compression.strategy.toUpperCase()}) · ${event.compression.savedTokens.toLocaleString()} tokens` : undefined,
+          }]);
           setLiveAnswer('');
           break;
         case 'tool_start':
           setLines((current) => [...current, { role: 'tool', text: event.tool, toolName: `${event.tool} →` }]);
+          setCurrentTool(event.tool);
           break;
         case 'tool_result':
           setLines((current) => [...current, { role: 'tool', text: `  ${event.summary}`, toolName: 'result' }]);
+          break;
+        case 'todos':
+          setTaskQueue(event.todos);
           break;
         case 'preview':
           setLines((current) => [...current, { role: 'tool', text: `preview: ${event.url}`, toolName: 'preview', url: event.url }]);
@@ -308,12 +317,14 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = [];
     for (const line of lines) {
-      const label = labelFor(line.role, line.model, line.toolName);
+      const label = labelFor(line.role, line.model, line.toolName, engine.state.activeModel);
       const markdown = line.role !== 'tool' && line.role !== 'error';
       const wrapped: MarkdownSegment[][] = markdown
         ? renderMarkdown(line.text, contentWidth)
         : wrap(line.text, contentWidth).map((text) => [{ text }]);
       wrapped.forEach((segments, index) => out.push({ role: line.role, segments, label, first: index === 0 }));
+      // A dim one-line savings note right under the assistant's answer.
+      if (line.saved) out.push({ role: 'assistant', segments: [{ text: line.saved }], label: '', first: false, saved: line.saved });
     }
     return out.slice(-messageHeight);
   }, [lines, contentWidth, messageHeight]);
@@ -327,17 +338,28 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       <Text dimColor>OMNIROUTE :20128</Text>
     </Box>
     <Box flexDirection="column" flexGrow={1}>
-      {lines.length === 0 && <Box flexDirection="column" marginTop={2}><Text color="cyan" bold>Ready when you are.</Text><Text dimColor>Describe the work. OmniHarness routes it through your OmniRoute account. Ctrl+{modeKey} cycles plan · build · research.</Text></Box>}
-      {rows.map((row, index) => row.first
-        ? <Box key={index} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
-            <Text color={colorFor(row.role)} bold>{row.label}</Text>
-            <SegmentText segments={row.segments} role={row.role} />
-          </Box>          : <SegmentText key={index} segments={row.segments} role={row.role} />)}
+      {lines.length === 0 && <Box flexDirection="column" marginTop={2}><Text color="cyan" bold>Ready when you are.</Text><Text dimColor>Describe the work. OmniHarness routes it through your OmniRoute account. Ctrl+{modeKey} cycles plan · build · research · crazy.</Text></Box>}
+      {rows.map((row, index) => row.saved
+        ? row.saved !== '' ? <Text key={index} dimColor>{row.saved}</Text> : null
+        : row.first
+          ? <Box key={index} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
+              <Text color={colorFor(row.role)} bold>{row.label}</Text>
+              <SegmentText segments={row.segments} role={row.role} />
+            </Box>
+          : <SegmentText key={index} segments={row.segments} role={row.role} />)}
       {liveThink !== '' && <Box flexDirection="column" marginTop={1}><Text color="yellow" bold>think</Text>{liveThinkLines.map((segments, index) => <SegmentText key={index} segments={segments} role="thinking" />)}</Box>}
-      {liveAnswer !== '' && <Box flexDirection="column" marginTop={1}><Text color="green" bold>harness</Text>{liveAnswerLines.map((segments, index) => <SegmentText key={index} segments={segments} role="assistant" />)}</Box>}
+      {liveAnswer !== '' && <Box flexDirection="column" marginTop={1}><Text color="green" bold>{engine.state.activeModel}</Text>{liveAnswerLines.map((segments, index) => <SegmentText key={index} segments={segments} role="assistant" />)}</Box>}
       {engine.state.preview && <Text color="green" dimColor>preview live · {engine.state.preview.url}</Text>}
-      {busy && <Text color="cyan"><Spinner type="dots" /> working in {mode} mode on {engine.state.activeModel}</Text>}
+      {busy && <Text color="cyan"><Spinner type="dots" /> working in {mode} mode on {engine.state.activeModel}{currentTool ? ` · now ${currentTool}` : ''}</Text>}
     </Box>
+    {taskQueue.length > 0 && <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={2} paddingY={1} marginTop={1}>
+      <Box justifyContent="space-between"><Text bold color="cyan">plan</Text><Text dimColor>{taskQueue.filter((item) => item.status === 'done').length}/{taskQueue.length} done</Text></Box>
+      {taskQueue.slice(-6).map((item) => {
+        const marker = item.status === 'done' ? '✓' : item.status === 'active' ? '▸' : '○';
+        const color = item.status === 'done' ? 'green' : item.status === 'active' ? 'cyan' : undefined;
+        return <Text key={item.id} color={color} dimColor={item.status === 'done'}>{marker} {clip(item.title, contentWidth - 4)}</Text>;
+      })}
+    </Box>}
     {pickerOpen && <Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={2} paddingY={1}>
       <Text bold color="magenta">Choose an OmniRoute model</Text>
       <Text dimColor>↑↓ / j k navigate · enter select · esc close</Text>

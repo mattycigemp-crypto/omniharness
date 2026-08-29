@@ -52,6 +52,7 @@ function makeEngine(): MastraEngine {
       },
       messages: [],
       preview: null,
+      taskQueue: [],
     },
     subscribe: () => () => {},
     selectModel: async () => {},
@@ -103,5 +104,54 @@ test('Ctrl+J inserts a newline and the input box renders two rows', async () => 
   const text = stripAnsi(stdout.output);
   assert.match(text, /ab[\s\S]*cd▍/); // 'ab' and 'cd' rendered on separate rows, caret at line end
   assert.doesNotMatch(text, /abcd/); // not concatenated onto one row
+  instance.unmount();
+});
+
+test('todos events render the visible plan panel with markers and progress', async () => {
+  const stdin = new FakeStdin();
+  const stdout = new FakeStdout();
+  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  const engine = makeEngine();
+  engine.subscribe = (handler) => { listener = handler; return () => {}; };
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  await sleep(30);
+  listener!({ type: 'todos', todos: [
+    { id: 't1', title: 'read the file', status: 'done' },
+    { id: 't2', title: 'fix the bug', status: 'active' },
+    { id: 't3', title: 'run tests', status: 'pending' },
+  ] });
+  await sleep(50);
+  const text = stripAnsi(stdout.output);
+  assert.match(text, /plan/);
+  assert.match(text, /1\/3 done/);
+  assert.match(text, /✓ read the file/);
+  assert.match(text, /▸ fix the bug/);
+  assert.match(text, /○ run tests/);
+  instance.unmount();
+});
+
+test('current tool shows in the busy line during a run', async () => {
+  const stdin = new FakeStdin();
+  const stdout = new FakeStdout();
+  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  const engine = makeEngine();
+  engine.subscribe = (handler) => { listener = handler; return () => {}; };
+  // Keep the run in flight so the busy line stays visible.
+  engine.run = () => new Promise(() => {});
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  await sleep(30);
+  stdin.write('do it');
+  await sleep(30); // separate chunk so Ink parses '\r' as a return key, not paste
+  stdin.write('\r'); // submit
+  await sleep(50);
+  listener!({ type: 'tool_start', tool: 'read_file', input: undefined });
+  // Poll for the rendered frame (Ink flushes async) instead of a fixed sleep.
+  let text = '';
+  for (let i = 0; i < 30; i += 1) {
+    text = stripAnsi(stdout.output);
+    if (/now read_file/.test(text)) break;
+    await sleep(20);
+  }
+  assert.match(text, /now read_file/);
   instance.unmount();
 });

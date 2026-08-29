@@ -35,6 +35,7 @@ The harness treats the **current working directory** as the workspace.
 |---|---|
 | `OMNIROUTE_URL` | OmniRoute endpoint (default `http://127.0.0.1:20128`, the HTTP API port) |
 | `OMNIROUTE_API_KEY` | OmniRoute API key — `Authorization: Bearer <key>` on every request |
+| `OMNIROUTE_MGMT_TOKEN` | OmniRoute management token (`manage` scope) — when set, OmniRoute's MCP tools are discovered and exposed to the agent |
 
 If `OMNIROUTE_API_KEY` is unset, the harness asks you to paste the key on
 interactive launch and holds it **in memory only** — it is never written to
