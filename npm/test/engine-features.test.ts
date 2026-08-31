@@ -182,3 +182,36 @@ test('skills from OMNIHARNESS.md are loaded, offered to the model, and executabl
     assert.match(String(toolMsg?.content ?? ''), /hello world/);
   } finally { live.close(); await fs.rm(workspace, { recursive: true, force: true }); }
 });
+test('CRAZY runSwarm fans pending todos across parallel workers and drains the queue', async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'oh-swarm-'));
+  // Every worker turn just says "ok" (no tool calls) so each claimed todo completes in one round.
+  const live = chatServer(() => stop);
+  const events: HarnessEvent[] = [];
+  try {
+    const engine = await createMastraEngine({ workspaceRoot: workspace, endpoint: live.url, mode: 'crazy' });
+    engine.subscribe((event) => events.push(event));
+    // Seed a plan of 4 pending todos directly on the engine state.
+    (engine.state as { taskQueue: unknown }).taskQueue = [
+      { id: 'a', title: 'task one', status: 'pending' },
+      { id: 'b', title: 'task two', status: 'pending' },
+      { id: 'c', title: 'task three', status: 'pending' },
+      { id: 'd', title: 'task four', status: 'pending' },
+    ];
+    await engine.runSwarm({ maxAgents: 3 });
+    assert.equal(engine.state.taskQueue.filter((t) => t.status === 'done').length, 4, 'every todo completed');
+    const agentIds = new Set(events.filter((e) => e.type === 'agent').map((e) => (e as { id: string }).id));
+    assert.equal(agentIds.size, 3, 'three worker lanes spawned');
+    assert.ok(events.some((e) => e.type === 'agent' && e.status === 'working'));
+  } finally { live.close(); await fs.rm(workspace, { recursive: true, force: true }); }
+});
+
+test('runSwarm is inert outside CRAZY mode', async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'oh-swarm-off-'));
+  const live = chatServer(() => stop);
+  try {
+    const engine = await createMastraEngine({ workspaceRoot: workspace, endpoint: live.url, mode: 'build' });
+    (engine.state as { taskQueue: unknown }).taskQueue = [{ id: 'a', title: 'x', status: 'pending' }, { id: 'b', title: 'y', status: 'pending' }];
+    await engine.runSwarm({ maxAgents: 3 });
+    assert.equal(engine.state.taskQueue.every((t) => t.status === 'pending'), true, 'nothing ran');
+  } finally { live.close(); await fs.rm(workspace, { recursive: true, force: true }); }
+});

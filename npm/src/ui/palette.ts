@@ -21,14 +21,17 @@ export interface Palette {
 
 export type ThemeName = 'dark' | 'light';
 
-/** Dark truecolor palette (Tokyo-Night-inspired). */
+/**
+ * Dark truecolor palette — OmniRoute "signal" identity: a teal accent (routing,
+ * throughput) over cool slate neutrals, with a distinct sky-blue for user input.
+ */
 const DARK_TRUE: Palette = {
-  accent: '#7aa2f7',
+  accent: '#2dd4bf',
   muted: '#8b93a7',
-  success: '#9ece6a',
-  warn: '#e0af68',
-  error: '#f7768e',
-  info: '#2ac3de',
+  success: '#8fd66f',
+  warn: '#e6b955',
+  error: '#f2637e',
+  info: '#56b6ff',
 };
 
 /** Light truecolor palette — darker text on light backgrounds, same hue roles. */

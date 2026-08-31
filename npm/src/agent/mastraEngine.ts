@@ -37,6 +37,8 @@ export type HarnessEvent =
   | { type: 'text'; content: string; model?: string; provider?: string; fallback?: boolean; compression?: CompressionInfo }
   | { type: 'preview'; url: string }
   | { type: 'attach'; name: string; kind: AttachmentInput['kind']; size: number }
+  // CRAZY-mode swarm: one event stream per parallel worker agent.
+  | { type: 'agent'; id: string; label: string; status: 'spawned' | 'working' | 'done' | 'error'; note?: string }
   | { type: 'todos'; todos: readonly TodoItem[] };
 
 /** A trust scope the user can pick to skip future prompts for similar calls. */
@@ -69,6 +71,12 @@ export interface MastraEngine {
   attach(paths: readonly string[]): Promise<readonly AttachmentInput[]>;
   setApprovalHandler(handler: (action: ApprovalAction) => Promise<ApprovalResolution>): void;
   run(prompt: string, signal?: AbortSignal): Promise<{ content: string; model: string }>;
+  /**
+   * CRAZY mode only: fan out up to `maxAgents` parallel workers that each claim
+   * a pending todo, run an auto-approved tool loop, and stream `agent` events.
+   * Returns when the todo queue is drained or the run is cancelled.
+   */
+  runSwarm(options?: { maxAgents?: number }): Promise<void>;
   /** Abort the in-flight run; the turn ends with a 'cancelled' status. */
   cancel(): void;
   /** Drop transcript, task queue and persisted session; starts a fresh chat. */
@@ -575,7 +583,97 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
       return { content: answer, model };
       }
     },
+    async runSwarm(options) {
+      if (state.mode !== 'crazy') return;
+      const maxAgents = Math.max(1, Math.min(4, options?.maxAgents ?? 3));
+      const controller = new AbortController();
+      activeRunController = controller;
+      const sig = controller.signal;
+
+      // Atomic pending-todo claim shared by all workers.
+      let cursor = 0;
+      const claim = (): TodoItem | null => {
+        const queue = state.taskQueue;
+        while (cursor < queue.length) {
+          const item = queue[cursor];
+          cursor += 1;
+          if (item && item.status === 'pending') return item;
+        }
+        return null;
+      };
+
+      const systemFrame = SYSTEM_FRAME(client.endpoint, state.workspace.root, 'crazy', skills.map((skill) => skill.name), memory);
+
+      const worker = async (id: string): Promise<void> => {
+        emit({ type: 'agent', id, label: id, status: 'spawned' });
+        for (;;) {
+          if (sig.aborted) return;
+          const todo = claim();
+          if (!todo) { emit({ type: 'agent', id, label: id, status: 'done' }); return; }
+          applyTodo({ action: 'start', id: todo.id });
+          emit({ type: 'agent', id, label: todo.title.slice(0, 48), status: 'working', note: todo.title.slice(0, 80) });
+          const wire: ChatWireMessage[] = [
+            { role: 'system', content: `${systemFrame}\n\nYou are worker agent ${id} in a parallel swarm. Complete ONLY this task and then stop, concisely: ${todo.title}` },
+            { role: 'user', content: todo.title },
+          ];
+          try {
+            await converseLoop(wire, sig);
+            applyTodo({ action: 'complete', id: todo.id });
+            emit({ type: 'agent', id, label: todo.title.slice(0, 48), status: 'working', note: `done: ${todo.title.slice(0, 60)}` });
+          } catch (reason: unknown) {
+            emit({ type: 'agent', id, label: todo.title.slice(0, 48), status: 'error', note: reason instanceof Error ? reason.message : String(reason) });
+          }
+        }
+      };
+
+      const ids = Array.from({ length: maxAgents }, (_, index) => `A${index + 1}`);
+      await Promise.all(ids.map(worker));
+      state.taskStatus = 'completed';
+      state.metrics = client.snapshotMetrics();
+      try {
+        await saveSession(state.workspace.root, {
+          messages: [...state.messages], taskQueue: [...state.taskQueue], savedAt: new Date().toISOString(),
+        });
+      } catch { /* session persistence is best-effort */ }
+    },
   };
+
+  /** Compact tool loop for a swarm worker: stream, run tools (auto-approved in crazy mode), repeat. */
+  async function converseLoop(wire: ChatWireMessage[], sig: AbortSignal, maxTurns = 40): Promise<void> {
+    let turns = 0;
+    for (;;) {
+      if (sig.aborted) return;
+      let content = '';
+      let toolCalls: ToolCallRequest[] = [];
+      const result = await client.chatStream(state.activeModel, wire, {
+        signal: sig, tools: toolSchemas,
+        onDelta: (delta) => {
+          if (delta.type === 'text') { content += delta.delta; emit({ type: 'text_delta', delta: delta.delta }); }
+          else if (delta.type === 'tool_call') {
+            if (!toolCalls.some((call) => call.id === delta.call.id)) toolCalls.push(delta.call);
+            else toolCalls = toolCalls.map((call) => call.id === delta.call.id ? delta.call : call);
+          }
+        },
+      });
+      if (toolCalls.length === 0) {
+        if (content) {
+          emit({ type: 'text', content, model: result.model });
+          state.messages = [...state.messages, { role: 'assistant', content, model: result.model, createdAt: new Date().toISOString() }];
+        }
+        return;
+      }
+      wire.push({ role: 'assistant', content, tool_calls: toolCalls });
+      for (const call of toolCalls) {
+        if (sig.aborted) return;
+        turns += 1;
+        if (turns > maxTurns) return;
+        emit({ type: 'tool_start', tool: call.function.name, input: undefined });
+        const output = await runTool(call, sig);
+        emit({ type: 'tool_result', tool: call.function.name, summary: output.split('\n')[0] ?? '', detail: output.slice(0, 2000) });
+        wire.push({ role: 'tool', tool_call_id: call.id, content: truncate(output) });
+      }
+    }
+  }
 }
 
 function asWireMessage(message: HarnessMessage): ChatWireMessage {
