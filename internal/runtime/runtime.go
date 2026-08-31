@@ -59,6 +59,7 @@ type Runtime struct {
 // skipped for lack of a session), so FlushEvents can prove ordering.
 type persistenceSink struct {
 	ch          <-chan event.Event
+	done        chan struct{} // closed when the drain goroutine has fully exited
 	lastWritten atomic.Uint64
 }
 
@@ -173,10 +174,11 @@ func New(cfg config.Config, opts Options) (*Runtime, error) {
 } // startPersistenceSink persists every event to the session store.
 func (r *Runtime) startPersistenceSink() {
 	ch, cancel := r.Bus.Subscribe(1024)
-	s := &persistenceSink{ch: ch}
+	s := &persistenceSink{ch: ch, done: make(chan struct{})}
 	r.sink = s
 	r.stopSinks = append(r.stopSinks, cancel)
 	go func() {
+		defer close(s.done)
 		for e := range ch {
 			if e.SessionID != "" {
 				if err := r.Store.AppendEvent(e.SessionID, e); err != nil {
@@ -218,6 +220,17 @@ func (r *Runtime) FlushEvents(ctx context.Context) bool {
 func (r *Runtime) Close() {
 	for _, cancel := range r.stopSinks {
 		cancel()
+	}
+	// Wait for the persistence sink to finish draining buffered events before
+	// closing the store. Subscribe's cancel only closes the channel; the drain
+	// goroutine still processes whatever is buffered, so a late AppendEvent
+	// would otherwise race Store.Close and (in tests) t.TempDir's RemoveAll,
+	// leaving files behind ("directory not empty").
+	if r.sink != nil {
+		select {
+		case <-r.sink.done:
+		case <-time.After(5 * time.Second):
+		}
 	}
 	for _, c := range r.MCPClients {
 		_ = c.Close()
