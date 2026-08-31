@@ -6,12 +6,51 @@ import type { AgentMode, HarnessMessage, TodoItem } from '../types/index.js';
 import { appendPromptHistory, loadPromptHistory } from '../promptHistory.js';
 import { deleteAt, deleteBefore, insertAt, layoutEditor, lineEndAt, lineStartAt, moveHorizontal, moveVerticalWrapped, normalizePaste } from './editor.js';
 import { renderMarkdown, type MarkdownSegment } from './markdown.js';
+import { looksLikeDiff, diffSegments } from './diff.js';
+import { palette } from './palette.js';
 import { KITTY_POP, KITTY_PUSH, KITTY_QUERY, isEncodedKey, isKittyQueryResponse, parseRawKey, type KeyAction } from './keys.js';
 
 interface Props { engine: MastraEngine }
 
 type LineRole = 'user' | 'assistant' | 'error' | 'thinking' | 'tool';
 interface Line { role: LineRole; text: string; model?: string; toolName?: string; url?: string; saved?: string }
+
+/** A tool call collapsed into a compact card (name, target, status). */
+interface ToolCard {
+  id: string;
+  name: string;
+  target: string;
+  status: 'running' | 'done' | 'error';
+  summary?: string;
+  /** Raw output trail captured before/while running (rendered as a diff if it looks like one). */
+  trail?: string;
+}
+
+function describeTarget(name: string, input: unknown): string {
+  if (input && typeof input === 'object') {
+    const record = input as Record<string, unknown>;
+    if (typeof record.path === 'string') return record.path;
+    if (typeof record.command === 'string') return record.command;
+    if (typeof record.query === 'string') return record.query.slice(0, 48);
+  }
+  return '';
+}
+
+function phaseFor(tool: string): string {
+  switch (tool) {
+    case 'read_file': return 'reading files';
+    case 'write_file': return 'editing files';
+    case 'run_command': return 'running commands';
+    case 'semantic_search': return 'searching the workspace';
+    case 'index_workspace': return 'indexing the workspace';
+    case 'git_diff': return 'checking the diff';
+    case 'update_todo': return 'updating the plan';
+    case 'start_preview': return 'starting preview';
+    case 'write_memory': return 'remembering';
+    default: return tool;
+  }
+}
+
 
 /** Map a restored transcript message into a rendered line (used on startup). */
 function lineFromMessage(message: HarnessMessage): Line {
@@ -65,20 +104,22 @@ function labelFor(role: LineRole, model?: string, toolName?: string, fallback?: 
   }
 }
 
-function colorFor(role: LineRole): string {
+const PALETTE = palette();
+
+function colorFor(role: LineRole, p = PALETTE): string {
   switch (role) {
-    case 'user': return 'blue';
-    case 'error': return 'red';
-    case 'thinking': return 'yellow';
-    case 'tool': return 'magenta';
-    default: return 'green';
+    case 'user': return p.info;
+    case 'error': return p.error;
+    case 'thinking': return p.warn;
+    case 'tool': return p.muted;
+    default: return p.success;
   }
 }
 
 function SegmentText({ segments, role }: { segments: readonly MarkdownSegment[]; role: LineRole }): React.ReactElement {
-  const base = role === 'thinking' ? 'yellow' : role === 'tool' ? 'magenta' : undefined;
+  const base = role === 'thinking' ? PALETTE.warn : role === 'tool' ? PALETTE.muted : role === 'assistant' ? PALETTE.success : role === 'user' ? PALETTE.info : undefined;
   return <Text color={base}>{segments.map((segment, index) => (
-    <Text key={index} bold={segment.bold} italic={segment.italic} strikethrough={segment.strikethrough} underline={segment.underline} dimColor={segment.dim} color={segment.color}>{segment.text}</Text>
+    <Text key={index} bold={segment.bold} italic={segment.italic} strikethrough={segment.strikethrough} underline={segment.underline} dimColor={segment.dim} color={segment.color ?? base}>{segment.text}</Text>
   ))}</Text>;
 }
 
@@ -114,6 +155,13 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const [kitty, setKitty] = useState<boolean | null>(null);
   const [taskQueue, setTaskQueue] = useState<readonly TodoItem[]>(engine.state.taskQueue);
   const [currentTool, setCurrentTool] = useState<string>();
+  // Tool activity rendered as collapsible cards: each completed/ongoing tool
+  // call carries its target, status, and optional summary/diff trail.
+  const [toolCards, setToolCards] = useState<readonly ToolCard[]>([]);
+  const [expandedTool, setExpandedTool] = useState<string>();
+  // Run timing: monotonic start time plus a ticking elapsed counter while busy.
+  const runStartedAt = useRef<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     let alive = true;
@@ -160,11 +208,19 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
           setLiveAnswer('');
           break;
         case 'tool_start':
-          setLines((current) => [...current, { role: 'tool', text: event.tool, toolName: `${event.tool} →` }]);
+          setToolCards((current) => [...current, {
+            id: `tc-${Date.now().toString(36)}-${current.length}`, name: event.tool,
+            target: describeTarget(event.tool, event.input), status: 'running',
+            trail: typeof event.input === 'object' && event.input !== null
+              && typeof (event.input as Record<string, unknown>).content === 'string'
+              ? String((event.input as Record<string, unknown>).content) : undefined,
+          }]);
           setCurrentTool(event.tool);
           break;
         case 'tool_result':
-          setLines((current) => [...current, { role: 'tool', text: `  ${event.summary}`, toolName: 'result' }]);
+          setToolCards((current) => current.length === 0
+            ? current
+            : current.map((card, index) => index === current.length - 1 ? { ...card, status: 'done', summary: event.summary } : card));
           setCurrentTool(undefined);
           break;
         case 'todos':
@@ -293,6 +349,9 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
             setTaskQueue([]);
             setError(undefined);
             setCurrentTool(undefined);
+            setToolCards([]);
+            setExpandedTool(undefined);
+            runStartedAt.current = null;
             setLiveThink('');
             setLiveAnswer('');
             syncPromptHistory([]);
@@ -306,6 +365,10 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
           followTranscriptRef.current = true;
           setScrollOffset(0);
           setEdit({ value: '', cursor: 0 }); setBusy(true); setError(undefined);
+          setToolCards([]);
+          setExpandedTool(undefined);
+          if (runStartedAt.current === null) runStartedAt.current = Date.now();
+          setNow(Date.now());
           historyIdxRef.current = -1;
           if (prompt) {
             syncPromptHistory([prompt, ...promptHistoryRef.current.filter((entry) => entry !== prompt)].slice(0, 200));
@@ -323,6 +386,8 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
             } finally {
               setBusy(false);
               setCurrentTool(undefined);
+              setToolCards((current) => current.map((card) => card.status === 'running' ? { ...card, status: 'error' } : card));
+              runStartedAt.current = null;
               setLiveThink('');
               setLiveAnswer('');
             }
@@ -382,6 +447,12 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     }
     if (key.pageUp || (key.ctrl && value.toLowerCase() === 'u')) { scrollTranscript(pageSizeRef.current); return; }
     if (key.pageDown || (key.ctrl && value.toLowerCase() === 'd')) { scrollTranscript(-pageSizeRef.current); return; }
+    // Ctrl+T toggles the most recent tool card between collapsed and expanded.
+    if (key.ctrl && value.toLowerCase() === 't') {
+      const latest = toolCards[toolCards.length - 1];
+      setExpandedTool((current) => (latest && current === latest.id) ? undefined : (latest ? latest.id : undefined));
+      return;
+    }
     if (key.tab) { applyAction({ kind: 'tab' }); return; }
     if (key.return) { applyAction({ kind: 'submit' }); return; }
     if (value === '\n') { applyAction({ kind: 'newline' }); return; }
@@ -419,6 +490,18 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   if (metrics.remainingQuota !== undefined) hud.push(`quota ${metrics.remainingQuota}`);
   if (metrics.fallback.attempts > 0) hud.push(`fb ${metrics.fallback.attempts}`);
   hud.push(`saved ${compression}`);
+  // Live statusline fields: model, mode, running phase, tokens/context, elapsed.
+  const runningTool = toolCards[toolCards.length - 1];
+  const phase = busy && currentTool ? phaseFor(currentTool) : (busy ? 'working' : 'ready');
+  const elapsedMs = busy && runStartedAt.current !== null
+    ? Math.max(0, now - runStartedAt.current)
+    : 0;
+  const elapsed = busy
+    ? (elapsedMs >= 60_000 ? `${Math.floor(elapsedMs / 60_000)}m${String(Math.floor((elapsedMs % 60_000) / 1000)).padStart(2, '0')}s` : `${Math.floor(elapsedMs / 1000)}s`)
+    : '';
+  const contextLabel = metrics.compression.inputTokens > 0
+    ? `${(metrics.compression.inputTokens / 1000).toFixed(1)}k in`
+    : '';
   const contentWidth = Math.max(20, width - 8);
   const terminalRows = stdout.rows ?? 24;
   const editorLayout = useMemo(() => layoutEditor(edit.value, edit.cursor, inputWidth), [edit.value, edit.cursor, inputWidth]);
@@ -475,7 +558,8 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const footerRows = 3;
   const chromeRows = 3 + footerRows + inputRows + (kitty !== null ? 1 : 0) + planRows + pickerRows + approvalRows;
   const messageHeight = Math.max(3, terminalRows - chromeRows);
-  const statusRows = (engine.state.preview ? 1 : 0) + (busy ? 1 : 0);
+  const toolRows = toolCards.length > 0 ? toolCards.length : 0; // one collapsed card per tool call
+  const statusRows = (engine.state.preview ? 1 : 0) + (busy ? 1 : 0) + toolRows;
   const storedHeight = Math.max(0, messageHeight - Math.min(messageHeight, liveRows.length + statusRows));
   const liveHeight = Math.max(0, messageHeight - storedHeight - statusRows);
   const visibleLiveRows = liveHeight > 0 ? liveRows.slice(-liveHeight) : [];
@@ -512,6 +596,14 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     setScrollOffset((current) => clamp(current, 0, maxScroll));
   }, [maxScroll]);
 
+  // Tick a clock while a run is in flight so the statusline can show elapsed time
+  // without re-rendering on every event. runStartedAt is set when a run begins.
+  useEffect(() => {
+    if (!busy) return;
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [busy]);
+
   return <Box flexDirection="column" width={width} height={terminalRows} paddingX={2} overflow="hidden">
     <Box justifyContent="space-between" paddingY={1}>
       <Text bold color="cyan">OMNIHARNESS <Text dimColor>· {mode} mode</Text></Text>
@@ -530,6 +622,23 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       {visibleLiveRows.map((row) => row.kind === 'label'
         ? <Text key={row.key} color={colorFor(row.role)} bold>{row.role === 'thinking' ? 'think' : engine.state.activeModel}</Text>
         : <SegmentText key={row.key} segments={row.segments} role={row.role} />)}
+      {toolCards.slice(-6).map((card) => {
+        const expanded = expandedTool === card.id;
+        const status = card.status === 'running' ? <Text color={PALETTE.warn}>• running</Text> : card.status === 'error' ? <Text color={PALETTE.error}>✕ error</Text> : <Text color={PALETTE.success}>✓ done</Text>;
+        const target = card.target ? ` · ${clip(card.target, Math.max(10, contentWidth - 40))}` : '';
+        const badge = expanded ? '▾' : '▸';
+        return <Box key={card.id} flexDirection="column">
+          <Text dimColor>{badge} {card.name}{target} · {status}{expanded ? '  ·  Ctrl+T to collapse' : ''}</Text>
+          {expanded && (card.trail
+            ? looksLikeDiff(card.trail)
+              ? diffSegments(card.trail, contentWidth).slice(0, 12).map((segments, index) => <SegmentText key={index} segments={segments} role="tool" />)
+              // A file-edit trail is the new content; show it as added (green) lines.
+              : card.trail.split('\n').slice(0, 12).map((line, index) => <Text key={index} color={PALETTE.success}>{line}</Text>)
+            : card.summary
+              ? <Text dimColor>{clip(card.summary, contentWidth)}</Text>
+              : <Text dimColor>(no output)</Text>)}
+        </Box>;
+      })}
       {engine.state.preview && <Text color="green" dimColor>preview live · {engine.state.preview.url}</Text>}
       {busy && <Text color="cyan"><Spinner type="dots" /> working in {mode} mode on {engine.state.activeModel}{currentTool ? ` · now ${currentTool}` : ''}</Text>}
     </Box>
@@ -567,8 +676,12 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     </Box>
     {kitty !== null && <Text dimColor>{kitty ? 'kitty protocol active — Shift+Enter makes a new line' : 'this terminal can\'t distinguish Shift+Enter from Enter — use Ctrl+J for a new line'}</Text>}
     <Box flexDirection="column">
-      <Box justifyContent="space-between"><Text dimColor>Enter send · Shift+Enter/Ctrl+J new line · PgUp/PgDn or Ctrl+U/D scroll · Ctrl+O models · Ctrl+{modeKey} mode · ↑/↓ recall · Ctrl+C cancel/quit · /help</Text><Text dimColor>{hud.join(' · ')}</Text></Box>
-      <Text dimColor>{clip(scrollStatus, contentWidth)}</Text>
+      {/* Live statusline: phase/elapsed left, model/mode/context + scroll position right. */}
+      <Box justifyContent="space-between">
+        <Text color={busy ? PALETTE.info : PALETTE.muted}>{busy && <Spinner type="dots" />}{phase}{elapsed ? ` · ${elapsed}` : ''}</Text>
+        <Text color={PALETTE.muted}>{[engine.state.activeModel, mode, contextLabel, scrollStatus].filter(Boolean).join(' · ')}</Text>
+      </Box>
+      <Box justifyContent="space-between"><Text dimColor>Enter send · Shift+Enter/Ctrl+J new line · Ctrl+O models · Ctrl+{modeKey} mode · Ctrl+C cancel/quit · /help · Ctrl+T tool</Text>{hud.length > 0 && <Text dimColor>{hud.join(' · ')}</Text>}</Box>
     </Box>
   </Box>;
 }

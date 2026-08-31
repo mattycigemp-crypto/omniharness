@@ -305,3 +305,34 @@ test('up arrow on an empty prompt recalls and the recalled prompt is re-submitte
     else process.env.OMNIHARNESS_CONFIG_DIR = previous;
   }
 });
+
+test('tool calls render as cards and Ctrl+T expands a file-edit trail', async () => {
+  const stdin = new FakeStdin();
+  const stdout = new FakeStdout();
+  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  const engine = makeEngine();
+  engine.subscribe = (handler) => { listener = handler; return () => {}; };
+  stdout.rows = 24;
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  await sleep(40);
+  listener!({ type: 'tool_start', tool: 'write_file', input: { path: 'src/a.ts', content: '+line-added\n-line-removed' } });
+  await sleep(80);
+  let text = stripAnsi(stdout.output);
+  // Card renders one line with the tool name and target, without the raw content.
+  assert.match(text, /write_file/);
+  assert.match(text, /src\/a\.ts/);
+  assert.doesNotMatch(text, /line-added/); // raw streamed content stays collapsed
+  // Ctrl+T expands the most recent card, revealing the diff.
+  stdin.write('\x14'); // Ctrl+T (0x14)
+  await sleep(80);
+  text = stripAnsi(stdout.output);
+  assert.match(text, /line-added/);
+  assert.match(text, /Ctrl\+T to collapse/);
+  // Collapse again and verify the diff is gone from the current frame. The fake
+  // stdout accumulates every frame, so clear it before checking the new state.
+  stdout.output = '';
+  stdin.write('\x14');
+  await sleep(80);
+  assert.doesNotMatch(stripAnsi(stdout.output), /line-added/);
+  instance.unmount();
+});
