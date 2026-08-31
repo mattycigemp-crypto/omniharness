@@ -46,9 +46,55 @@ test('decodes empty and wrapped combo responses, and classifies HTTP errors', as
     }
     finally { live.close(); }
   }
-  const live = server(() => new Response('denied', { status: 401 }));
-  try { await assert.rejects(() => new OmniRouteClient({ endpoint: live.url }).listCombos(), (error: unknown) => error instanceof OmniRouteError && error.status === 401); }
-  finally { live.close(); }
+  let attempts = 0;
+  const live = server(() => {
+    attempts += 1;
+    return new Response('denied', { status: 401 });
+  });
+  try {
+    await assert.rejects(() => new OmniRouteClient({ endpoint: live.url }).listCombos(), (error: unknown) => error instanceof OmniRouteError && error.status === 401);
+    assert.equal(attempts, 1);
+  } finally { live.close(); }
+});
+
+test('retries transient metadata failures for combos and models', async () => {
+  const cases = [
+    {
+      expected: 'coding',
+      response: Response.json([{ name: 'coding', models: [] }]),
+      read: (client: OmniRouteClient) => client.listCombos().then((items) => items[0]?.name),
+    },
+    {
+      expected: 'auto/best-coding',
+      response: Response.json({ data: [{ id: 'auto/best-coding' }] }),
+      read: (client: OmniRouteClient) => client.listModels().then((items) => items[0]),
+    },
+  ];
+  for (const testCase of cases) {
+    let attempts = 0;
+    const live = server(() => {
+      attempts += 1;
+      return attempts === 1 ? new Response('temporarily unavailable', { status: 503 }) : testCase.response;
+    });
+    try {
+      assert.equal(await testCase.read(new OmniRouteClient({ endpoint: live.url })), testCase.expected);
+      assert.equal(attempts, 2);
+    } finally { live.close(); }
+  }
+});
+
+test('does not send an already-aborted metadata request', async () => {
+  let attempts = 0;
+  const live = server(() => {
+    attempts += 1;
+    return Response.json([]);
+  });
+  try {
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(() => new OmniRouteClient({ endpoint: live.url }).listCombos(controller.signal));
+    assert.equal(attempts, 0);
+  } finally { live.close(); }
 });
 
 test('chat() forwards tools and surfaces reasoning, finish_reason and tool_calls', async () => {
