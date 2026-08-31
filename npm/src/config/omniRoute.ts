@@ -170,7 +170,7 @@ export class OmniRouteClient {
   }
 
   public async listCombos(signal?: AbortSignal): Promise<readonly OmniRouteCombo[]> {
-    const response = await this.request('/v1/combos', { method: 'GET', signal });
+    const response = await this.requestWithRetry('/v1/combos', { method: 'GET', signal });
     const payload: unknown = await response.json();
     if (Array.isArray(payload)) return payload as OmniRouteCombo[];
     if (this.isRecord(payload) && Array.isArray(payload.combos)) return payload.combos as OmniRouteCombo[];
@@ -196,7 +196,7 @@ export class OmniRouteClient {
 
   /** List every model id the gateway exposes, including `auto/*` virtual combos and individual providers. */
   public async listModels(signal?: AbortSignal): Promise<readonly string[]> {
-    const response = await this.request('/v1/models', { method: 'GET', signal });
+    const response = await this.requestWithRetry('/v1/models', { method: 'GET', signal });
     const payload: unknown = await response.json();
     const data = this.isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
     const ids: string[] = [];
@@ -205,6 +205,19 @@ export class OmniRouteClient {
     }
     if (ids.length === 0) throw new OmniRouteError(response.status, 'invalid models response');
     return ids;
+  }
+
+  /** Retry transient responses for idempotent metadata reads without touching chat/tool requests. */
+  private async requestWithRetry(path: string, init: RequestInit): Promise<Response> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.request(path, init);
+      } catch (error) {
+        const retryable = error instanceof OmniRouteError && (error.status === 429 || error.status >= 500);
+        if (!retryable || attempt >= 2 || init.signal?.aborted) throw error;
+        await new Promise<void>((resolve) => setTimeout(resolve, 200 * 2 ** attempt));
+      }
+    }
   }
 
   /** Stream a completion, surfacing deltas as they arrive and returning the accumulated result. */
