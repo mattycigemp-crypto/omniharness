@@ -10,6 +10,7 @@ import { createSystemTools, type SystemTools } from '../tools/systemTools.js';
 import { loadSkills, renderSkillCommand, skillSchema, type Skill } from '../skills.js';
 import { chunkText, cosineSimilarity, type IndexedChunk } from '../search.js';
 import { loadSemanticIndex, saveSemanticIndex, type SemanticCacheEntry } from '../semanticStore.js';
+import { loadSession, saveSession, clearSession, type StoredSession } from '../sessionStore.js';
 
 export interface MastraEngineConfig {
   workspaceRoot: string;
@@ -50,6 +51,10 @@ export interface MastraEngine {
   attach(paths: readonly string[]): Promise<readonly AttachmentInput[]>;
   setApprovalHandler(handler: (action: ApprovalAction) => Promise<boolean>): void;
   run(prompt: string, signal?: AbortSignal): Promise<{ content: string; model: string }>;
+  /** Abort the in-flight run; the turn ends with a 'cancelled' status. */
+  cancel(): void;
+  /** Drop transcript, task queue and persisted session; starts a fresh chat. */
+  clearHistory(): Promise<void>;
   stop(): void;
 }
 
@@ -105,12 +110,20 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
   let approvalHandler: ((action: ApprovalAction) => Promise<boolean>) | null = null;
   let pendingAttachments: readonly (AttachmentInput & { dataUrl?: string })[] = [];
   const semanticCache = await loadSemanticIndex(config.workspaceRoot);
+  let activeRunController: AbortController | null = null;
 
   const state: HarnessState = {
     taskStatus: 'idle', prompt: '', mode: config.mode ?? 'build', activeModel,
     workspace: { root: config.workspaceRoot, indexedAt: null, files: [], contextLocked: false },
     metrics: client.snapshotMetrics(), messages: [], preview: null, taskQueue: [],
   };
+
+  // Resume: hydrate the transcript and task queue from the last persisted session.
+  const restored = await loadSession(config.workspaceRoot);
+  if (restored != null && restored.messages.length > 0) {
+    state.messages = restored.messages;
+    state.taskQueue = restored.taskQueue;
+  }
 
   const memoryPath = join(state.workspace.root, '.omniharness', MEMORY_FILE);
 
@@ -361,7 +374,22 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
       return loaded.map(({ dataUrl: _dataUrl, ...rest }) => rest);
     },
     stop() { void stopPreviewChild(); listeners.clear(); },
+    cancel() { activeRunController?.abort(); },
+    async clearHistory() {
+      activeRunController?.abort();
+      state.messages = [];
+      state.taskQueue = [];
+      state.prompt = '';
+      try { await clearSession(state.workspace.root); } catch { /* best-effort */ }
+    },
     async run(prompt, signal) {
+      // Abort any still-in-flight run (normally impossible: the UI submits serially)
+      // and register this run's controller so cancel() can abort it.
+      activeRunController?.abort();
+      const controller = new AbortController();
+      activeRunController = controller;
+      if (signal) signal.addEventListener('abort', () => controller.abort(), { once: true });
+      const runSignal = controller.signal;
       state.prompt = prompt;
       state.taskStatus = 'running';
       const userMessage: HarnessMessage = { role: 'user', content: prompt, createdAt: new Date().toISOString() };
@@ -390,10 +418,22 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
       let toolCalls: ToolCallRequest[] = [];
       let compression: CompressionInfo | undefined;
 
+      try { return await executeRound(); } catch (reason: unknown) {
+        // An AbortError during streaming or a tool call is a user cancel, not a
+        // failure: report it as a cancelled turn rather than an error.
+        if (runSignal.aborted) {
+          state.taskStatus = 'cancelled';
+          emit({ type: 'text', content: '(cancelled)', model: activeModel });
+          return { content: '(cancelled)', model: activeModel };
+        }
+        throw reason;
+      }
+
+      async function executeRound(): Promise<{ content: string; model: string }> {
       const finishRound = async (): Promise<void> => {
         content = ''; reasoning = ''; toolCalls = [];
         const result = await client.chatStream(state.activeModel, wire, {
-          signal, tools: toolSchemas,
+          signal: runSignal, tools: toolSchemas,
           onDelta: (delta) => {
             if (delta.type === 'reasoning') { reasoning += delta.delta; emit({ type: 'thinking_delta', delta: delta.delta }); }
             else if (delta.type === 'text') { content += delta.delta; emit({ type: 'text_delta', delta: delta.delta }); }
@@ -409,6 +449,11 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
 
       await finishRound();
       while (toolCalls.length > 0) {
+        if (runSignal.aborted) {
+          state.taskStatus = 'cancelled';
+          emit({ type: 'text', content: '(cancelled)', model: activeModel });
+          return { content: '(cancelled)', model: activeModel };
+        }
         if (reasoning) {
           emit({ type: 'thinking', text: reasoning });
           state.messages = [...state.messages, { role: 'thought', content: reasoning, createdAt: new Date().toISOString() }];
@@ -416,7 +461,7 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
         wire.push({ role: 'assistant', content, tool_calls: toolCalls });
         let executedAny = false;
         for (const call of toolCalls) {
-          if (signal?.aborted) break;
+          if (runSignal.aborted) break;
           turn += 1;
           if (turn > MAX_TURNS[state.mode]) {
             const error = `too many tool turns (limit ${MAX_TURNS[state.mode]})`;
@@ -425,7 +470,7 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
             return { content: error + '; latest text: ' + content, model: activeModel };
           }
           emit({ type: 'tool_start', tool: call.function.name, input: undefined });
-          const output = await runTool(call, signal);
+          const output = await runTool(call, runSignal);
           const summary = output.split('\n')[0] ?? '';
           emit({ type: 'tool_result', tool: call.function.name, summary });
           results.push({ call, output });
@@ -435,7 +480,7 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
         if (!executedAny) break;
         content = ''; reasoning = ''; toolCalls = [];
         const next = await client.chatStream(state.activeModel, wire, {
-          signal, tools: toolSchemas,
+          signal: runSignal, tools: toolSchemas,
           onDelta: (delta) => {
             if (delta.type === 'reasoning') { reasoning += delta.delta; emit({ type: 'thinking_delta', delta: delta.delta }); }
             else if (delta.type === 'text') { content += delta.delta; emit({ type: 'text_delta', delta: delta.delta }); }
@@ -469,7 +514,13 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
       }
       emit({ type: 'text', content: answer, model, compression });
       state.messages = [...state.messages, { role: 'assistant', content: answer, model, createdAt: new Date().toISOString() }];
+      try {
+        await saveSession(state.workspace.root, {
+          messages: [...state.messages], taskQueue: [...state.taskQueue], savedAt: new Date().toISOString(),
+        });
+      } catch { /* session persistence is best-effort */ }
       return { content: answer, model };
+      }
     },
   };
 }

@@ -15,7 +15,8 @@ if (command === 'update') {
 } else {
   void (async () => {
     const saved = await readActiveCombo();
-    const engine = await createMastraEngine({ workspaceRoot: process.cwd(), model: saved });
-    render(<TerminalInterface engine={engine} />);
+    const    engine = await createMastraEngine({ workspaceRoot: process.cwd(), model: saved });
+    // The app owns Ctrl+C so idle quits but an in-flight run is cancelled first.
+    render(<TerminalInterface engine={engine} />, { exitOnCtrlC: false });
   })();
 }
