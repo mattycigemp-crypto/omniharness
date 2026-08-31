@@ -33,6 +33,8 @@ npm install -g omniharness-cli
 
 ```bash
 omniharness            # launch the interactive TUI in the current directory
+omniharness doctor     # check the gateway connection + auth, safely
+omniharness models     # list the routing catalog — combos · auto/* · providers
 ```
 
 Point it at your gateway (defaults shown):

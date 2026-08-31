@@ -5,6 +5,8 @@ import { createMastraEngine } from './agent/mastraEngine.js';
 import { TerminalInterface } from './ui/terminalInterface.js';
 import { ownVersion, runUpdate } from './update.js';
 import { readActiveCombo } from './config/settings.js';
+import { OmniRouteClient } from './config/omniRoute.js';
+import { doctor, helpText, models } from './doctor.js';
 import type { HarnessMessage } from './types/index.js';
 
 const ALT_ENTER = '\x1b[?1049h\x1b[H';
@@ -31,6 +33,23 @@ if (command === 'update') {
   process.exitCode = runUpdate();
 } else if (command === '--version' || command === '-v' || command === 'version') {
   console.log(`omniharness ${ownVersion()}`);
+} else if (command === '--help' || command === '-h' || command === 'help') {
+  console.log(helpText(ownVersion()));
+} else if (command === 'doctor') {
+  void (async () => {
+    const report = await doctor(new OmniRouteClient());
+    console.log(report.lines.join('\n'));
+    process.exitCode = report.ok ? 0 : 1;
+  })();
+} else if (command === 'models') {
+  void (async () => {
+    try {
+      console.log((await models(new OmniRouteClient())).join('\n'));
+    } catch (error) {
+      console.error(`omniharness models: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    }
+  })();
 } else {
   void (async () => {
     const saved = await readActiveCombo();
