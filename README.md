@@ -13,7 +13,7 @@ Route once, run anywhere — plan, build, research, or turn a swarm loose.
 
 <br/>
 
-<img src=".github/assets/omniharness-hero.svg" alt="OmniHarness terminal — a CRAZY-mode run fanned across three parallel worker lanes" width="780"/>
+<img src=".github/assets/omniharness-hero.svg" alt="OmniHarness terminal — a CRAZY-mode run fanned across three parallel worker lanes" width="720" style="max-width:100%"/>
 
 </div>
 
