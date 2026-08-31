@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import os from 'node:os';
+import path from 'node:path';
+import { promises as fs } from 'node:fs';
 import { test } from 'node:test';
 import { PassThrough, Writable } from 'node:stream';
 import React from 'react';
@@ -58,6 +61,8 @@ function makeEngine(): MastraEngine {
     selectModel: async () => {},
     setApprovalHandler: () => {},
     run: async () => ({ content: '', model: 'test-model' }),
+    cancel: () => {},
+    clearHistory: async () => {},
     stop: () => {},
   } as unknown as MastraEngine;
 }
@@ -154,4 +159,34 @@ test('current tool shows in the busy line during a run', async () => {
   }
   assert.match(text, /now read_file/);
   instance.unmount();
+});
+
+test('up arrow on an empty prompt recalls and the recalled prompt is re-submitted', async () => {
+  const stdin = new FakeStdin();
+  const stdout = new FakeStdout();
+  const submitted: string[] = [];
+  const engine = makeEngine();
+  engine.run = async (prompt: string) => { submitted.push(prompt); return { content: 'ok', model: 'test-model' }; };
+  // Isolate the persisted prompt history from the developer's real config.
+  const configDir = path.join(os.tmpdir(), `oh-tui-hist-${Date.now()}`);
+  const previous = process.env.OMNIHARNESS_CONFIG_DIR;
+  process.env.OMNIHARNESS_CONFIG_DIR = configDir;
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  try {
+    await sleep(120);
+    stdin.write('alpha');
+    await sleep(60); // separate chunk so Ink parses '\r' as a return key, not paste
+    stdin.write('\r'); // submit => records 'alpha' in history
+    await sleep(180);
+    stdin.write('\x1b[A'); // up arrow: recalls 'alpha'
+    await sleep(150); // let React re-render the recalled value into the input
+    stdin.write('\r'); // resubmit the recalled prompt
+    await sleep(150);
+    assert.deepEqual(submitted, ['alpha', 'alpha']);
+  } finally {
+    instance.unmount();
+    await fs.rm(configDir, { recursive: true, force: true });
+    if (previous === undefined) delete process.env.OMNIHARNESS_CONFIG_DIR;
+    else process.env.OMNIHARNESS_CONFIG_DIR = previous;
+  }
 });

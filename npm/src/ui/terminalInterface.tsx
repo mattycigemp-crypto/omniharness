@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
 import Spinner from 'ink-spinner';
 import type { MastraEngine, HarnessEvent, ApprovalAction } from '../agent/mastraEngine.js';
-import type { AgentMode, TodoItem } from '../types/index.js';
+import type { AgentMode, HarnessMessage, TodoItem } from '../types/index.js';
+import { appendPromptHistory, loadPromptHistory } from '../promptHistory.js';
 import { deleteAt, deleteBefore, insertAt, layoutEditor, lineEndAt, lineStartAt, moveHorizontal, moveVerticalWrapped, normalizePaste } from './editor.js';
 import { renderMarkdown, type MarkdownSegment } from './markdown.js';
 import { KITTY_POP, KITTY_PUSH, KITTY_QUERY, isEncodedKey, isKittyQueryResponse, parseRawKey, type KeyAction } from './keys.js';
@@ -11,6 +12,18 @@ interface Props { engine: MastraEngine }
 
 type LineRole = 'user' | 'assistant' | 'error' | 'thinking' | 'tool';
 interface Line { role: LineRole; text: string; model?: string; toolName?: string; url?: string; saved?: string }
+
+/** Map a restored transcript message into a rendered line (used on startup). */
+function lineFromMessage(message: HarnessMessage): Line {
+  switch (message.role) {
+    case 'user': return { role: 'user', text: message.content };
+    case 'assistant': return { role: 'assistant', text: message.content, model: message.model };
+    case 'thought': return { role: 'thinking', text: message.content };
+    case 'tool': return { role: 'tool', text: message.content, toolName: message.toolName ?? 'tool' };
+    case 'error': return { role: 'error', text: message.content };
+    default: return { role: 'tool', text: message.content, toolName: message.role }; // action / command
+  }
+}
 interface Row { role: LineRole; segments: readonly MarkdownSegment[]; label: string; first: boolean; saved?: string }
 interface LiveIndices { think: number | null; answer: number | null }
 interface PickerItem { id: string; group: 'combos' | 'auto'; strategy?: string }
@@ -74,7 +87,12 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const [width, setWidth] = useState(() => widthOf(stdout));
   const [edit, setEdit] = useState({ value: '', cursor: 0 });
   const inputWidth = Math.max(16, width - 12);
-  const [lines, setLines] = useState<Line[]>([]);
+  // Replay a resumed transcript (hydrated by the engine) into the chat area.
+  const [lines, setLines] = useState<Line[]>(() => engine.state.messages.map(lineFromMessage));
+  const promptHistoryRef = useRef<string[]>([]);
+  const [promptHistory, setPromptHistory] = useState<string[]>([]);
+  const historyIdxRef = useRef(-1);
+  const syncPromptHistory = (next: string[]): void => { promptHistoryRef.current = next; setPromptHistory(next); };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -91,6 +109,16 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const [kitty, setKitty] = useState<boolean | null>(null);
   const [taskQueue, setTaskQueue] = useState<readonly TodoItem[]>(engine.state.taskQueue);
   const [currentTool, setCurrentTool] = useState<string>();
+
+  useEffect(() => {
+    let alive = true;
+    // Seed history from disk, but only if the user hasn't already submitted a
+    // prompt this session (handles the async load racing a submit).
+    void loadPromptHistory().then((history) => {
+      if (alive && promptHistoryRef.current.length === 0) syncPromptHistory(history);
+    }).catch(() => { /* history is best-effort */ });
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     const onResize = (): void => setWidth(widthOf(stdout));
@@ -194,9 +222,24 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     resolve?.(ok);
   };
 
+  /** ↑ walks older prompts, ↓ walks newer; ↓ past the newest clears the input. */
+  const navigateHistory = (older: boolean): void => {
+    const history = promptHistoryRef.current;
+    if (history.length === 0) return;
+    const idx = historyIdxRef.current;
+    const next = older
+      ? (idx < 0 ? 0 : Math.min(idx + 1, history.length - 1))
+      : (idx <= 0 ? -1 : idx - 1);
+    historyIdxRef.current = next;
+    setEdit(next < 0 ? { value: '', cursor: 0 } : { value: history[next] ?? '', cursor: (history[next] ?? '').length });
+  };
+
+  /** Whether ↑/↓ should browse prompt history instead of moving the text caret. */
+  const browsingHistory = (): boolean => historyIdxRef.current >= 0 || edit.value === '';
+
   /** Apply a semantic key action, honoring the active overlay (approval, picker). */
   const applyAction = (action: KeyAction): void => {
-    if (approval && action.kind !== 'submit' && action.kind !== 'escape') return;
+    if (approval && action.kind !== 'submit' && action.kind !== 'escape' && action.kind !== 'ctrlC') return;
     if (pickerOpen && action.kind !== 'submit' && action.kind !== 'escape' && action.kind !== 'up' && action.kind !== 'down') return;
     switch (action.kind) {
       case 'submit':
@@ -211,10 +254,34 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
           return;
         }
         {
-          const attachMatch = /^\/attach\s+(.+)$/.exec(edit.value.trim());
-          const prompt = attachMatch ? '' : edit.value.trim();
+          const raw = edit.value.trim();
+          const attachMatch = /^\/attach\s+(.+)$/.exec(raw);
+          if (raw === '/help') {
+            setLines((current) => [...current,
+              { role: 'tool', text: '/help — show commands', toolName: 'commands' },
+              { role: 'tool', text: '/clear — start a fresh conversation', toolName: 'commands' },
+              { role: 'tool', text: '/attach <files> — attach files to the next message', toolName: 'commands' },
+              { role: 'tool', text: 'keys: Ctrl+O models · Ctrl+E mode · Ctrl+C cancel · ↑/↓ prompt history', toolName: 'commands' },
+            ]);
+            setEdit({ value: '', cursor: 0 }); historyIdxRef.current = -1;
+            return;
+          }
+          if (raw === '/clear') {
+            historyIdxRef.current = -1;
+            syncPromptHistory([]);
+            setLines([]);
+            void engine.clearHistory().catch(() => { /* /clear resets local state; persistence is best-effort */ });
+            setEdit({ value: '', cursor: 0 });
+            return;
+          }
+          const prompt = attachMatch ? '' : raw;
           if (busy || (!prompt && !attachMatch)) return;
           setEdit({ value: '', cursor: 0 }); setBusy(true); setError(undefined);
+          historyIdxRef.current = -1;
+          if (prompt) {
+            syncPromptHistory([prompt, ...promptHistoryRef.current.filter((entry) => entry !== prompt)].slice(0, 200));
+            void appendPromptHistory(prompt).catch(() => { /* best-effort */ });
+          }
           if (!attachMatch) setLines((current) => [...current, { role: 'user', text: prompt }]);
           void (async (): Promise<void> => {
             try {
@@ -234,16 +301,22 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
         if (approval) { approve(false); return; }
         if (pickerOpen) { setPickerOpen(false); return; }
         return;
-      case 'ctrlC': exit(); return;
+      case 'ctrlC':
+        // While a run is in flight, Ctrl+C cancels that run; when idle it quits.
+        if (busy) { engine.cancel(); return; }
+        exit();
+        return;
       case 'ctrlM': cycleMode(); return;
       case 'ctrlO': setPickerOpen(true); void loadPicker(); return;
       case 'ctrlE': cycleMode(); return;
       case 'up':
         if (pickerOpen) { setPickerIndex((current) => clamp(current - 1, 0, Math.max(0, pickerItems.length - 1))); return; }
+        if (!busy && promptHistoryRef.current.length > 0 && browsingHistory()) { navigateHistory(true); return; }
         setEdit((current) => ({ ...current, cursor: moveVerticalWrapped(current.value, current.cursor, -1, inputWidth) }));
         return;
       case 'down':
         if (pickerOpen) { setPickerIndex((current) => clamp(current + 1, 0, Math.max(0, pickerItems.length - 1))); return; }
+        if (!busy && browsingHistory()) { navigateHistory(false); return; }
         setEdit((current) => ({ ...current, cursor: moveVerticalWrapped(current.value, current.cursor, +1, inputWidth) }));
         return;
       case 'left': setEdit((current) => ({ ...current, cursor: moveHorizontal(current.value, current.cursor, -1) })); return;
@@ -280,6 +353,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     if (value === '\n') { applyAction({ kind: 'newline' }); return; }
     if (key.backspace) { applyAction({ kind: 'backspace' }); return; }
     if (key.escape) { applyAction({ kind: 'escape' }); return; }
+    if (!key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow) historyIdxRef.current = -1; // typing exits history recall
     if (key.upArrow) { applyAction({ kind: 'up' }); return; }
     if (key.downArrow) { applyAction({ kind: 'down' }); return; }
     if (key.leftArrow) { applyAction({ kind: 'left' }); return; }
@@ -385,6 +459,6 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
         : layoutEditor(edit.value, edit.cursor, inputWidth).lines.map((text, index) => <Text key={index} color="cyan">{index === 0 ? '› ' : '  '}{text}</Text>)}
     </Box>
     {kitty !== null && <Text dimColor>{kitty ? 'kitty protocol active — Shift+Enter makes a new line' : 'this terminal can\'t distinguish Shift+Enter from Enter — use Ctrl+J for a new line'}</Text>}
-    <Box justifyContent="space-between"><Text dimColor>Enter send · Shift+Enter / Ctrl+J new line · ←→↑↓ move · Ctrl+O models · Ctrl+{modeKey} mode · Ctrl+C quit</Text><Text dimColor>{hud.join(' · ')}</Text></Box>
+    <Box justifyContent="space-between"><Text dimColor>Enter send · Shift+Enter/Ctrl+J new line · Ctrl+O models · Ctrl+{modeKey} mode · ↑/↓ recall prompts · Ctrl+C cancel/quit · /help</Text><Text dimColor>{hud.join(' · ')}</Text></Box>
   </Box>;
 }
