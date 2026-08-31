@@ -24,8 +24,10 @@ function lineFromMessage(message: HarnessMessage): Line {
     default: return { role: 'tool', text: message.content, toolName: message.role }; // action / command
   }
 }
-interface Row { role: LineRole; segments: readonly MarkdownSegment[]; label: string; first: boolean; saved?: string }
-interface LiveIndices { think: number | null; answer: number | null }
+interface Row { key: string; role: LineRole; segments: readonly MarkdownSegment[]; label: string; first: boolean; saved?: string }
+type LiveRow =
+  | { key: string; kind: 'label'; role: 'thinking' | 'assistant' }
+  | { key: string; kind: 'content'; role: 'thinking' | 'assistant'; segments: readonly MarkdownSegment[] };
 interface PickerItem { id: string; group: 'combos' | 'auto'; strategy?: string }
 
 const MODE_SEQ: AgentMode[] = ['plan', 'build', 'research', 'crazy'];
@@ -89,10 +91,14 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const inputWidth = Math.max(16, width - 12);
   // Replay a resumed transcript (hydrated by the engine) into the chat area.
   const [lines, setLines] = useState<Line[]>(() => engine.state.messages.map(lineFromMessage));
+  const [scrollOffset, setScrollOffset] = useState(0);
+  const followTranscriptRef = useRef(true);
+  const previousRowCountRef = useRef(0);
+  const maxScrollRef = useRef(0);
+  const pageSizeRef = useRef(8);
   const promptHistoryRef = useRef<string[]>([]);
-  const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const historyIdxRef = useRef(-1);
-  const syncPromptHistory = (next: string[]): void => { promptHistoryRef.current = next; setPromptHistory(next); };
+  const syncPromptHistory = (next: string[]): void => { promptHistoryRef.current = next; };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -100,7 +106,6 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const [pickerIndex, setPickerIndex] = useState(0);
   const [pickerError, setPickerError] = useState<string>();
   const [mode, setMode] = useState<AgentMode>(engine.state.mode);
-  const liveRef = useRef<LiveIndices>({ think: null, answer: null });
   const [approval, setApproval] = useState<ApprovalAction | null>(null);
   const approvalResolve = useRef<((ok: boolean) => void) | null>(null);
 
@@ -160,6 +165,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
           break;
         case 'tool_result':
           setLines((current) => [...current, { role: 'tool', text: `  ${event.summary}`, toolName: 'result' }]);
+          setCurrentTool(undefined);
           break;
         case 'todos':
           setTaskQueue(event.todos);
@@ -182,6 +188,10 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       if (kittyTimer) clearTimeout(kittyTimer);
       stdin?.off('data', onKitty);
       stdout.off('resize', onResize);
+      const pendingApproval = approvalResolve.current;
+      approvalResolve.current = null;
+      pendingApproval?.(false);
+      engine.stop();
       unsubscribe();
       process.off('exit', onUnload);
       stdout.write(KITTY_POP);
@@ -237,6 +247,16 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   /** Whether ↑/↓ should browse prompt history instead of moving the text caret. */
   const browsingHistory = (): boolean => historyIdxRef.current >= 0 || edit.value === '';
 
+  /** Scroll by rendered transcript rows; positive values move toward older output. */
+  const scrollTranscript = (delta: number): void => {
+    if (delta > 0 && maxScrollRef.current > 0) followTranscriptRef.current = false;
+    setScrollOffset((current) => {
+      const next = clamp(current + delta, 0, maxScrollRef.current);
+      if (next === 0 && delta < 0) followTranscriptRef.current = true;
+      return next;
+    });
+  };
+
   /** Apply a semantic key action, honoring the active overlay (approval, picker). */
   const applyAction = (action: KeyAction): void => {
     if (approval && action.kind !== 'submit' && action.kind !== 'escape' && action.kind !== 'ctrlC') return;
@@ -261,13 +281,20 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
               { role: 'tool', text: '/help — show commands', toolName: 'commands' },
               { role: 'tool', text: '/clear — start a fresh conversation', toolName: 'commands' },
               { role: 'tool', text: '/attach <files> — attach files to the next message', toolName: 'commands' },
-              { role: 'tool', text: 'keys: Ctrl+O models · Ctrl+E mode · Ctrl+C cancel · ↑/↓ prompt history', toolName: 'commands' },
+              { role: 'tool', text: 'keys: Ctrl+O models · Ctrl+E mode · Ctrl+C cancel · PgUp/PgDn scroll · ↑/↓ prompt history', toolName: 'commands' },
             ]);
             setEdit({ value: '', cursor: 0 }); historyIdxRef.current = -1;
             return;
           }
           if (raw === '/clear') {
             historyIdxRef.current = -1;
+            followTranscriptRef.current = true;
+            setScrollOffset(0);
+            setTaskQueue([]);
+            setError(undefined);
+            setCurrentTool(undefined);
+            setLiveThink('');
+            setLiveAnswer('');
             syncPromptHistory([]);
             setLines([]);
             void engine.clearHistory().catch(() => { /* /clear resets local state; persistence is best-effort */ });
@@ -276,6 +303,8 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
           }
           const prompt = attachMatch ? '' : raw;
           if (busy || (!prompt && !attachMatch)) return;
+          followTranscriptRef.current = true;
+          setScrollOffset(0);
           setEdit({ value: '', cursor: 0 }); setBusy(true); setError(undefined);
           historyIdxRef.current = -1;
           if (prompt) {
@@ -293,6 +322,9 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
               setError(message); setLines((current) => [...current, { role: 'error', text: message }]);
             } finally {
               setBusy(false);
+              setCurrentTool(undefined);
+              setLiveThink('');
+              setLiveAnswer('');
             }
           })();
         }
@@ -348,6 +380,8 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       if (key.return) { applyAction({ kind: 'submit' }); return; }
       return;
     }
+    if (key.pageUp || (key.ctrl && value.toLowerCase() === 'u')) { scrollTranscript(pageSizeRef.current); return; }
+    if (key.pageDown || (key.ctrl && value.toLowerCase() === 'd')) { scrollTranscript(-pageSizeRef.current); return; }
     if (key.tab) { applyAction({ kind: 'tab' }); return; }
     if (key.return) { applyAction({ kind: 'submit' }); return; }
     if (value === '\n') { applyAction({ kind: 'newline' }); return; }
@@ -386,43 +420,116 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   if (metrics.fallback.attempts > 0) hud.push(`fb ${metrics.fallback.attempts}`);
   hud.push(`saved ${compression}`);
   const contentWidth = Math.max(20, width - 8);
-  const messageHeight = Math.max(4, (stdout.rows ?? 24) - 9);
-
-  const rows = useMemo<Row[]>(() => {
-    const out: Row[] = [];
-    for (const line of lines) {
-      const label = labelFor(line.role, line.model, line.toolName, engine.state.activeModel);
-      const markdown = line.role !== 'tool' && line.role !== 'error';
-      const wrapped: MarkdownSegment[][] = markdown
-        ? renderMarkdown(line.text, contentWidth)
-        : wrap(line.text, contentWidth).map((text) => [{ text }]);
-      wrapped.forEach((segments, index) => out.push({ role: line.role, segments, label, first: index === 0 }));
-      // A dim one-line savings note right under the assistant's answer.
-      if (line.saved) out.push({ role: 'assistant', segments: [{ text: line.saved }], label: '', first: false, saved: line.saved });
-    }
-    return out.slice(-messageHeight);
-  }, [lines, contentWidth, messageHeight]);
-
+  const terminalRows = stdout.rows ?? 24;
+  const editorLayout = useMemo(() => layoutEditor(edit.value, edit.cursor, inputWidth), [edit.value, edit.cursor, inputWidth]);
   const liveThinkLines = useMemo(() => renderMarkdown(liveThink, contentWidth), [liveThink, contentWidth]);
   const liveAnswerLines = useMemo(() => renderMarkdown(liveAnswer, contentWidth), [liveAnswer, contentWidth]);
+  const liveRows = useMemo<readonly LiveRow[]>(() => {
+    const rows: LiveRow[] = [];
+    if (liveThink !== '') {
+      rows.push({ key: 'live-think-label', kind: 'label', role: 'thinking' });
+      liveThinkLines.forEach((segments, index) => rows.push({ key: `live-think-${index}`, kind: 'content', role: 'thinking', segments }));
+    }
+    if (liveAnswer !== '') {
+      rows.push({ key: 'live-answer-label', kind: 'label', role: 'assistant' });
+      liveAnswerLines.forEach((segments, index) => rows.push({ key: `live-answer-${index}`, kind: 'content', role: 'assistant', segments }));
+    }
+    return rows;
+  }, [liveThink, liveAnswer, liveThinkLines, liveAnswerLines]);
 
-  return <Box flexDirection="column" width={width} height={stdout.rows ?? 24} paddingX={2}>
+  // Cache markdown/wrapping per Line object. Streaming updates create new live
+  // text, but completed historical lines retain their rendered rows.
+  const rowCacheRef = useRef<{ width: number; fallback: string; rows: WeakMap<Line, readonly Row[]> } | null>(null);
+  const allRows = useMemo<Row[]>(() => {
+    const fallback = engine.state.activeModel;
+    let cache = rowCacheRef.current;
+    if (cache === null || cache.width !== contentWidth || cache.fallback !== fallback) {
+      cache = { width: contentWidth, fallback, rows: new WeakMap<Line, readonly Row[]>() };
+      rowCacheRef.current = cache;
+    }
+    const out: Row[] = [];
+    lines.forEach((line, lineIndex) => {
+      let rendered = cache.rows.get(line);
+      if (rendered === undefined) {
+        const label = labelFor(line.role, line.model, line.toolName, fallback);
+        const markdown = line.role !== 'tool' && line.role !== 'error';
+        const wrapped: MarkdownSegment[][] = markdown
+          ? renderMarkdown(line.text, contentWidth)
+          : wrap(line.text, contentWidth).map((text) => [{ text }]);
+        const next: Row[] = [];
+        wrapped.forEach((segments, rowIndex) => next.push({ key: `message-${lineIndex}-${rowIndex}`, role: line.role, segments, label, first: rowIndex === 0 }));
+        if (line.saved) next.push({ key: `message-${lineIndex}-saved`, role: 'assistant', segments: [{ text: line.saved }], label: '', first: false, saved: line.saved });
+        rendered = next;
+        cache.rows.set(line, rendered);
+      }
+      out.push(...rendered);
+    });
+    return out;
+  }, [lines, contentWidth, engine.state.activeModel]);
+
+  const planRows = taskQueue.length > 0 ? 6 + Math.min(6, taskQueue.length) : 0;
+  const pickerGroups = new Set(pickerItems.map((item) => item.group)).size;
+  const pickerRows = pickerOpen ? 6 + pickerItems.length + pickerGroups + (pickerError || pickerItems.length === 0 ? 1 : 0) : 0;
+  const approvalRows = approval ? 8 : 0;
+  const inputRows = 3 + editorLayout.lines.length;
+  const footerRows = 3;
+  const chromeRows = 3 + footerRows + inputRows + (kitty !== null ? 1 : 0) + planRows + pickerRows + approvalRows;
+  const messageHeight = Math.max(3, terminalRows - chromeRows);
+  const statusRows = (engine.state.preview ? 1 : 0) + (busy ? 1 : 0);
+  const storedHeight = Math.max(0, messageHeight - Math.min(messageHeight, liveRows.length + statusRows));
+  const liveHeight = Math.max(0, messageHeight - storedHeight - statusRows);
+  const visibleLiveRows = liveHeight > 0 ? liveRows.slice(-liveHeight) : [];
+  const maxScroll = Math.max(0, allRows.length - storedHeight);
+  maxScrollRef.current = maxScroll;
+  pageSizeRef.current = Math.max(1, storedHeight - 2);
+  const boundedScroll = clamp(scrollOffset, 0, maxScroll);
+  const endRow = allRows.length - boundedScroll;
+  const startRow = Math.max(0, endRow - storedHeight);
+  const visibleRows = allRows.slice(startRow, endRow);
+  const hiddenAbove = startRow;
+  const hiddenBelow = boundedScroll;
+  const scrollStatus = allRows.length === 0
+    ? 'transcript empty'
+    : storedHeight === 0
+      ? `live output · ${allRows.length} transcript rows`
+      : hiddenBelow === 0
+        ? `showing rows ${startRow + 1}-${endRow} of ${allRows.length} · following latest`
+        : `showing rows ${startRow + 1}-${endRow} of ${allRows.length} · ${hiddenAbove} older · ${hiddenBelow} newer`;
+
+  useEffect(() => {
+    const previous = previousRowCountRef.current;
+    const added = allRows.length - previous;
+    previousRowCountRef.current = allRows.length;
+    if (previous === 0 || added <= 0) return;
+    if (followTranscriptRef.current) {
+      setScrollOffset(0);
+    } else {
+      setScrollOffset((current) => clamp(current + added, 0, maxScrollRef.current));
+    }
+  }, [allRows.length]);
+
+  useEffect(() => {
+    setScrollOffset((current) => clamp(current, 0, maxScroll));
+  }, [maxScroll]);
+
+  return <Box flexDirection="column" width={width} height={terminalRows} paddingX={2} overflow="hidden">
     <Box justifyContent="space-between" paddingY={1}>
       <Text bold color="cyan">OMNIHARNESS <Text dimColor>· {mode} mode</Text></Text>
       <Text dimColor>OMNIROUTE :20128</Text>
     </Box>
-    <Box flexDirection="column" flexGrow={1}>
+    <Box flexDirection="column" height={messageHeight} overflow="hidden">
       {lines.length === 0 && <Box flexDirection="column" marginTop={2}><Text color="cyan" bold>Ready when you are.</Text><Text dimColor>Describe the work. OmniHarness routes it through your OmniRoute account. Ctrl+{modeKey} cycles plan · build · research · crazy.</Text></Box>}
-      {rows.map((row, index) => row.saved
-        ? row.saved !== '' ? <Text key={index} dimColor>{row.saved}</Text> : null
+      {visibleRows.map((row, index) => row.saved
+        ? <Text key={row.key} dimColor>{row.saved}</Text>
         : row.first
-          ? <Box key={index} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
+          ? <Box key={row.key} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
               <Text color={colorFor(row.role)} bold>{row.label}</Text>
               <SegmentText segments={row.segments} role={row.role} />
             </Box>
-          : <SegmentText key={index} segments={row.segments} role={row.role} />)}
-      {liveThink !== '' && <Box flexDirection="column" marginTop={1}><Text color="yellow" bold>think</Text>{liveThinkLines.map((segments, index) => <SegmentText key={index} segments={segments} role="thinking" />)}</Box>}
-      {liveAnswer !== '' && <Box flexDirection="column" marginTop={1}><Text color="green" bold>{engine.state.activeModel}</Text>{liveAnswerLines.map((segments, index) => <SegmentText key={index} segments={segments} role="assistant" />)}</Box>}
+          : <SegmentText key={row.key} segments={row.segments} role={row.role} />)}
+      {visibleLiveRows.map((row) => row.kind === 'label'
+        ? <Text key={row.key} color={colorFor(row.role)} bold>{row.role === 'thinking' ? 'think' : engine.state.activeModel}</Text>
+        : <SegmentText key={row.key} segments={row.segments} role={row.role} />)}
       {engine.state.preview && <Text color="green" dimColor>preview live · {engine.state.preview.url}</Text>}
       {busy && <Text color="cyan"><Spinner type="dots" /> working in {mode} mode on {engine.state.activeModel}{currentTool ? ` · now ${currentTool}` : ''}</Text>}
     </Box>
@@ -456,9 +563,12 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     <Box borderStyle="round" borderColor={error ? 'red' : 'cyan'} paddingX={1} marginTop={1} flexDirection="column">
       {edit.value === ''
         ? <Text color="cyan">› <Text dimColor>type a task and press enter</Text></Text>
-        : layoutEditor(edit.value, edit.cursor, inputWidth).lines.map((text, index) => <Text key={index} color="cyan">{index === 0 ? '› ' : '  '}{text}</Text>)}
+        : editorLayout.lines.map((text, index) => <Text key={index} color="cyan">{index === 0 ? '› ' : '  '}{text}</Text>)}
     </Box>
     {kitty !== null && <Text dimColor>{kitty ? 'kitty protocol active — Shift+Enter makes a new line' : 'this terminal can\'t distinguish Shift+Enter from Enter — use Ctrl+J for a new line'}</Text>}
-    <Box justifyContent="space-between"><Text dimColor>Enter send · Shift+Enter/Ctrl+J new line · Ctrl+O models · Ctrl+{modeKey} mode · ↑/↓ recall prompts · Ctrl+C cancel/quit · /help</Text><Text dimColor>{hud.join(' · ')}</Text></Box>
+    <Box flexDirection="column">
+      <Box justifyContent="space-between"><Text dimColor>Enter send · Shift+Enter/Ctrl+J new line · PgUp/PgDn or Ctrl+U/D scroll · Ctrl+O models · Ctrl+{modeKey} mode · ↑/↓ recall · Ctrl+C cancel/quit · /help</Text><Text dimColor>{hud.join(' · ')}</Text></Box>
+      <Text dimColor>{clip(scrollStatus, contentWidth)}</Text>
+    </Box>
   </Box>;
 }

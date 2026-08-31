@@ -135,6 +135,121 @@ test('todos events render the visible plan panel with markers and progress', asy
   instance.unmount();
 });
 
+test('long transcripts stay bounded and page navigation reveals older output', async () => {
+  const stdin = new FakeStdin();
+  const stdout = new FakeStdout();
+  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  const engine = makeEngine();
+  engine.subscribe = (handler) => { listener = handler; return () => {}; };
+  stdout.rows = 16;
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const frame = (): string => stripAnsi(stdout.output);
+  await sleep(30);
+  for (let index = 0; index < 12; index += 1) {
+    listener!({ type: 'text', content: `answer-${index}`, model: 'test-model' });
+  }
+  await sleep(80);
+  const latest = frame();
+  assert.match(latest, /showing rows \d+-12 of 12 · following latest/);
+
+  stdin.write('\x15'); // Ctrl+U: page toward older transcript rows.
+  await sleep(80);
+  const older = frame();
+  assert.match(older, /older/);
+  assert.match(older, /answer-[0-9]/);
+
+  listener!({ type: 'text', content: 'answer-12', model: 'test-model' });
+  await sleep(80);
+  assert.match(frame(), /newer/); // new output stays below a user reading older rows
+
+  stdin.write('\x04'); // Ctrl+D: page toward the newest rows.
+  await sleep(80);
+  stdin.write('\x04');
+  await sleep(80);
+  assert.match(frame(), /following latest/);
+  instance.unmount();
+});
+
+test('clearing a scrolled transcript restores newest-output following', async () => {
+  const stdin = new FakeStdin();
+  const stdout = new FakeStdout();
+  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  let clearCalls = 0;
+  const engine = makeEngine();
+  engine.subscribe = (handler) => { listener = handler; return () => {}; };
+  engine.clearHistory = async () => { clearCalls += 1; };
+  stdout.rows = 16;
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  await sleep(350);
+  for (let index = 0; index < 12; index += 1) listener!({ type: 'text', content: `before-${index}`, model: 'test-model' });
+  listener!({ type: 'todos', todos: [{ id: 'stale', title: 'stale-plan', status: 'pending' }] });
+  await sleep(80);
+  stdin.write('\x15'); // scroll away from the newest rows
+  await sleep(60);
+  stdin.write('/clear');
+  await sleep(30);
+  stdin.write('\r');
+  await sleep(100);
+  assert.equal(clearCalls, 1);
+  for (let index = 0; index < 12; index += 1) listener!({ type: 'text', content: `after-${index}`, model: 'test-model' });
+  await sleep(100);
+  const recent = stripAnsi(stdout.output.slice(-1400));
+  assert.match(recent, /showing rows \d+-12 of 12 · following latest/);
+  assert.doesNotMatch(recent, /stale-plan/);
+  instance.unmount();
+});
+
+test('empty submit does not start a run', async () => {
+  const stdin = new FakeStdin();
+  const stdout = new FakeStdout();
+  let runs = 0;
+  const engine = makeEngine();
+  engine.run = async () => { runs += 1; return { content: '', model: 'test-model' }; };
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  await sleep(40);
+  stdin.write('\r');
+  await sleep(80);
+  assert.equal(runs, 0);
+  instance.unmount();
+});
+
+test('unmount denies a pending approval instead of leaving the run hanging', async () => {
+  const stdin = new FakeStdin();
+  const stdout = new FakeStdout();
+  let approvalHandler: Parameters<MastraEngine['setApprovalHandler']>[0] | undefined;
+  let stopCalls = 0;
+  const engine = makeEngine();
+  engine.stop = () => { stopCalls += 1; };
+  engine.setApprovalHandler = (handler) => { approvalHandler = handler; };
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  await sleep(40);
+  const pending = approvalHandler!({ tool: 'write_file', input: { path: 'a.txt' } });
+  await sleep(40);
+  instance.unmount();
+  const result = await Promise.race([pending, sleep(120).then(() => 'timeout' as const)]);
+  assert.equal(result, false);
+  assert.equal(stopCalls, 1);
+});
+
+test('long live responses keep their newest streamed rows visible', async () => {
+  const stdin = new FakeStdin();
+  const stdout = new FakeStdout();
+  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  const engine = makeEngine();
+  engine.subscribe = (handler) => { listener = handler; return () => {}; };
+  stdout.rows = 16;
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  await sleep(350);
+  listener!({ type: 'text', content: 'previous answer', model: 'test-model' });
+  await sleep(40);
+  for (let index = 0; index < 30; index += 1) listener!({ type: 'text_delta', delta: `token-${index}\\n` });
+  await sleep(100);
+  const recent = stripAnsi(stdout.output.slice(-3000));
+  assert.match(recent, /token-29/);
+  assert.match(recent, /live output · 1 transcript rows/);
+  instance.unmount();
+});
+
 test('current tool shows in the busy line during a run', async () => {
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
