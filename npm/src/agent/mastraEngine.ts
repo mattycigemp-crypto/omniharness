@@ -28,16 +28,34 @@ export type HarnessEvent =
   | { type: 'thinking_delta'; delta: string }
   | { type: 'text_delta'; delta: string }
   | { type: 'tool_start'; tool: string; input: unknown }
-  | { type: 'tool_result'; tool: string; summary: string }
+  | { type: 'tool_result'; tool: string; summary: string; detail?: string }
   | { type: 'approval_requested'; tool: string; input: Record<string, unknown> }
-  | { type: 'text'; content: string; model?: string; compression?: CompressionInfo }
+  // OmniRoute chose (or failed over to) a provider for the turn. `fallback` is
+  // true when the gateway retried past its first choice; `reason` is the
+  // gateway's failure note when it has one.
+  | { type: 'route'; provider?: string; fallback: boolean; attempts: number; reason?: string }
+  | { type: 'text'; content: string; model?: string; provider?: string; fallback?: boolean; compression?: CompressionInfo }
   | { type: 'preview'; url: string }
   | { type: 'attach'; name: string; kind: AttachmentInput['kind']; size: number }
   | { type: 'todos'; todos: readonly TodoItem[] };
 
+/** A trust scope the user can pick to skip future prompts for similar calls. */
+export interface ApprovalScope {
+  id: string;
+  label: string;
+}
+
 export interface ApprovalAction {
   tool: string;
   input: Record<string, unknown>;
+  /** Most specific first (exact command → prefix → whole tool). */
+  scopes: readonly ApprovalScope[];
+}
+
+export interface ApprovalResolution {
+  approved: boolean;
+  /** Scope id to remember so matching calls auto-approve for the rest of the session. */
+  trust?: string;
 }
 
 export interface MastraEngine {
@@ -49,7 +67,7 @@ export interface MastraEngine {
   subscribe(listener: (event: HarnessEvent) => void): () => void;
   selectModel(model: string): Promise<void>;
   attach(paths: readonly string[]): Promise<readonly AttachmentInput[]>;
-  setApprovalHandler(handler: (action: ApprovalAction) => Promise<boolean>): void;
+  setApprovalHandler(handler: (action: ApprovalAction) => Promise<ApprovalResolution>): void;
   run(prompt: string, signal?: AbortSignal): Promise<{ content: string; model: string }>;
   /** Abort the in-flight run; the turn ends with a 'cancelled' status. */
   cancel(): void;
@@ -107,7 +125,9 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
   const listeners = new Set<(event: HarnessEvent) => void>();
   let preview: PreviewServer | null = null;
   let previewChild: ChildProcess | null = null;
-  let approvalHandler: ((action: ApprovalAction) => Promise<boolean>) | null = null;
+  let approvalHandler: ((action: ApprovalAction) => Promise<ApprovalResolution>) | null = null;
+  // Session-scoped trust: scope ids the user chose to always allow.
+  const trustRules = new Set<string>();
   let pendingAttachments: readonly (AttachmentInput & { dataUrl?: string })[] = [];
   const semanticCache = await loadSemanticIndex(config.workspaceRoot);
   let activeRunController: AbortController | null = null;
@@ -325,6 +345,20 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
     previewChild = null;
   }
 
+  /** Trust scopes offered for a call, most specific first. */
+  function scopesFor(tool: string, input: Record<string, unknown>): ApprovalScope[] {
+    if (tool === 'run_command') {
+      const command = typeof input.command === 'string' ? input.command.trim() : '';
+      const base = command.split(/\s+/)[0] ?? '';
+      const scopes: ApprovalScope[] = [];
+      if (command) scopes.push({ id: `cmd:exact:${command}`, label: `always run exactly: ${command.slice(0, 48)}` });
+      if (base) scopes.push({ id: `cmd:base:${base}`, label: `always run: ${base} …` });
+      scopes.push({ id: 'tool:run_command', label: 'always run any command' });
+      return scopes;
+    }
+    return [{ id: `tool:${tool}`, label: `always allow: ${tool}` }];
+  }
+
   async function runTool(call: ToolCallRequest, signal?: AbortSignal): Promise<string> {
     const registered = systemTools[call.function.name];
     if (!registered) return `error: unknown tool ${call.function.name}`;
@@ -332,9 +366,14 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
     try { parsed = call.function.arguments ? JSON.parse(call.function.arguments) as Record<string, unknown> : {}; }
     catch { parsed = {}; }
     if (state.mode !== 'crazy' && approvalHandler && registered.highRisk) {
-      emit({ type: 'approval_requested', tool: call.function.name, input: parsed });
-      const approved = await approvalHandler({ tool: call.function.name, input: parsed });
-      if (!approved) return 'user denied this tool call';
+      const scopes = scopesFor(call.function.name, parsed);
+      const trusted = scopes.some((scope) => trustRules.has(scope.id));
+      if (!trusted) {
+        emit({ type: 'approval_requested', tool: call.function.name, input: parsed });
+        const decision = await approvalHandler({ tool: call.function.name, input: parsed, scopes });
+        if (decision.trust) trustRules.add(decision.trust);
+        if (!decision.approved) return 'user denied this tool call';
+      }
     }
     try { return await registered.execute(parsed, signal); }
     catch (reason: unknown) { return `error: ${reason instanceof Error ? reason.message : String(reason)}`; }
@@ -418,6 +457,17 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
       let toolCalls: ToolCallRequest[] = [];
       let compression: CompressionInfo | undefined;
 
+      // Surface OmniRoute's provider choice as a transcript event whenever it
+      // changes across a turn — a normal cross-provider route or a failover.
+      let lastRouteKey = '';
+      const emitRoute = (): void => {
+        const fb = client.snapshotMetrics().fallback;
+        const key = `${fb.activeProvider ?? ''}|${fb.attempts}`;
+        if (key === lastRouteKey || (fb.activeProvider === undefined && fb.attempts === 0)) return;
+        lastRouteKey = key;
+        emit({ type: 'route', provider: fb.activeProvider, fallback: fb.attempts > 0, attempts: fb.attempts, reason: fb.lastFailure });
+      };
+
       try { return await executeRound(); } catch (reason: unknown) {
         // An AbortError during streaming or a tool call is a user cancel, not a
         // failure: report it as a cancelled turn rather than an error.
@@ -445,6 +495,7 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
         });
         if (result.model) model = result.model;
         if (result.compression) compression = result.compression;
+        emitRoute();
       };
 
       await finishRound();
@@ -472,7 +523,7 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
           emit({ type: 'tool_start', tool: call.function.name, input: undefined });
           const output = await runTool(call, runSignal);
           const summary = output.split('\n')[0] ?? '';
-          emit({ type: 'tool_result', tool: call.function.name, summary });
+          emit({ type: 'tool_result', tool: call.function.name, summary, detail: output.slice(0, 2000) });
           results.push({ call, output });
           wire.push({ role: 'tool', tool_call_id: call.id, content: truncate(output) });
           executedAny = true;
@@ -492,6 +543,7 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
         });
         if (next.model) model = next.model;
         if (next.compression) compression = next.compression;
+        emitRoute();
       }
 
       state.taskStatus = 'completed';
@@ -512,7 +564,8 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
         const tool = result.call.function.name;
         state.messages = [...state.messages, { role: 'tool', content: result.output.slice(0, 500), toolName: tool, createdAt: new Date().toISOString() }];
       }
-      emit({ type: 'text', content: answer, model, compression });
+      const routeFb = client.snapshotMetrics().fallback;
+      emit({ type: 'text', content: answer, model, provider: routeFb.activeProvider, fallback: routeFb.attempts > 0, compression });
       state.messages = [...state.messages, { role: 'assistant', content: answer, model, createdAt: new Date().toISOString() }];
       try {
         await saveSession(state.workspace.root, {

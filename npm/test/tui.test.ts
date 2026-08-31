@@ -223,11 +223,12 @@ test('unmount denies a pending approval instead of leaving the run hanging', asy
   engine.setApprovalHandler = (handler) => { approvalHandler = handler; };
   const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
   await sleep(40);
-  const pending = approvalHandler!({ tool: 'write_file', input: { path: 'a.txt' } });
+  const pending = approvalHandler!({ tool: 'write_file', input: { path: 'a.txt' }, scopes: [] });
   await sleep(40);
   instance.unmount();
   const result = await Promise.race([pending, sleep(120).then(() => 'timeout' as const)]);
-  assert.equal(result, false);
+  assert.notEqual(result, 'timeout');
+  assert.equal((result as { approved: boolean }).approved, false);
   assert.equal(stopCalls, 1);
 });
 
@@ -318,9 +319,8 @@ test('tool calls render as cards and Ctrl+T expands a file-edit trail', async ()
   listener!({ type: 'tool_start', tool: 'write_file', input: { path: 'src/a.ts', content: '+line-added\n-line-removed' } });
   await sleep(80);
   let text = stripAnsi(stdout.output);
-  // Card renders one line with the tool name and target, without the raw content.
-  assert.match(text, /write_file/);
-  assert.match(text, /src\/a\.ts/);
+  // Card renders one line with the tool verb and target, without the raw content.
+  assert.match(text, /edit · src\/a\.ts/);
   assert.doesNotMatch(text, /line-added/); // raw streamed content stays collapsed
   // Ctrl+T expands the most recent card, revealing the diff.
   stdin.write('\x14'); // Ctrl+T (0x14)
@@ -334,5 +334,52 @@ test('tool calls render as cards and Ctrl+T expands a file-edit trail', async ()
   stdin.write('\x14');
   await sleep(80);
   assert.doesNotMatch(stripAnsi(stdout.output), /line-added/);
+  instance.unmount();
+});
+
+test('a prompt typed during a run is queued and fires when the run ends', async () => {
+  const stdin = new FakeStdin();
+  const stdout = new FakeStdout();
+  const engine = makeEngine();
+  const calls: string[] = [];
+  let release: (() => void) | undefined;
+  engine.run = (prompt: string) => {
+    calls.push(prompt);
+    return new Promise((resolve) => { release = () => resolve({ content: '', model: 'test-model' }); });
+  };
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  await sleep(40);
+  stdin.write('first');
+  await sleep(50); stdin.write('\r');
+  await sleep(80);
+  assert.deepEqual(calls, ['first']);
+  // Second prompt arrives mid-run: it must be held, not dropped or run now.
+  stdin.write('second');
+  await sleep(50); stdin.write('\r');
+  await sleep(60);
+  assert.deepEqual(calls, ['first']);
+  assert.match(stripAnsi(stdout.output), /queued · second/);
+  release!();
+  await sleep(120);
+  assert.deepEqual(calls, ['first', 'second']);
+  instance.unmount();
+});
+
+test('/find reports a match count and route events show the provider on the reply label', async () => {
+  const stdin = new FakeStdin();
+  const stdout = new FakeStdout();
+  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  const engine = makeEngine();
+  engine.subscribe = (handler) => { listener = handler; return () => {}; };
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  await sleep(40);
+  listener!({ type: 'text', content: 'the widget is wired', model: 'sonnet', provider: 'openrouter', fallback: true });
+  await sleep(60);
+  let text = stripAnsi(stdout.output);
+  assert.match(text, /via openrouter \(failover\)/);
+  stdin.write('/find widget');
+  await sleep(50); stdin.write('\r');
+  await sleep(80);
+  assert.match(stripAnsi(stdout.output), /find "widget" · 1 match/);
   instance.unmount();
 });
