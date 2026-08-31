@@ -32,6 +32,7 @@ export type KeyAction =
   | { kind: 'end' }
   | { kind: 'escape' }
   | { kind: 'tab' }
+  | { kind: 'shiftTab' }
   | { kind: 'ctrlC' }
   | { kind: 'ctrlM' }
   | { kind: 'ctrlO' }
@@ -70,7 +71,9 @@ export function parseRawKey(chunk: string): KeyAction | null {
     case 'F': case '[F': case 'OF': case '[4~': case '[8~': return { kind: 'end' };
     case '[3~': return { kind: 'delete' };
     case '[27u': return { kind: 'escape' };
-    case '[9u': case '[9;2u': case '[9;5u': return { kind: 'tab' };
+    case '[Z': return { kind: 'shiftTab' }; // legacy back-tab (CBT)
+    case '[9;2u': return { kind: 'shiftTab' }; // kitty Shift+Tab
+    case '[9u': case '[9;5u': return { kind: 'tab' };
   }
 
   // Kitty protocol: CSI keycode ; modifier u.

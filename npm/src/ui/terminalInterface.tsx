@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Static, Text, useApp, useInput, useStdin, useStdout } from 'ink';
 import Spinner from 'ink-spinner';
 import type { MastraEngine, HarnessEvent, ApprovalAction, ApprovalResolution } from '../agent/mastraEngine.js';
-import type { AgentMode, HarnessMessage, TodoItem } from '../types/index.js';
+import type { AgentMode, HarnessMessage, PermissionMode, TodoItem } from '../types/index.js';
 import { appendPromptHistory, loadPromptHistory } from '../promptHistory.js';
 import { listSessions, loadSnapshot, saveSnapshot, deleteSnapshot } from '../sessionList.js';
 import { deleteAt, deleteBefore, insertAt, layoutEditor, lineEndAt, lineStartAt, moveHorizontal, moveVerticalWrapped, normalizePaste } from './editor.js';
@@ -103,6 +103,11 @@ function lineFromMessage(message: HarnessMessage): Line {
 
 const MODE_SEQ: AgentMode[] = ['plan', 'build', 'research', 'crazy'];
 
+const PERM_SEQ: PermissionMode[] = ['ask', 'acceptEdits', 'bypass'];
+const PERM_LABEL: Record<PermissionMode, string> = { ask: 'manual', acceptEdits: 'accept edits', bypass: 'bypass' };
+const PERM_GLYPH: Record<PermissionMode, string> = { ask: '○', acceptEdits: '◐', bypass: '●' };
+const PERM_COLOR = (p: PermissionMode): string => (p === 'bypass' ? PALETTE.error : p === 'acceptEdits' ? PALETTE.warn : PALETTE.muted);
+
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 const widthOf = (stdout: NodeJS.WriteStream): number => Math.max(48, stdout.columns ?? 80);
 const clip = (text: string, width: number): string => text.length <= width ? text : `${text.slice(0, Math.max(0, width - 1))}…`;
@@ -197,7 +202,7 @@ function TranscriptEntry({ line, width, fallbackModel }: { line: Line; width: nu
 }
 
 /** Branded splash shown until the first prompt. */
-function Hero({ width, endpoint, model, mode }: { width: number; endpoint: string; model: string; mode: AgentMode }): React.ReactElement {
+function Hero({ width, endpoint, model, mode, perm }: { width: number; endpoint: string; model: string; mode: AgentMode; perm: PermissionMode }): React.ReactElement {
   return <Box flexDirection="column" borderStyle="round" borderColor={PALETTE.accent} paddingX={2} paddingY={1} marginBottom={1} width={Math.min(width, 76)}>
     <Text bold color={PALETTE.accent}>◇ OMNIHARNESS</Text>
     <Text dimColor>the OmniRoute-native agent harness</Text>
@@ -205,6 +210,7 @@ function Hero({ width, endpoint, model, mode }: { width: number; endpoint: strin
       <Text><Text dimColor>gateway  </Text>{endpoint}</Text>
       <Text><Text dimColor>model    </Text>{model}</Text>
       <Text><Text dimColor>mode     </Text><Text color={MODE_ACCENT[mode]}>{mode}</Text><Text dimColor>  ·  Ctrl+E cycles plan · build · research · crazy</Text></Text>
+      <Text><Text dimColor>perms    </Text><Text color={mode === 'crazy' ? PALETTE.error : PERM_COLOR(perm)}>{mode === 'crazy' ? 'bypass' : PERM_LABEL[perm]}</Text><Text dimColor>  ·  Shift+Tab cycles manual · accept edits · bypass</Text></Text>
     </Box>
     <Box marginTop={1}><Text dimColor>describe the work and press enter · /help for commands</Text></Box>
   </Box>;
@@ -231,6 +237,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const [pickerIndex, setPickerIndex] = useState(0);
   const [pickerError, setPickerError] = useState<string>();
   const [mode, setMode] = useState<AgentMode>(engine.state.mode);
+  const [permMode, setPermMode] = useState<PermissionMode>(engine.state.permissionMode ?? 'ask');
   const [approval, setApproval] = useState<ApprovalAction | null>(null);
   const approvalResolve = useRef<((decision: ApprovalResolution) => void) | null>(null);
 
@@ -399,6 +406,14 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     pushTool(`mode → ${next}`, 'mode');
   };
 
+  /** Shift+Tab cycles how tool approvals are handled (manual → accept edits → bypass). */
+  const cyclePerm = (): void => {
+    const next = PERM_SEQ[(PERM_SEQ.indexOf(permMode) + 1) % PERM_SEQ.length]!;
+    setPermMode(next);
+    engine.state.permissionMode = next;
+    pushTool(`permissions → ${PERM_LABEL[next]}${mode === 'crazy' ? ' (crazy mode still bypasses)' : ''}`, 'permissions');
+  };
+
   const approve = (approved: boolean, trust?: string): void => {
     const resolve = approvalResolve.current;
     setApproval(null); approvalResolve.current = null;
@@ -492,7 +507,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     '/attach <files> — attach files to the next message',
     '/find <text> — list transcript lines containing <text>',
     '/chapters — list the turns in this session',
-    'keys: Ctrl+O models · Ctrl+E mode · Ctrl+T tool card · Ctrl+Y copy reply · Ctrl+L layout · Ctrl+C cancel/quit · ↑/↓ history',
+    'keys: Ctrl+O models · Ctrl+E mode · Shift+Tab permissions (manual · accept edits · bypass) · Ctrl+T tool card · Ctrl+Y copy reply · Ctrl+L layout · Ctrl+C cancel/quit · ↑/↓ history',
     'history scrolls in your terminal · a prompt typed mid-run is queued and sent when the run ends',
   ];
 
@@ -620,6 +635,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
         exit();
         return;
       case 'ctrlM': cycleMode(); return;
+      case 'shiftTab': cyclePerm(); return;
       case 'ctrlO': setPickerOpen(true); void loadPicker(); return;
       case 'ctrlE': cycleMode(); return;
       case 'up':
@@ -679,6 +695,9 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       setExpandedTool((current) => (latest && current === latest.id) ? undefined : (latest ? latest.id : undefined));
       return;
     }
+    // Shift+Tab is owned by the raw-stdin listener (parseRawKey handles ESC[Z and
+    // kitty ESC[9;2u); swallow it here so it never lands as a literal tab.
+    if (key.tab && key.shift) return;
     if (key.tab) { applyAction({ kind: 'tab' }); return; }
     if (key.return) { applyAction({ kind: 'submit' }); return; }
     if (value === '\n') { applyAction({ kind: 'newline' }); return; }
@@ -754,7 +773,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     </Static>
 
     <Box flexDirection="column">
-      {lines.length === 0 && !busy && <Hero width={width} endpoint={engine.client.endpoint ?? 'omniroute'} model={engine.state.activeModel} mode={mode} />}
+      {lines.length === 0 && !busy && <Hero width={width} endpoint={engine.client.endpoint ?? 'omniroute'} model={engine.state.activeModel} mode={mode} perm={permMode} />}
 
       {liveThink !== '' && <Box flexDirection="column" marginTop={1}>
         <Text bold color={PALETTE.warn}>· thinking</Text>
@@ -856,13 +875,16 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
         <Box justifyContent="space-between">
           <Text color={busy ? modeAccent : PALETTE.muted}>{busy && <Spinner type="dots" />}{busy ? ' ' : ''}{phase}{elapsed ? ` · ${elapsed}` : ''}{agents.length > 0 ? ` · swarm ${doneAgents}/${agents.length}` : ''}</Text>
           <Text color={PALETTE.muted}>
-            <Text color={modeAccent}>{mode}</Text> · {engine.state.activeModel}
+            <Text color={modeAccent}>{mode}</Text>
+            <Text> · </Text>
+            <Text color={mode === 'crazy' ? PALETTE.error : PERM_COLOR(permMode)}>{PERM_GLYPH[mode === 'crazy' ? 'bypass' : permMode]} {mode === 'crazy' ? 'bypass' : PERM_LABEL[permMode]}</Text>
+            <Text> · {engine.state.activeModel}</Text>
             {metrics.fallback.activeProvider ? <Text> · via {metrics.fallback.activeProvider}</Text> : null}
             {contextLabel ? <Text color={meterColor}> · {contextLabel}</Text> : null}
           </Text>
         </Box>
         <Box justifyContent="space-between">
-          <Text dimColor>Enter send · Ctrl+J newline · Ctrl+O models · Ctrl+{modeKey} mode · Ctrl+T tool · Ctrl+Y copy · Ctrl+C {busy ? 'cancel' : 'quit'} · /help</Text>
+          <Text dimColor>Enter send · Ctrl+J newline · Ctrl+O models · Ctrl+{modeKey} mode · Shift+Tab perms · Ctrl+T tool · Ctrl+Y copy · Ctrl+C {busy ? 'cancel' : 'quit'} · /help</Text>
           {compression ? <Text dimColor>saved {compression}{metrics.remainingQuota !== undefined ? ` · quota ${metrics.remainingQuota}` : ''}</Text> : null}
         </Box>
       </Box>

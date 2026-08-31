@@ -13,7 +13,7 @@ Route once, run anywhere — plan, build, research, or turn a swarm loose.
 
 <br/>
 
-<img src=".github/assets/omniharness-hero.svg" alt="OmniHarness terminal — a CRAZY-mode run fanned across three parallel worker lanes" width="720" style="max-width:100%"/>
+<img src=".github/assets/omniharness-demo.svg" alt="OmniHarness terminal — typing a task, planning it, and fanning it out across three parallel worker lanes" width="720" style="max-width:100%"/>
 
 </div>
 
@@ -55,6 +55,8 @@ Cycle with **`Ctrl+E`**. Each reshapes the system frame and what the agent may t
 | **build** | Implement with minimal changes; a mandatory read → change → verify discipline | full | prompts on writes & commands |
 | **research** | Answer with evidence from the workspace | read-only | — |
 | **crazy** | Fully autonomous. Auto-approves every call, keeps its own todo queue, and once a plan has ≥ 2 independent steps **fans them out across parallel worker agents** | full | auto |
+
+**`Shift+Tab`** cycles a permission mode that is independent of the working mode — **manual** (ask before every write & command), **accept edits** (auto-approve file edits, still ask for commands), **bypass** (auto-approve everything). Crazy mode always runs as bypass.
 
 ## The terminal
 

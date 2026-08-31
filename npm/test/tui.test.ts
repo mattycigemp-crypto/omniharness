@@ -46,6 +46,7 @@ function makeEngine(): MastraEngine {
       taskStatus: 'idle',
       prompt: '',
       mode: 'plan',
+      permissionMode: 'ask',
       activeModel: 'test-model',
       workspace: { root: '', indexedAt: null, files: [], contextLocked: false },
       metrics: {
