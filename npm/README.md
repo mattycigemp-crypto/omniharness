@@ -11,8 +11,15 @@ npm install -g omniharness-cli
 omniharness            # launch the TUI in the current working directory
 ```
 
-`omniharness update` self-updates to the latest release; `omniharness --version`
-prints the installed version. Everything else happens inside the TUI.
+| Command | |
+|---|---|
+| `omniharness` | launch the interactive TUI |
+| `omniharness doctor` | check the gateway connection + auth, safely (key is masked) |
+| `omniharness models` | list the routing catalog — combos, `auto/*`, providers |
+| `omniharness update` | self-update to the latest npm release |
+| `omniharness --version` / `--help` | version / usage |
+
+Everything else happens inside the TUI.
 
 ## Connect to OmniRoute
 
