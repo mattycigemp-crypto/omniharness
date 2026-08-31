@@ -7,6 +7,8 @@
  * to a column width. Unclosed constructs degrade to plain text.
  */
 
+import { highlightCode } from './highlight.js';
+
 export interface MarkdownSegment {
   text: string;
   bold?: boolean;
@@ -186,14 +188,13 @@ export function renderMarkdown(text: string, width: number): MarkdownSegment[][]
   let i = 0;
   while (i < src.length) {
     const line = src[i];
-    if (/^```/.test(line)) {
+    const fence = /^```\s*([A-Za-z0-9_+-]*)\s*$/.exec(line);
+    if (fence) {
       const code: string[] = [];
       i += 1;
       while (i < src.length && !/^```/.test(src[i])) { code.push(src[i]); i += 1; }
       i += 1; // skip closing fence
-      for (const codeLine of code) {
-        for (const sliced of hardSlice(codeLine, width)) out.push([{ text: sliced, color: 'cyan' }]);
-      }
+      out.push(...highlightCode(code, fence[1] === '' ? undefined : fence[1], width));
       continue;
     }
     if (/^\s*$/.test(line)) { i += 1; continue; }

@@ -68,7 +68,7 @@ test('approval gate denies a risky write when the handler rejects it', async () 
   try {
     const engine = await createMastraEngine({ workspaceRoot: os.tmpdir(), endpoint: live.url });
     engine.subscribe((event) => emitted.push(event));
-    engine.setApprovalHandler(async (action) => action.tool === 'write_file' ? false : true);
+    engine.setApprovalHandler(async (action) => ({ approved: action.tool !== 'write_file' }));
     const result = await engine.run('write a file');
     assert.equal(result.content, 'refused');
     assert.ok(emitted.some((e) => e.type === 'approval_requested' && e.tool === 'write_file'));
@@ -86,9 +86,31 @@ test('approval gate approves a risky write and the file is created', async () =>
   const live = chatServer(() => responses.shift() ?? stop);
   try {
     const engine = await createMastraEngine({ workspaceRoot: workspace, endpoint: live.url });
-    engine.setApprovalHandler(async () => true);
+    engine.setApprovalHandler(async () => ({ approved: true }));
     await engine.run('create made.txt');
     assert.equal(await fs.readFile(path.join(workspace, 'made.txt'), 'utf8'), 'data');
+  } finally { live.close(); await fs.rm(workspace, { recursive: true, force: true }); }
+});
+
+test('a chosen trust scope auto-approves later matching calls without re-prompting', async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'oh-trust-'));
+  const responses = [
+    { choices: [{ finish_reason: 'tool_calls', message: { content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'one.txt', content: '1' }) } }] } }] },
+    { choices: [{ finish_reason: 'tool_calls', message: { content: '', tool_calls: [{ id: 'c2', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'two.txt', content: '2' }) } }] } }] },
+    { choices: [{ finish_reason: 'stop', message: { content: 'done' } }] },
+  ];
+  const live = chatServer(() => responses.shift() ?? stop);
+  try {
+    const engine = await createMastraEngine({ workspaceRoot: workspace, endpoint: live.url });
+    let prompts = 0;
+    engine.setApprovalHandler(async (action) => {
+      prompts += 1;
+      return { approved: true, trust: action.scopes[0]?.id };
+    });
+    await engine.run('write two files');
+    assert.equal(prompts, 1, 'handler prompted once; the trust scope covered the second call');
+    assert.equal(await fs.readFile(path.join(workspace, 'one.txt'), 'utf8'), '1');
+    assert.equal(await fs.readFile(path.join(workspace, 'two.txt'), 'utf8'), '2');
   } finally { live.close(); await fs.rm(workspace, { recursive: true, force: true }); }
 });
 
