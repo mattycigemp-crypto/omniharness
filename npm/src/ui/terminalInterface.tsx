@@ -313,8 +313,10 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
           break;
         case 'agent':
           setAgents((current) => {
+            const prev = current.find((lane) => lane.id === event.id);
             const next = current.filter((lane) => lane.id !== event.id);
-            next.push({ id: event.id, label: event.label, status: event.status, note: event.note });
+            // Keep the last meaningful note when a status-only update carries none.
+            next.push({ id: event.id, label: event.label, status: event.status, note: event.note ?? prev?.note });
             return next.sort((a, b) => a.id.localeCompare(b.id));
           });
           break;
@@ -436,7 +438,11 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
         // CRAZY mode: once a plan exists, fan the rest of it out across parallel workers.
         if (engine.state.mode === 'crazy' && typeof engine.runSwarm === 'function') {
           const pending = engine.state.taskQueue.filter((item) => item.status === 'pending').length;
-          if (pending >= 2) await engine.runSwarm({ maxAgents: 3 });
+          if (pending >= 2) {
+            setToolCards([]); // the planning turn's cards give way to the swarm rail
+            setExpandedTool(undefined);
+            await engine.runSwarm({ maxAgents: 3 });
+          }
         }
       } catch (reason: unknown) {
         const message = reason instanceof Error ? reason.message : String(reason);
@@ -779,7 +785,8 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
         {agents.map((lane, index) => {
           const color = AGENT_COLORS[index % AGENT_COLORS.length];
           const glyph = lane.status === 'done' ? '✓' : lane.status === 'error' ? '✕' : lane.status === 'working' ? '◍' : '○';
-          return <Text key={lane.id} color={color}>{glyph} {lane.id} <Text dimColor>{clip(lane.note ?? lane.label, Math.max(12, contentWidth - 8))}</Text></Text>;
+          const detail = lane.note ?? (lane.label !== lane.id ? lane.label : lane.status);
+          return <Text key={lane.id} color={color}>{glyph} {lane.id}  <Text dimColor>{clip(detail, Math.max(12, contentWidth - 8))}</Text></Text>;
         })}
       </Box>}
 
