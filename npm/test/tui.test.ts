@@ -130,12 +130,12 @@ test('todos events render the visible plan panel with markers and progress', asy
   assert.match(text, /plan/);
   assert.match(text, /1\/3 done/);
   assert.match(text, /✓ read the file/);
-  assert.match(text, /▸ fix the bug/);
+  assert.match(text, /◈ fix the bug/);
   assert.match(text, /○ run tests/);
   instance.unmount();
 });
 
-test('long transcripts stay bounded and page navigation reveals older output', async () => {
+test('settled replies flow into the static transcript', async () => {
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
   let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
@@ -143,34 +143,18 @@ test('long transcripts stay bounded and page navigation reveals older output', a
   engine.subscribe = (handler) => { listener = handler; return () => {}; };
   stdout.rows = 16;
   const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
-  const frame = (): string => stripAnsi(stdout.output);
   await sleep(30);
-  for (let index = 0; index < 12; index += 1) {
-    listener!({ type: 'text', content: `answer-${index}`, model: 'test-model' });
-  }
+  for (let index = 0; index < 6; index += 1) listener!({ type: 'text', content: `answer-${index}`, model: 'test-model' });
   await sleep(80);
-  const latest = frame();
-  assert.match(latest, /showing rows \d+-12 of 12 · following latest/);
-
-  stdin.write('\x15'); // Ctrl+U: page toward older transcript rows.
-  await sleep(80);
-  const older = frame();
-  assert.match(older, /older/);
-  assert.match(older, /answer-[0-9]/);
-
-  listener!({ type: 'text', content: 'answer-12', model: 'test-model' });
-  await sleep(80);
-  assert.match(frame(), /newer/); // new output stays below a user reading older rows
-
-  stdin.write('\x04'); // Ctrl+D: page toward the newest rows.
-  await sleep(80);
-  stdin.write('\x04');
-  await sleep(80);
-  assert.match(frame(), /following latest/);
+  const text = stripAnsi(stdout.output);
+  // Every settled reply is written once into scrollback (Static) — earliest and latest present.
+  assert.match(text, /answer-0/);
+  assert.match(text, /answer-5/);
+  assert.match(text, /◆ test-model/);
   instance.unmount();
 });
 
-test('clearing a scrolled transcript restores newest-output following', async () => {
+test('/clear resets the plan and history and calls the engine', async () => {
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
   let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
@@ -178,24 +162,22 @@ test('clearing a scrolled transcript restores newest-output following', async ()
   const engine = makeEngine();
   engine.subscribe = (handler) => { listener = handler; return () => {}; };
   engine.clearHistory = async () => { clearCalls += 1; };
-  stdout.rows = 16;
   const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
-  await sleep(350);
-  for (let index = 0; index < 12; index += 1) listener!({ type: 'text', content: `before-${index}`, model: 'test-model' });
+  await sleep(120);
   listener!({ type: 'todos', todos: [{ id: 'stale', title: 'stale-plan', status: 'pending' }] });
-  await sleep(80);
-  stdin.write('\x15'); // scroll away from the newest rows
   await sleep(60);
+  assert.match(stripAnsi(stdout.output), /stale-plan/);
   stdin.write('/clear');
   await sleep(30);
   stdin.write('\r');
-  await sleep(100);
+  await sleep(120);
   assert.equal(clearCalls, 1);
-  for (let index = 0; index < 12; index += 1) listener!({ type: 'text', content: `after-${index}`, model: 'test-model' });
-  await sleep(100);
-  const recent = stripAnsi(stdout.output.slice(-1400));
-  assert.match(recent, /showing rows \d+-12 of 12 · following latest/);
-  assert.doesNotMatch(recent, /stale-plan/);
+  stdout.output = '';
+  listener!({ type: 'text', content: 'fresh-answer', model: 'test-model' });
+  await sleep(80);
+  const recent = stripAnsi(stdout.output);
+  assert.match(recent, /fresh-answer/);
+  assert.doesNotMatch(recent, /stale-plan/); // the plan panel cleared
   instance.unmount();
 });
 
@@ -243,11 +225,13 @@ test('long live responses keep their newest streamed rows visible', async () => 
   await sleep(350);
   listener!({ type: 'text', content: 'previous answer', model: 'test-model' });
   await sleep(40);
-  for (let index = 0; index < 30; index += 1) listener!({ type: 'text_delta', delta: `token-${index}\\n` });
-  await sleep(100);
+  // Blank lines make each token its own paragraph → 40 rendered rows of live answer.
+  for (let index = 0; index < 40; index += 1) listener!({ type: 'text_delta', delta: `row-${index}\n\n` });
+  await sleep(120);
   const recent = stripAnsi(stdout.output.slice(-3000));
-  assert.match(recent, /token-29/);
-  assert.match(recent, /live output · 1 transcript rows/);
+  // The streaming answer region shows its newest rows (tail), capped to the live budget.
+  assert.match(recent, /row-39/);
+  assert.doesNotMatch(recent, /row-0\b/); // earliest rows scrolled out of the live window
   instance.unmount();
 });
 
@@ -270,10 +254,11 @@ test('current tool shows in the busy line during a run', async () => {
   let text = '';
   for (let i = 0; i < 30; i += 1) {
     text = stripAnsi(stdout.output);
-    if (/now read_file/.test(text)) break;
+    if (/reading files/.test(text)) break;
     await sleep(20);
   }
-  assert.match(text, /now read_file/);
+  assert.match(text, /reading files/); // statusline phase label follows the active tool
+  assert.match(text, /◍ read/); // live tool card
   instance.unmount();
 });
 
@@ -320,14 +305,14 @@ test('tool calls render as cards and Ctrl+T expands a file-edit trail', async ()
   await sleep(80);
   let text = stripAnsi(stdout.output);
   // Card renders one line with the tool verb and target, without the raw content.
-  assert.match(text, /edit · src\/a\.ts/);
+  assert.match(text, /edit src\/a\.ts/);
   assert.doesNotMatch(text, /line-added/); // raw streamed content stays collapsed
   // Ctrl+T expands the most recent card, revealing the diff.
   stdin.write('\x14'); // Ctrl+T (0x14)
   await sleep(80);
   text = stripAnsi(stdout.output);
   assert.match(text, /line-added/);
-  assert.match(text, /Ctrl\+T to collapse/);
+  assert.match(text, /Ctrl\+T collapse/);
   // Collapse again and verify the diff is gone from the current frame. The fake
   // stdout accumulates every frame, so clear it before checking the new state.
   stdout.output = '';
@@ -381,5 +366,25 @@ test('/find reports a match count and route events show the provider on the repl
   await sleep(50); stdin.write('\r');
   await sleep(80);
   assert.match(stripAnsi(stdout.output), /find "widget" · 1 match/);
+  instance.unmount();
+});
+
+test('the swarm rail renders one lane per agent event with progress', async () => {
+  const stdin = new FakeStdin();
+  const stdout = new FakeStdout();
+  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  const engine = makeEngine();
+  engine.subscribe = (handler) => { listener = handler; return () => {}; };
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  await sleep(40);
+  listener!({ type: 'agent', id: 'A1', label: 'wire retry', status: 'working', note: 'wire retry backoff' });
+  listener!({ type: 'agent', id: 'A2', label: 'add tests', status: 'working', note: 'add coverage' });
+  listener!({ type: 'agent', id: 'A1', label: 'wire retry', status: 'done' });
+  await sleep(80);
+  const text = stripAnsi(stdout.output);
+  assert.match(text, /swarm/);
+  assert.match(text, /1\/2 lanes done/);
+  assert.match(text, /✓ A1/);
+  assert.match(text, /◍ A2/);
   instance.unmount();
 });
