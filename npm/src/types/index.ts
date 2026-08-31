@@ -4,6 +4,15 @@ export type ToolRisk = 'low' | 'medium' | 'high' | 'critical';
 /** High-level working modes that shape the system prompt and allowed skills. */
 export type AgentMode = 'plan' | 'build' | 'research' | 'crazy';
 
+/**
+ * How tool approvals are handled, independent of the working mode:
+ *   - ask         prompt before every high-risk tool call (default)
+ *   - acceptEdits  auto-approve file edits; still prompt for commands/previews
+ *   - bypass       auto-approve everything
+ * CRAZY mode always behaves as `bypass` regardless of this setting.
+ */
+export type PermissionMode = 'ask' | 'acceptEdits' | 'bypass';
+
 /** A step in the agent's visible task queue. */
 export interface TodoItem {
   id: string;
@@ -106,6 +115,7 @@ export interface HarnessState {
   taskStatus: TaskStatus;
   prompt: string;
   mode: AgentMode;
+  permissionMode: PermissionMode;
   workspace: WorkspaceState;
   metrics: OmniRouteMetrics;
   activeModel: string;

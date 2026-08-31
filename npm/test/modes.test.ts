@@ -107,6 +107,44 @@ test('crazy mode: high-risk tools are auto-approved (handler never consulted)', 
   } finally { live.close(); await fs.rm(ws, { recursive: true, force: true }); }
 });
 
+// --- 2b. permission mode is an axis independent of the working mode -------
+
+function writeThenRunThenStop(): Envelope[] {
+  return [
+    { choices: [{ finish_reason: 'tool_calls', message: { content: '', tool_calls: [{ index: 0, id: 'w1', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'edit.txt', content: 'x' }) } }] } }] },
+    { choices: [{ finish_reason: 'tool_calls', message: { content: '', tool_calls: [{ index: 0, id: 'r1', type: 'function', function: { name: 'run_command', arguments: JSON.stringify({ command: 'echo hi' }) } }] } }] },
+    { choices: [{ finish_reason: 'stop', message: { content: 'done' } }] },
+  ];
+}
+
+test('permissionMode "acceptEdits": file edits are waived, commands still prompt', async () => {
+  const ws = await fs.mkdtemp(path.join(os.tmpdir(), 'oh-perm-edits-'));
+  const responses = writeThenRunThenStop();
+  const live = chatServer(() => responses.shift() ?? { choices: [{ finish_reason: 'stop', message: { content: 'ok' } }] });
+  try {
+    const engine = await createMastraEngine({ workspaceRoot: ws, endpoint: live.url, mode: 'build', permissionMode: 'acceptEdits', shellAllowed: true });
+    const gated: string[] = [];
+    engine.setApprovalHandler(async (a) => { gated.push(a.tool); return { approved: false }; });
+    await engine.run('edit then run');
+    assert.deepEqual(gated, ['run_command'], 'only the command hit the gate');
+    assert.equal(await fs.readFile(path.join(ws, 'edit.txt'), 'utf8'), 'x', 'the edit was auto-approved');
+  } finally { live.close(); await fs.rm(ws, { recursive: true, force: true }); }
+});
+
+test('permissionMode "bypass": nothing hits the approval gate', async () => {
+  const ws = await fs.mkdtemp(path.join(os.tmpdir(), 'oh-perm-bypass-'));
+  const responses = writeThenRunThenStop();
+  const live = chatServer(() => responses.shift() ?? { choices: [{ finish_reason: 'stop', message: { content: 'ok' } }] });
+  try {
+    const engine = await createMastraEngine({ workspaceRoot: ws, endpoint: live.url, mode: 'build', permissionMode: 'bypass', shellAllowed: true });
+    let prompted = 0;
+    engine.setApprovalHandler(async () => { prompted += 1; return { approved: false }; });
+    await engine.run('edit then run');
+    assert.equal(prompted, 0);
+    assert.equal(await fs.readFile(path.join(ws, 'edit.txt'), 'utf8'), 'x');
+  } finally { live.close(); await fs.rm(ws, { recursive: true, force: true }); }
+});
+
 // --- 3. the swarm fan-out is crazy-only from the UI ------------------------
 
 class FakeStdin extends PassThrough {
@@ -129,7 +167,7 @@ function fakeEngine(mode: AgentMode, onRunSwarm: () => void): MastraEngine {
     client: { listCombos: async () => [], endpoint: 'omniroute', snapshotMetrics: () => ({ compression: { inputTokens: 0, compressedTokens: 0, ratio: 1, strategy: 'none', updatedAt: '' }, fallback: { attempts: 0 }, requestCount: 0 }) },
     skills: [], tools: {},
     state: {
-      taskStatus: 'idle', prompt: '', mode, activeModel: 'test-model',
+      taskStatus: 'idle', prompt: '', mode, permissionMode: 'ask', activeModel: 'test-model',
       workspace: { root: '', indexedAt: null, files: [], contextLocked: false },
       metrics: { compression: { inputTokens: 0, compressedTokens: 0, ratio: 1, strategy: 'none', updatedAt: '' }, fallback: { attempts: 0 }, requestCount: 0 },
       messages: [], preview: null,
@@ -197,5 +235,21 @@ test('Ctrl+E cycles the visible mode plan → build → research → crazy → p
     seen.push(expected);
   }
   assert.deepEqual(seen, ['build', 'research', 'crazy', 'plan']);
+  instance.unmount();
+});
+
+test('Shift+Tab cycles the permission mode manual → accept edits → bypass → manual', async () => {
+  const engine = fakeEngine('build', () => {});
+  (engine.state as { taskQueue: unknown[] }).taskQueue = [];
+  const stdin = new FakeStdin();
+  const stdout = new FakeStdout();
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  await sleep(40);
+  for (const expected of ['accept edits', 'bypass', 'manual']) {
+    stdin.write('\x1b[Z'); // back-tab (Shift+Tab)
+    await sleep(60);
+    assert.match(strip(stdout.output), new RegExp(`permissions → ${expected}`), `cycled to ${expected}`);
+  }
+  assert.equal((engine.state as { permissionMode: string }).permissionMode, 'ask', 'engine state came full circle');
   instance.unmount();
 });

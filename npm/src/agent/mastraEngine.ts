@@ -5,7 +5,7 @@ import type { LanguageModelV1 } from '@ai-sdk/provider';
 import { attachmentBlock, kindFromName, type AttachmentInput } from '../attachments.js';
 import { OmniRouteClient, type ChatTool, type CompressionInfo, type McpToolDescriptor } from '../config/omniRoute.js';
 import { saveActiveCombo } from '../config/settings.js';
-import type { AgentMode, ChatContentPart, ChatWireMessage, HarnessMessage, HarnessState, PreviewServer, TodoAction, TodoItem, TodoSnapshot, ToolCallRequest, ToolCallResult } from '../types/index.js';
+import type { AgentMode, ChatContentPart, ChatWireMessage, HarnessMessage, HarnessState, PermissionMode, PreviewServer, TodoAction, TodoItem, TodoSnapshot, ToolCallRequest, ToolCallResult } from '../types/index.js';
 import { createSystemTools, type SystemTools } from '../tools/systemTools.js';
 import { loadSkills, renderSkillCommand, skillSchema, type Skill } from '../skills.js';
 import { chunkText, cosineSimilarity, type IndexedChunk } from '../search.js';
@@ -21,6 +21,7 @@ export interface MastraEngineConfig {
   /** OmniRoute management token: when set, OmniRoute MCP tools are discovered and exposed to the agent. */
   mgmtToken?: string;
   shellAllowed?: boolean;
+  permissionMode?: PermissionMode;
 }
 
 export type HarnessEvent =
@@ -141,7 +142,7 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
   let activeRunController: AbortController | null = null;
 
   const state: HarnessState = {
-    taskStatus: 'idle', prompt: '', mode: config.mode ?? 'build', activeModel,
+    taskStatus: 'idle', prompt: '', mode: config.mode ?? 'build', permissionMode: config.permissionMode ?? 'ask', activeModel,
     workspace: { root: config.workspaceRoot, indexedAt: null, files: [], contextLocked: false },
     metrics: client.snapshotMetrics(), messages: [], preview: null, taskQueue: [],
   };
@@ -373,7 +374,11 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
     let parsed: Record<string, unknown> = {};
     try { parsed = call.function.arguments ? JSON.parse(call.function.arguments) as Record<string, unknown> : {}; }
     catch { parsed = {}; }
-    if (state.mode !== 'crazy' && approvalHandler && registered.highRisk) {
+    // CRAZY mode always bypasses; otherwise the permission mode decides.
+    // `acceptEdits` waves file edits through but still gates commands/previews.
+    const effectivePerm: PermissionMode = state.mode === 'crazy' ? 'bypass' : state.permissionMode;
+    const editWaived = effectivePerm === 'acceptEdits' && call.function.name === 'write_file';
+    if (effectivePerm !== 'bypass' && !editWaived && approvalHandler && registered.highRisk) {
       const scopes = scopesFor(call.function.name, parsed);
       const trusted = scopes.some((scope) => trustRules.has(scope.id));
       if (!trusted) {
