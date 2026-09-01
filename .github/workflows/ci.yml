@@ -1,0 +1,43 @@
+name: CI
+
+# Runs on every pull request into main. These two checks (`go`, `npm`) are the
+# required status checks for the protected main branch, so a PR cannot merge
+# until both pass. The release workflow (publish.yml) re-runs the same suites on
+# push to main before publishing.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.27"
+      - run: go vet ./...
+      - run: go test ./...
+
+  npm:
+    name: npm
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: npm
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: npm/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
