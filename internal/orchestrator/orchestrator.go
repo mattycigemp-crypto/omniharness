@@ -100,6 +100,19 @@ func (o *Orchestrator) taskEvent(t *task.Task, p event.Payload) {
 	o.deps.Bus.Publish(e)
 }
 
+// agentEvent publishes an event the orchestrator raises on an agent's behalf,
+// carrying that agent's id. Agent.publish stamps the id on the agent's own
+// events, but the lifecycle events are raised out here — so without this they
+// arrived with an empty AgentID and rendered as "agent[] failed", which in a
+// run with several agents does not say which one.
+func (o *Orchestrator) agentEvent(t *task.Task, agentID string, p event.Payload) {
+	e := event.New(p)
+	e.SessionID = t.SessionID
+	e.TaskID = t.ID
+	e.AgentID = agentID
+	o.deps.Bus.Publish(e)
+}
+
 // Run executes a task from its spec. If taskID is non-empty the existing task
 // record is reused (resume path); otherwise a new task is created.
 func (o *Orchestrator) Run(ctx context.Context, sessionID string, spec task.Spec, taskID string) (*task.Task, error) {
@@ -396,10 +409,10 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task.Task, role agent.Ro
 	}
 	ag := agent.New(deps, t.SessionID, t.ID, role, modelRef, spec, t.Profile)
 	if err := ag.Run(ctx); err != nil {
-		o.taskEvent(t, &event.AgentFailedData{Role: string(role), Status: task.StatusFailed, Model: ag.Model, Error: err.Error()})
+		o.agentEvent(t, ag.ID, &event.AgentFailedData{Role: string(role), Status: task.StatusFailed, Model: ag.Model, Error: err.Error()})
 		return ag, err
 	}
-	o.taskEvent(t, &event.AgentCompletedData{Role: string(role), Status: task.StatusCompleted, Model: ag.Model,
+	o.agentEvent(t, ag.ID, &event.AgentCompletedData{Role: string(role), Status: task.StatusCompleted, Model: ag.Model,
 		Tokens: ag.TokensIn + ag.TokensOut, CostUSD: ag.CostUSD, Latency: ag.Latency})
 	for _, p := range ag.ArtifactPaths() {
 		artifacts.Store(p, true)
