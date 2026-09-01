@@ -452,6 +452,32 @@ footer{
 .foot-links a:hover{color:var(--ink);text-decoration:none}
 .foot-r{font-size:.72rem;color:var(--muted);text-align:right}
 
+/* ── Activity feed ──────────────────────────────── */
+#activity{border-top:1px solid var(--hairline);background:var(--ground)}
+.act-inner{max-width:1100px;margin:0 auto;padding:4rem 2rem}
+.act-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.4rem;flex-wrap:wrap;gap:.7rem}
+.act-title{font-family:var(--font-mono);font-size:.8rem;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+.act-live{display:flex;align-items:center;gap:.45rem;font-family:var(--font-mono);font-size:.65rem;color:var(--muted)}
+.act-dot{width:6px;height:6px;border-radius:50%;background:var(--success);animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.commit-list{display:flex;flex-direction:column;gap:0;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden}
+.commit-row{
+  display:grid;grid-template-columns:5.2rem 1fr auto;align-items:baseline;gap:.7rem;
+  padding:.6rem 1rem;background:var(--surface);border-bottom:1px solid var(--hairline);
+  transition:background .15s;font-family:var(--font-mono);font-size:.75rem;
+}
+.commit-row:last-child{border-bottom:none}
+.commit-row:hover{background:var(--surface-raised)}
+.c-sha{color:var(--accent);font-size:.67rem;flex-shrink:0}
+.c-msg{color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.c-msg a{color:inherit;text-decoration:none}
+.c-msg a:hover{color:var(--accent)}
+.c-meta{color:var(--muted);font-size:.67rem;white-space:nowrap;text-align:right}
+.commit-skeleton{height:37px;background:linear-gradient(90deg,var(--surface) 25%,var(--surface-raised) 50%,var(--surface) 75%);background-size:200% 100%;animation:shimmer 1.4s infinite}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.act-gh-link{font-family:var(--font-mono);font-size:.68rem;color:var(--muted);text-decoration:none;transition:color .2s;margin-top:.8rem;display:inline-block}
+.act-gh-link:hover{color:var(--accent);text-decoration:none}
+
 /* ── Mobile ─────────────────────────────────────── */
 @media(max-width:768px){
   nav{padding:.65rem 1rem}
@@ -831,6 +857,23 @@ footer{
   </div>
 </div>
 
+<!-- ── Activity feed ──────────────────────────────── -->
+<div id="activity">
+  <div class="act-inner">
+    <div class="act-hd">
+      <span class="act-title">Latest commits</span>
+      <span class="act-live"><span class="act-dot"></span>live · updates every 60s</span>
+    </div>
+    <div class="commit-list" id="commit-list">
+      <div class="commit-skeleton"></div>
+      <div class="commit-skeleton" style="opacity:.7"></div>
+      <div class="commit-skeleton" style="opacity:.45"></div>
+      <div class="commit-skeleton" style="opacity:.25"></div>
+    </div>
+    <a href="https://github.com/shipking-ai/omniharness/commits/main" class="act-gh-link" target="_blank" rel="noopener">→ full history on GitHub ↗</a>
+  </div>
+</div>
+
 <!-- ── Footer ─────────────────────────────────────── -->
 <footer>
   <div class="foot-brand">OmniHarness</div>
@@ -1106,6 +1149,44 @@ function type(){
     setTimeout(()=>{tOut.style.display='block';},400);
   }
 }
+
+// ── Live commit feed ──────────────────────────
+const REPO='shipking-ai/omniharness';
+const commitList=document.getElementById('commit-list');
+
+function timeAgo(iso){
+  const s=Math.floor((Date.now()-new Date(iso))/1000);
+  if(s<60) return `${s}s ago`;
+  if(s<3600) return `${Math.floor(s/60)}m ago`;
+  if(s<86400) return `${Math.floor(s/3600)}h ago`;
+  return `${Math.floor(s/86400)}d ago`;
+}
+
+async function fetchCommits(){
+  try{
+    const r=await fetch(`https://api.github.com/repos/${REPO}/commits?per_page=8`,{
+      headers:{'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'}
+    });
+    if(!r.ok) throw new Error(r.status);
+    const commits=await r.json();
+    commitList.innerHTML=commits.map(c=>{
+      const sha=c.sha.slice(0,7);
+      const msg=(c.commit.message.split('\n')[0]||'').slice(0,90);
+      const author=c.commit.author?.name||'';
+      const when=timeAgo(c.commit.author?.date||c.commit.committer?.date);
+      const url=c.html_url;
+      return `<div class="commit-row">
+        <span class="c-sha"><a href="${url}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">${sha}</a></span>
+        <span class="c-msg"><a href="${url}" target="_blank" rel="noopener">${msg}</a></span>
+        <span class="c-meta">${author} · ${when}</span>
+      </div>`;
+    }).join('');
+  } catch{
+    commitList.innerHTML=`<div class="commit-row"><span class="c-msg" style="color:var(--muted)">could not reach GitHub API — <a href="https://github.com/${REPO}/commits/main" target="_blank" rel="noopener">view on GitHub ↗</a></span></div>`;
+  }
+}
+fetchCommits();
+setInterval(fetchCommits,60000);
 
 // ── Hero parallax layers on scroll ───────────
 const hEyebrow=document.querySelector('.hero-eyebrow');

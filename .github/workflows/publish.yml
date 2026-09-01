@@ -7,8 +7,10 @@ name: Publish
 #
 # One-time setup (npmjs.com, owner-only):
 #   Package settings (omniharness-cli) -> Settings -> Trusted publishing
-#   -> GitHub Actions -> user "mattycigemp-crypto", repo "omniharness",
+#   -> GitHub Actions -> user "shipking-ai", repo "omniharness",
 #   workflow filename "publish.yml", allowed action "npm publish".
+# NOTE: repo moved from mattycigemp-crypto → shipking-ai; update the npm
+# trusted publishing entry to match or publishes will 404.
 on:
   push:
     branches: [main]
