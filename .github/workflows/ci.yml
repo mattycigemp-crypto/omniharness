@@ -23,6 +23,9 @@ jobs:
   go:
     name: go
     runs-on: ubuntu-latest
+    # A hung job otherwise sits until the 6-hour default and burns the runner
+    # minutes for it. Both suites finish in about a minute; ten is generous.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - name: Set up Go
@@ -48,6 +51,7 @@ jobs:
   npm:
     name: npm
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: npm
