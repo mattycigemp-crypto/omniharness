@@ -422,3 +422,47 @@ func containsType(types []event.Type, want event.Type) bool {
 	}
 	return false
 }
+
+// The agent lifecycle events are raised by the orchestrator rather than by the
+// agent itself, so they were arriving with an empty envelope AgentID and the
+// CLI rendered them as "agent[] failed" — no way to tell which agent, which is
+// the whole point of the field in a run with several of them.
+func TestAgentLifecycleEventsCarryTheAgentID(t *testing.T) {
+	dir := t.TempDir()
+	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "done"})
+	o, _, bus := newOrchestrator(t, fake, dir)
+
+	ch, cancel := bus.Subscribe(256)
+	defer cancel()
+
+	ctx, c2 := context.WithTimeout(context.Background(), 30*time.Second)
+	defer c2()
+	tsk, err := o.Run(ctx, "s1", task.Spec{Prompt: "Fix the typo in README.md.", CWD: dir}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seen := 0
+	deadline := time.After(3 * time.Second)
+drain:
+	for {
+		select {
+		case e := <-ch:
+			switch e.Type {
+			case event.AgentCompleted, event.AgentFailed:
+				seen++
+				if e.AgentID == "" {
+					t.Fatalf("%s event has an empty AgentID", e.Type)
+				}
+			}
+			if e.Type == event.TaskCompleted && e.TaskID == tsk.ID {
+				break drain
+			}
+		case <-deadline:
+			break drain
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no agent lifecycle event observed")
+	}
+}
