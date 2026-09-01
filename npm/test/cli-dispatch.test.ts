@@ -58,3 +58,14 @@ test('the documented commands still work', async () => {
   assert.equal(doctor.code, 1, 'doctor must exit non-zero when the gateway is down');
   assert.match(doctor.stdout, /FAILED/);
 });
+
+test('a failed models lookup says what to check, not just "fetch failed"', async () => {
+  // clig.dev: an error should tell the user what to do about it. "fetch failed"
+  // alone gave no hint that the gateway was unreachable or where it was tried.
+  const result = await cli('models');
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /omniharness models:/);
+  assert.match(result.stderr, /endpoint: http:\/\/127\.0\.0\.1:1/, 'names the endpoint it tried');
+  assert.match(result.stderr, /OMNIROUTE_URL/, 'names the variable to check');
+  assert.match(result.stderr, /omniharness doctor/, 'points at the fuller diagnostic');
+});
