@@ -1,0 +1,1092 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-brand="omniharness">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OmniHarness — The agent harness built for OmniRoute</title>
+<meta name="description" content="Route once, run anywhere. Plan, build, research, or turn a parallel swarm loose. The agent harness built for OmniRoute.">
+<meta property="og:title" content="OmniHarness — Route once. Run anywhere.">
+<meta property="og:description" content="The agent harness built for OmniRoute. Four modes, a parallel swarm rail, and a premium terminal UI.">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#0e1016">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,900;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ── Reset ──────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+img,video,svg{max-width:100%;display:block}
+button{cursor:pointer;font-family:inherit}
+
+/* ── Dark tokens (default) ──────────────────────── */
+:root{
+  --ground:#0e1016;
+  --surface:#14171f;
+  --surface-raised:#1a1e28;
+  --hairline:#262b38;
+  --ink:#c8cdd9;
+  --muted:#8b93a7;
+  --accent:#2dd4bf;
+  --info:#56b6ff;
+  --success:#8fd66f;
+  --warn:#e6b955;
+  --error:#f2637e;
+  --font-sans:'Inter',system-ui,sans-serif;
+  --font-mono:'JetBrains Mono','Fira Code',monospace;
+  --radius:8px;
+  --radius-sm:4px;
+  --radius-lg:16px;
+  --glow-accent:0 0 28px rgba(45,212,191,.22);
+  --glow-error:0 0 28px rgba(242,99,126,.22);
+  --glow-info:0 0 28px rgba(86,182,255,.2);
+  --glow-success:0 0 28px rgba(143,214,111,.2);
+  --nav-bg:rgba(14,16,22,.82);
+}
+
+/* ── Light tokens ───────────────────────────────── */
+[data-theme=light]{
+  --ground:#f2f5fb;
+  --surface:#ffffff;
+  --surface-raised:#e8ecf5;
+  --hairline:#ced4e6;
+  --ink:#1a1e2d;
+  --muted:#5c6479;
+  --accent:#0d9488;
+  --info:#0a7ea4;
+  --success:#2f6e1c;
+  --warn:#8a5c0a;
+  --error:#b52040;
+  --glow-accent:0 0 24px rgba(13,148,136,.14);
+  --glow-error:0 0 24px rgba(181,32,64,.12);
+  --nav-bg:rgba(242,245,251,.88);
+}
+
+/* ── OmniRoute brand shift ──────────────────────── */
+[data-brand=omniroute]{
+  --accent:#7c6af7;
+  --glow-accent:0 0 28px rgba(124,106,247,.25);
+}
+
+/* ── Body ───────────────────────────────────────── */
+body{
+  font-family:var(--font-sans);
+  background:var(--ground);
+  color:var(--ink);
+  line-height:1.65;
+  overflow-x:hidden;
+  transition:background .3s,color .3s;
+}
+
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code,pre{font-family:var(--font-mono)}
+
+/* ── Scroll progress ────────────────────────────── */
+#prog{
+  position:fixed;top:0;left:0;height:2px;width:0;
+  background:linear-gradient(90deg,var(--accent),var(--info));
+  z-index:200;transition:width .08s linear;
+}
+
+/* ── Nav ────────────────────────────────────────── */
+nav{
+  position:fixed;top:0;left:0;right:0;z-index:100;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:.7rem 2rem;
+  background:var(--nav-bg);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border-bottom:1px solid var(--hairline);
+}
+.nav-brand{display:flex;align-items:center;gap:.5rem}
+.wordmark{
+  font-family:var(--font-mono);font-size:1.05rem;font-weight:600;
+  color:var(--accent);letter-spacing:-.3px;text-decoration:none!important;
+}
+.ver-badge{
+  font-family:var(--font-mono);font-size:.62rem;color:var(--muted);
+  background:var(--surface);border:1px solid var(--hairline);
+  border-radius:999px;padding:.12rem .48rem;
+}
+.nav-links{display:flex;align-items:center;gap:1.5rem}
+.nav-links a{color:var(--muted);font-size:.85rem;font-weight:500;transition:color .2s}
+.nav-links a:hover{color:var(--ink);text-decoration:none}
+.nav-actions{display:flex;align-items:center;gap:.6rem}
+.icon-btn{
+  background:none;border:1px solid var(--hairline);border-radius:var(--radius-sm);
+  color:var(--muted);padding:.3rem .55rem;font-size:.72rem;font-family:var(--font-mono);
+  transition:color .2s,border-color .2s,background .2s;white-space:nowrap;
+}
+.icon-btn:hover{color:var(--ink);border-color:var(--accent);background:rgba(45,212,191,.06)}
+.icon-btn.active{color:var(--accent);border-color:var(--accent)}
+.cta-nav{
+  background:var(--accent);color:#0e1016!important;border:none;
+  border-radius:var(--radius-sm);padding:.38rem .95rem;
+  font-size:.85rem;font-weight:700;transition:opacity .2s,box-shadow .2s;
+  text-decoration:none!important;
+}
+.cta-nav:hover{opacity:.9;box-shadow:var(--glow-accent)}
+
+/* ── Hero ───────────────────────────────────────── */
+#hero{
+  position:relative;min-height:100svh;
+  display:flex;align-items:center;justify-content:center;
+  padding:7rem 2rem 5rem;overflow:hidden;
+}
+#bg-canvas{position:absolute;inset:0;z-index:0;pointer-events:none}
+.hero-content{
+  position:relative;z-index:1;text-align:center;
+  max-width:880px;margin:0 auto;
+}
+.hero-eyebrow{
+  font-family:var(--font-mono);font-size:.72rem;color:var(--accent);
+  text-transform:uppercase;letter-spacing:.14em;margin-bottom:1.4rem;
+  display:flex;align-items:center;justify-content:center;gap:.8rem;
+}
+.hero-eyebrow::before,.hero-eyebrow::after{
+  content:'';display:block;height:1px;width:36px;
+  background:var(--accent);opacity:.4;
+}
+h1{
+  font-size:clamp(2.6rem,7vw,5.4rem);font-weight:900;line-height:1.04;
+  letter-spacing:-.035em;margin-bottom:1.2rem;
+  background:linear-gradient(140deg,var(--ink) 35%,var(--accent) 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+}
+.hero-sub{
+  font-size:1.15rem;color:var(--muted);max-width:500px;
+  margin:0 auto 2.4rem;line-height:1.72;
+}
+.hero-ctas{
+  display:flex;align-items:center;justify-content:center;
+  gap:.9rem;flex-wrap:wrap;margin-bottom:2.8rem;
+}
+.cta-primary{
+  display:inline-flex;align-items:center;gap:.55rem;
+  background:var(--accent);color:#0e1016;border:none;
+  border-radius:var(--radius);padding:.72rem 1.4rem;
+  font-family:var(--font-mono);font-size:.92rem;font-weight:600;
+  transition:box-shadow .2s,transform .15s;
+}
+.cta-primary:hover{box-shadow:var(--glow-accent);transform:translateY(-1px)}
+.cta-primary .ci{opacity:.65;font-size:.8em}
+.cta-secondary{
+  display:inline-flex;align-items:center;gap:.4rem;
+  color:var(--muted);border:1px solid var(--hairline);
+  border-radius:var(--radius);padding:.72rem 1.4rem;
+  font-size:.92rem;font-weight:500;
+  transition:color .2s,border-color .2s;text-decoration:none!important;
+}
+.cta-secondary:hover{color:var(--ink);border-color:var(--muted)}
+.hero-demo{
+  border-radius:var(--radius-lg);overflow:hidden;
+  border:1px solid var(--hairline);
+  box-shadow:0 32px 96px rgba(0,0,0,.55),var(--glow-accent);
+  max-width:720px;margin:0 auto 1.8rem;background:var(--surface);
+}
+.hero-demo img{width:100%;height:auto}
+.hero-meta{
+  font-family:var(--font-mono);font-size:.68rem;color:var(--muted);
+  display:flex;align-items:center;justify-content:center;gap:1.25rem;flex-wrap:wrap;
+}
+.hero-meta span{display:flex;align-items:center;gap:.3rem}
+
+/* ── Section wrapper ────────────────────────────── */
+.section-inner{max-width:1100px;margin:0 auto;padding:6rem 2rem}
+
+/* Full-bleed sections (own bg) */
+.full-bleed{background:var(--surface);border-top:1px solid var(--hairline)}
+.full-bleed + .full-bleed{border-top:none}
+
+.section-label{
+  font-family:var(--font-mono);font-size:.68rem;color:var(--accent);
+  text-transform:uppercase;letter-spacing:.16em;margin-bottom:.7rem;
+}
+h2{
+  font-size:clamp(1.7rem,3.8vw,2.8rem);font-weight:800;
+  letter-spacing:-.025em;line-height:1.12;margin-bottom:1rem;
+}
+.section-lead{
+  font-size:1.05rem;color:var(--muted);max-width:580px;
+  line-height:1.72;margin-bottom:2.8rem;
+}
+
+/* ── Scroll reveal ──────────────────────────────── */
+.reveal{opacity:0;transform:translateY(22px);transition:opacity .55s ease,transform .55s ease}
+.reveal.vis{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none}}
+
+/* ── Why ────────────────────────────────────────── */
+.arch-pre{
+  font-family:var(--font-mono);font-size:.74rem;color:var(--muted);
+  background:var(--surface);border:1px solid var(--hairline);
+  border-radius:var(--radius);padding:1.4rem 1.8rem;line-height:1.85;
+  overflow-x:auto;white-space:pre;
+}
+.arch-pre .h{color:var(--accent)}
+.arch-pre .d{color:var(--hairline)}
+
+/* ── Modes grid ─────────────────────────────────── */
+.modes-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:1rem;margin-bottom:1.25rem}
+.mode-card{
+  background:var(--surface);border:1px solid var(--hairline);
+  border-radius:var(--radius);padding:1.5rem;
+  transition:border-color .2s,box-shadow .2s,transform .2s;
+}
+.mode-card:hover{transform:translateY(-2px)}
+.mode-card[data-m=plan]:hover{border-color:var(--info);box-shadow:var(--glow-info)}
+.mode-card[data-m=build]:hover{border-color:var(--success);box-shadow:var(--glow-success)}
+.mode-card[data-m=research]:hover{border-color:var(--accent);box-shadow:var(--glow-accent)}
+.mode-card[data-m=crazy]:hover{border-color:var(--error);box-shadow:var(--glow-error)}
+.mode-hd{display:flex;align-items:center;gap:.7rem;margin-bottom:.9rem}
+.mode-glyph{font-family:var(--font-mono);font-size:1.15rem}
+.mode-name{font-family:var(--font-mono);font-size:.88rem;font-weight:600}
+[data-m=plan] .mode-glyph,[data-m=plan] .mode-name{color:var(--info)}
+[data-m=build] .mode-glyph,[data-m=build] .mode-name{color:var(--success)}
+[data-m=research] .mode-glyph,[data-m=research] .mode-name{color:var(--accent)}
+[data-m=crazy] .mode-glyph,[data-m=crazy] .mode-name{color:var(--error)}
+.mode-desc{font-size:.855rem;color:var(--muted);line-height:1.6}
+.mode-key{
+  display:inline-flex;align-items:center;gap:.4rem;margin-top:1rem;
+  font-family:var(--font-mono);font-size:.68rem;color:var(--muted);
+}
+kbd{
+  background:var(--surface-raised);border:1px solid var(--hairline);
+  border-radius:3px;padding:.1rem .38rem;font-family:var(--font-mono);font-size:.8em;
+}
+.perm-note{
+  background:var(--surface);border:1px solid var(--hairline);
+  border-radius:var(--radius);padding:1rem 1.4rem;
+  font-size:.865rem;color:var(--muted);
+  display:flex;align-items:center;gap:.75rem;
+}
+.perm-note code{
+  color:var(--warn);background:rgba(230,185,85,.1);
+  padding:.08rem .28rem;border-radius:3px;font-size:.8rem;
+}
+
+/* ── Swarm ──────────────────────────────────────── */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:4rem;align-items:center}
+.swarm-visual{
+  font-family:var(--font-mono);font-size:.78rem;
+  background:var(--ground);border:1px solid var(--error);
+  border-radius:var(--radius);padding:1.25rem 1.4rem;line-height:2;
+  box-shadow:var(--glow-error);
+}
+.sl{color:var(--error);font-weight:600;display:block}
+.sd{color:var(--muted);display:block}
+.s-done{color:var(--success)}
+.s-work{color:var(--warn)}
+.s-id{color:var(--ink)}
+
+/* ── Features grid ──────────────────────────────── */
+.feat-grid{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(255px,1fr));
+  gap:1px;background:var(--hairline);
+  border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;
+}
+.feat{background:var(--surface);padding:1.4rem;transition:background .2s}
+.feat:hover{background:var(--surface-raised)}
+.feat-icon{font-size:1.3rem;margin-bottom:.5rem}
+.feat-title{font-weight:600;font-size:.88rem;margin-bottom:.25rem}
+.feat-desc{font-size:.795rem;color:var(--muted);line-height:1.55}
+
+/* ── Steps ──────────────────────────────────────── */
+.steps{display:flex;flex-direction:column;gap:1.6rem}
+.step{display:grid;grid-template-columns:2.4rem 1fr;gap:1.2rem;align-items:start}
+.step-num{
+  width:2.4rem;height:2.4rem;border-radius:50%;
+  border:2px solid var(--accent);color:var(--accent);
+  font-family:var(--font-mono);font-weight:700;font-size:.88rem;
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+.step-content h3{font-size:.97rem;font-weight:600;margin-bottom:.3rem}
+.step-content p{font-size:.855rem;color:var(--muted);line-height:1.6;margin-bottom:.75rem}
+.code-block{
+  background:var(--surface);border:1px solid var(--hairline);
+  border-radius:var(--radius);overflow:hidden;
+}
+.code-hd{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:.42rem .95rem;border-bottom:1px solid var(--hairline);
+  background:var(--surface-raised);
+}
+.code-lang{font-family:var(--font-mono);font-size:.67rem;color:var(--muted)}
+.copy-btn{
+  font-family:var(--font-mono);font-size:.67rem;color:var(--muted);
+  background:none;border:1px solid var(--hairline);border-radius:3px;
+  padding:.12rem .44rem;transition:color .2s,border-color .2s;
+}
+.copy-btn:hover{color:var(--accent);border-color:var(--accent)}
+.copy-btn.ok{color:var(--success);border-color:var(--success)}
+.code-block pre{
+  padding:.9rem 1.1rem;font-size:.82rem;overflow-x:auto;
+  line-height:1.72;color:var(--ink);
+}
+.c-cmt{color:var(--muted)}
+.c-cmd{color:var(--accent)}
+.c-out{color:var(--success)}
+.c-key{color:var(--info)}
+.c-val{color:var(--warn)}
+
+/* ── Terminal mockup ────────────────────────────── */
+.term-demo{
+  font-family:var(--font-mono);font-size:.8rem;
+  background:var(--ground);border:1px solid var(--hairline);
+  border-radius:var(--radius);overflow:hidden;
+  box-shadow:0 16px 48px rgba(0,0,0,.35);
+}
+.term-bar{
+  display:flex;align-items:center;gap:.45rem;
+  padding:.55rem .9rem;background:var(--surface);border-bottom:1px solid var(--hairline);
+}
+.dot{width:10px;height:10px;border-radius:50%}
+.dot.r{background:#f2637e}.dot.y{background:#e6b955}.dot.g{background:#8fd66f}
+.term-title{flex:1;text-align:center;font-size:.68rem;color:var(--muted)}
+.term-body{padding:.95rem 1.1rem;line-height:2;min-height:180px}
+.t-prompt{color:var(--accent)}
+.t-cmd-line{color:var(--ink)}
+.t-lbl{color:var(--muted)}
+.t-val{color:var(--ink)}
+.t-ok{color:var(--success)}
+.t-warn{color:var(--warn)}
+.t-cursor{
+  display:inline-block;width:8px;height:14px;
+  background:var(--accent);animation:blink 1.1s step-end infinite;vertical-align:text-bottom;
+}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+
+/* ── Architecture ───────────────────────────────── */
+.arch-block{font-size:.78rem;color:var(--muted);line-height:1.85;overflow-x:auto}
+.a-acc{color:var(--accent)}
+.a-info{color:var(--info)}
+.a-suc{color:var(--success)}
+.a-warn{color:var(--warn)}
+
+/* ── Roadmap ────────────────────────────────────── */
+#coming{text-align:center}
+.roadmap-grid{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+  gap:1.25rem;max-width:620px;margin:0 auto 2rem;
+}
+.roadmap-card{
+  background:var(--surface);border:1px solid var(--hairline);
+  border-radius:var(--radius);padding:1.8rem;position:relative;overflow:hidden;
+  text-align:left;
+}
+.roadmap-card::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(135deg,rgba(45,212,191,.06) 0%,transparent 55%);
+  pointer-events:none;
+}
+.rc-status{
+  display:inline-flex;align-items:center;gap:.35rem;
+  font-family:var(--font-mono);font-size:.64rem;color:var(--warn);
+  background:rgba(230,185,85,.1);border:1px solid rgba(230,185,85,.2);
+  border-radius:999px;padding:.18rem .55rem;margin-bottom:1rem;
+}
+.rc-icon{font-size:1.9rem;margin-bottom:.65rem;display:block}
+.roadmap-card h3{font-size:1.05rem;font-weight:700;margin-bottom:.45rem}
+.roadmap-card p{font-size:.84rem;color:var(--muted);line-height:1.58}
+.notify-form{
+  display:flex;gap:.5rem;max-width:380px;margin:0 auto;
+  flex-wrap:wrap;justify-content:center;
+}
+.notify-input{
+  flex:1;min-width:200px;background:var(--surface);
+  border:1px solid var(--hairline);border-radius:var(--radius);
+  padding:.58rem .9rem;color:var(--ink);font-size:.88rem;
+  font-family:var(--font-sans);transition:border-color .2s;
+}
+.notify-input:focus{outline:none;border-color:var(--accent)}
+.notify-input::placeholder{color:var(--muted)}
+.notify-btn{
+  background:var(--accent);color:#0e1016;border:none;
+  border-radius:var(--radius);padding:.58rem 1.1rem;
+  font-weight:700;font-size:.88rem;transition:opacity .2s;
+}
+.notify-btn:hover{opacity:.9}
+#notify-msg{margin-top:.65rem;font-size:.78rem;color:var(--success);display:none}
+
+/* ── Playground section ─────────────────────────── */
+.play-ctas{display:flex;flex-direction:column;gap:.7rem;align-items:flex-start}
+.asci-link{
+  display:inline-flex;align-items:center;gap:.5rem;
+  color:var(--muted);border:1px solid var(--hairline);
+  border-radius:var(--radius);padding:.62rem 1.1rem;
+  font-size:.88rem;font-weight:500;
+  transition:color .2s,border-color .2s;text-decoration:none!important;
+}
+.asci-link:hover{color:var(--ink);border-color:var(--muted)}
+.asci-note{font-size:.73rem;color:var(--muted)}
+
+/* ── Footer ─────────────────────────────────────── */
+footer{
+  border-top:1px solid var(--hairline);padding:2.8rem 2rem;
+  display:flex;align-items:center;justify-content:space-between;
+  flex-wrap:wrap;gap:1.5rem;
+}
+.foot-brand{font-family:var(--font-mono);font-size:.9rem;color:var(--accent)}
+.foot-links{display:flex;gap:1.4rem;flex-wrap:wrap}
+.foot-links a{font-size:.78rem;color:var(--muted);transition:color .2s}
+.foot-links a:hover{color:var(--ink);text-decoration:none}
+.foot-r{font-size:.72rem;color:var(--muted);text-align:right}
+
+/* ── Mobile ─────────────────────────────────────── */
+@media(max-width:768px){
+  nav{padding:.65rem 1rem}
+  .nav-links{display:none}
+  .two-col{grid-template-columns:1fr}
+  footer{flex-direction:column;text-align:center}
+  .foot-r{text-align:center}
+  .section-inner{padding:4rem 1.25rem}
+}
+</style>
+</head>
+<body>
+
+<div id="prog"></div>
+
+<!-- ── Nav ──────────────────────────────────────── -->
+<nav>
+  <div class="nav-brand">
+    <a href="#hero" class="wordmark" id="wordmark">OmniHarness</a>
+    <span class="ver-badge">v0.1.45</span>
+  </div>
+  <div class="nav-links">
+    <a href="#why">Why</a>
+    <a href="#modes">Modes</a>
+    <a href="#install">Install</a>
+    <a href="#playground">Try it</a>
+    <a href="https://github.com/mattycigemp-crypto/omniharness" target="_blank" rel="noopener">GitHub ↗</a>
+  </div>
+  <div class="nav-actions">
+    <button class="icon-btn" id="theme-btn" title="Toggle light/dark">☀</button>
+    <button class="icon-btn" id="brand-btn" title="Toggle OmniRoute branding">⚡ OmniRoute</button>
+    <a href="#install" class="cta-nav">Get started</a>
+  </div>
+</nav>
+
+<!-- ── Hero ─────────────────────────────────────── -->
+<section id="hero">
+  <canvas id="bg-canvas"></canvas>
+  <div class="hero-content">
+    <div class="hero-eyebrow" id="hero-eyebrow">Built for OmniRoute</div>
+    <h1>Route once.<br>Run anywhere.</h1>
+    <p class="hero-sub">Plan, build, research, or turn a parallel swarm loose. The agent harness built for <a href="https://omniroute.ai" target="_blank" rel="noopener">OmniRoute</a>.</p>
+    <div class="hero-ctas">
+      <button class="cta-primary" id="install-btn">
+        <span id="install-text">npm i -g omniharness-cli</span>
+        <span class="ci">⎘</span>
+      </button>
+      <a href="https://github.com/mattycigemp-crypto/omniharness" class="cta-secondary" target="_blank" rel="noopener">
+        View on GitHub →
+      </a>
+    </div>
+    <div class="hero-demo reveal">
+      <img src="./assets/demo.svg" alt="OmniHarness animated TUI demo — four frames showing plan/crazy modes, permission switching, and the parallel swarm rail" width="720" height="450" loading="eager">
+    </div>
+    <div class="hero-meta">
+      <span>⚙ Go core</span>
+      <span>◈ TypeScript TUI</span>
+      <span>⚖ MIT</span>
+    </div>
+  </div>
+</section>
+
+<!-- ── Why ──────────────────────────────────────── -->
+<div id="why" class="section-inner">
+  <div class="reveal">
+    <div class="section-label">The Wedge</div>
+    <h2>Built on routing,<br>not around it.</h2>
+    <p class="section-lead">Generic agents were built for one provider and bolt routing on afterward. OmniHarness inverts that: OmniRoute <em>is</em> the execution layer. Provider selection, quota, failover, and model translation stay in the gateway — one integration point instead of N SDKs.</p>
+  </div>
+  <div class="arch-pre reveal">
+<span class="h">  you  </span>  ──  <span class="h">OmniHarness</span>  ──  <span class="h">internal/gateway</span>  ─────────────────────────────┐
+                                       ↓                                         │
+                              <span class="h">OmniRoute</span> (one endpoint)                          │
+                              ├─ claude/<span class="h">sonnet</span>           │ auto/<span class="h">best-coding</span>      │
+                              ├─ openai/<span class="h">gpt-5</span>             │ auto/<span class="h">cheap</span>            │
+                              ├─ google/<span class="h">gemini-flash</span>      │ free-stack <span class="h">combo</span>     │
+                              └─ failover · quota · routing · translation        │
+                                                                                  │
+                         swap <span class="h">gateway</span>  →  entire test suite runs offline  ──────────┘</div>
+</div>
+
+<!-- ── Modes ─────────────────────────────────────── -->
+<div class="full-bleed">
+  <div id="modes" class="section-inner">
+    <div class="reveal">
+      <div class="section-label">Working Modes</div>
+      <h2>Four gears.<br>One <kbd>Ctrl+E</kbd>.</h2>
+      <p class="section-lead">Cycle through modes as the work changes. Permission level is a separate axis — set it independently with <kbd>Shift+Tab</kbd> without leaving the current mode.</p>
+    </div>
+    <div class="modes-grid reveal">
+      <div class="mode-card" data-m="plan">
+        <div class="mode-hd"><span class="mode-glyph">◇</span><span class="mode-name">plan</span></div>
+        <p class="mode-desc">Think before acting. Lays out a full plan and checkpoints with you before any file changes. Good for scoping unfamiliar work.</p>
+        <div class="mode-key"><kbd>Ctrl+E</kbd> → plan</div>
+      </div>
+      <div class="mode-card" data-m="build">
+        <div class="mode-hd"><span class="mode-glyph">◈</span><span class="mode-name">build</span></div>
+        <p class="mode-desc">The workhorse. Reads, edits, runs tests, fixes failures. One tight loop until the intent is satisfied.</p>
+        <div class="mode-key"><kbd>Ctrl+E</kbd> → build</div>
+      </div>
+      <div class="mode-card" data-m="research">
+        <div class="mode-hd"><span class="mode-glyph">◎</span><span class="mode-name">research</span></div>
+        <p class="mode-desc">Read-only exploration. Searches, reads, summarizes — no writes. Understand a codebase before deciding what to change.</p>
+        <div class="mode-key"><kbd>Ctrl+E</kbd> → research</div>
+      </div>
+      <div class="mode-card" data-m="crazy">
+        <div class="mode-hd"><span class="mode-glyph">⚡</span><span class="mode-name">crazy</span></div>
+        <p class="mode-desc">Full autonomy. Fans an independent plan across parallel worker agents. All approvals bypassed. One swarm, many lanes.</p>
+        <div class="mode-key"><kbd>Ctrl+E</kbd> → crazy</div>
+      </div>
+    </div>
+    <div class="perm-note reveal">
+      <span>🔒</span>
+      <span><strong>Permission axis — independent of mode.</strong> <kbd>Shift+Tab</kbd> cycles <code>○ manual</code> → <code>◐ accept edits</code> → <code>● bypass</code>. Crazy mode forces bypass automatically.</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Swarm ──────────────────────────────────────── -->
+<div id="swarm" class="section-inner">
+  <div class="two-col">
+    <div class="reveal">
+      <div class="section-label">Crazy Mode</div>
+      <h2>One intent.<br>Many workers.</h2>
+      <p class="section-lead">CRAZY mode fans a plan across parallel worker agents. Each lane gets its own context and tool loop. The swarm rail shows every lane live — in a single unified transcript.</p>
+      <p style="font-size:.855rem;color:var(--muted)">The only harness where "do it all" means <em>do it all at once</em>.</p>
+    </div>
+    <div class="swarm-visual reveal">
+<span class="sl">⚡ swarm</span>
+<span class="sd">───────────────────────────</span>
+<span class="sd"><span class="s-done">✓</span> <span class="s-id">A1</span>  done: write auth module</span>
+<span class="sd"><span class="s-done">✓</span> <span class="s-id">A2</span>  done: write test suite</span>
+<span class="sd"><span class="s-work">⋯</span> <span class="s-id">A3</span>  working: update README</span>
+<span class="sd">───────────────────────────</span>
+<span class="sd">3/3 lanes  ·  <span class="s-done">2 done</span>  ·  <span class="s-work">1 working</span></span></div>
+  </div>
+</div>
+
+<!-- ── Terminal features ──────────────────────────── -->
+<div class="full-bleed">
+  <div id="terminal" class="section-inner">
+    <div class="reveal">
+      <div class="section-label">The Terminal</div>
+      <h2>Every pixel earns<br>its place.</h2>
+      <p class="section-lead">Everything on screen makes agent intent, action, and history legible — nothing is chrome for chrome's sake.</p>
+    </div>
+    <div class="feat-grid reveal">
+      <div class="feat">
+        <div class="feat-icon">📜</div>
+        <div class="feat-title">Native scrollback is the history</div>
+        <div class="feat-desc">Settled turns flow into your terminal's own buffer. No parallel log. The full transcript is restored on exit via the alt-buffer.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-icon">🌐</div>
+        <div class="feat-title">Route ribbon</div>
+        <div class="feat-desc">Every reply is labelled with the provider it came from. Failovers appear inline — you always know what ran and why.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-icon">📊</div>
+        <div class="feat-title">Context meter</div>
+        <div class="feat-desc">Per-model window usage, live. Colour-coded zones: ok → warn → danger. Knows the window for every model in the routing catalog.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-icon">🃏</div>
+        <div class="feat-title">Per-tool cards with diffs</div>
+        <div class="feat-desc">Each tool call is a collapsible card: name, input, result. File edits show the unified diff inline. History compresses behind you.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-icon">🔒</div>
+        <div class="feat-title">Scoped-trust approvals</div>
+        <div class="feat-desc">"Trust this command exactly" or "trust this tool" — not all-or-nothing. Scope is remembered for the session.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-icon">⏎</div>
+        <div class="feat-title">Input queuing</div>
+        <div class="feat-desc">Type your next instruction while the agent is still running. It's queued and delivered the moment the run finishes.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-icon">📋</div>
+        <div class="feat-title">OSC 52 clipboard copy</div>
+        <div class="feat-desc">Ctrl+Y copies the last code block over OSC 52 — works over SSH where the clipboard is normally inaccessible.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-icon">🔄</div>
+        <div class="feat-title">Tear-free streaming</div>
+        <div class="feat-desc">DECSET 2026 synchronized output suppresses partial-render flicker. Probed at launch; gracefully skipped if unsupported.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Install / Quickstart ───────────────────────── -->
+<div id="install" class="section-inner">
+  <div class="reveal">
+    <div class="section-label">Get Started</div>
+    <h2>Up in five<br>commands.</h2>
+  </div>
+  <div class="steps">
+
+    <div class="step reveal">
+      <div class="step-num">1</div>
+      <div class="step-content">
+        <h3>Install</h3>
+        <p>Requires Node.js 20+. Installs the TypeScript TUI launcher globally.</p>
+        <div class="code-block">
+          <div class="code-hd"><span class="code-lang">bash</span><button class="copy-btn" data-copy="npm install -g omniharness-cli">copy</button></div>
+          <pre><span class="c-cmd">npm install -g omniharness-cli</span></pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="step reveal">
+      <div class="step-num">2</div>
+      <div class="step-content">
+        <h3>Point it at your gateway</h3>
+        <p>Three environment variables. Your API key is held in memory only — never written to config, logs, or telemetry.</p>
+        <div class="code-block">
+          <div class="code-hd"><span class="code-lang">bash</span><button class="copy-btn" data-copy="export OMNIROUTE_URL=http://localhost:20128&#10;export OMNIROUTE_API_KEY=sk-your-key&#10;export OMNIROUTE_MGMT_TOKEN=mt-optional">copy</button></div>
+          <pre><span class="c-key">export</span> OMNIROUTE_URL=<span class="c-val">http://localhost:20128</span>
+<span class="c-key">export</span> OMNIROUTE_API_KEY=<span class="c-val">sk-your-key</span>    <span class="c-cmt"># held in memory only</span>
+<span class="c-key">export</span> OMNIROUTE_MGMT_TOKEN=<span class="c-val">mt-optional</span>  <span class="c-cmt"># enables MCP tools</span></pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="step reveal">
+      <div class="step-num">3</div>
+      <div class="step-content">
+        <h3>Verify the connection</h3>
+        <p>Doctor checks the gateway and shows the routing catalog. The key is masked to <code style="font-family:var(--font-mono);color:var(--warn)">key_&lt;last4&gt;</code> — it never appears in output.</p>
+        <div class="code-block">
+          <div class="code-hd"><span class="code-lang">bash</span><button class="copy-btn" data-copy="omniharness doctor">copy</button></div>
+          <pre><span class="c-cmd">omniharness doctor</span>
+
+<span class="c-cmt">endpoint    </span>http://localhost:20128
+<span class="c-cmt">api key     </span><span class="c-val">key_9999</span>
+<span class="c-cmt">catalog     </span><span class="c-out">reachable · 7622 models (38 auto/*)</span>
+<span class="c-cmt">combos      </span>3 configured · free-stack, Kimi Coding, deepseek
+
+<span class="c-out">ok — the gateway is reachable.</span></pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="step reveal">
+      <div class="step-num">4</div>
+      <div class="step-content">
+        <h3>Launch the TUI</h3>
+        <p>Navigate to your project and run. The TUI opens in the alternate buffer; your terminal history is preserved on exit.</p>
+        <div class="code-block">
+          <div class="code-hd"><span class="code-lang">bash</span><button class="copy-btn" data-copy="cd your-project&#10;omniharness">copy</button></div>
+          <pre><span class="c-cmd">cd</span> your-project
+<span class="c-cmd">omniharness</span></pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="step reveal">
+      <div class="step-num">5</div>
+      <div class="step-content">
+        <h3>Pick your mode and go</h3>
+        <p>Press <kbd>Ctrl+E</kbd> to cycle modes. <kbd>Shift+Tab</kbd> adjusts the permission level. Type your intent and press Enter.</p>
+        <div class="code-block">
+          <div class="code-hd"><span class="code-lang">keys</span></div>
+          <pre><span class="c-cmt"># cycle working mode</span>
+<span class="c-cmd">Ctrl+E</span>      plan → build → research → crazy
+
+<span class="c-cmt"># cycle permission level</span>
+<span class="c-cmd">Shift+Tab</span>   ○ manual → ◐ accept edits → ● bypass
+
+<span class="c-cmt"># slash commands</span>
+<span class="c-cmd">/help</span>       list all commands
+<span class="c-cmd">/find</span>       search transcript
+<span class="c-cmd">Ctrl+C</span>      cancel run / quit</pre>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Playground ─────────────────────────────────── -->
+<div id="playground" class="full-bleed">
+  <div class="section-inner">
+    <div class="two-col">
+      <div class="term-demo reveal">
+        <div class="term-bar">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="term-title">omniharness doctor</span>
+        </div>
+        <div class="term-body">
+          <div><span class="t-prompt">❯ </span><span id="t-cmd"></span><span class="t-cursor" id="t-cur"></span></div>
+          <div id="t-out" style="display:none">
+            <br>
+            <div><span class="t-lbl">endpoint    </span><span class="t-val">http://localhost:20128</span></div>
+            <div><span class="t-lbl">api key     </span><span class="t-warn">key_9999</span></div>
+            <div><span class="t-lbl">mgmt token  </span><span style="color:var(--muted)">not set</span></div>
+            <div><span class="t-lbl">catalog     </span><span class="t-ok">reachable · 7622 models (38 auto/*)</span></div>
+            <div><span class="t-lbl">combos      </span><span class="t-val">3 configured · free-stack, Kimi Coding, deepseek</span></div>
+            <br>
+            <div class="t-ok">ok — the gateway is reachable.</div>
+          </div>
+        </div>
+      </div>
+      <div class="reveal">
+        <div class="section-label">Try It Live</div>
+        <h2>See it run.</h2>
+        <p class="section-lead">The demo shows <code style="font-family:var(--font-mono);color:var(--accent)">omniharness doctor</code> connecting to a live OmniRoute gateway — 7,622 models, three combos, instant check.</p>
+        <div class="play-ctas">
+          <a href="https://asciinema.org" class="asci-link" target="_blank" rel="noopener">
+            ▶ Full session recording (asciinema) ↗
+          </a>
+          <span class="asci-note">Full cast coming soon — subscribe for notify below.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Architecture ───────────────────────────────── -->
+<div id="architecture" class="section-inner">
+  <div class="reveal">
+    <div class="section-label">Architecture</div>
+    <h2>Two front-ends.<br>One Go core.</h2>
+    <p class="section-lead">The orchestration logic lives in Go: runtime, event bus, tool registry, session persistence. Front-ends are thin adapters. The TypeScript TUI ships today; web and desktop share the same core without touching it.</p>
+  </div>
+  <div class="code-block reveal">
+    <div class="code-hd"><span class="code-lang">tree</span></div>
+    <pre class="arch-block">
+<span class="a-acc">omniharness/</span>
+├── <span class="a-info">cmd/omniharness/</span>        Go entry point
+├── <span class="a-info">internal/</span>
+│   ├── <span class="a-acc">gateway/</span>            OmniRoute adapter  ← swap this for offline tests
+│   ├── <span style="color:var(--muted)">runtime/</span>            agent loop · event bus · session store
+│   ├── <span style="color:var(--muted)">orchestrator/</span>       plan / build / research / swarm logic
+│   └── <span style="color:var(--muted)">tools/</span>              tool registry + scoped trust
+├── <span class="a-suc">npm/</span>                    TypeScript TUI (Ink/React)  ← ships today
+│   └── src/
+│       ├── ui/             Ink components (termcaps · palette · groups…)
+│       └── agent/          mastraEngine — wires Go runtime to the TUI
+├── <span class="a-warn">web/       (roadmap)</span>    React SPA · browser front-end
+└── <span class="a-warn">desktop/   (roadmap)</span>    Tauri shell · native OS integration</pre>
+  </div>
+</div>
+
+<!-- ── Coming soon ────────────────────────────────── -->
+<div id="coming" class="full-bleed">
+  <div class="section-inner" style="text-align:center">
+    <div class="reveal">
+      <div class="section-label">What's Next</div>
+      <h2>Same harness.<br>Any surface.</h2>
+      <p class="section-lead" style="margin:0 auto 2.5rem">The Go core doesn't care where the front-end lives. Web and desktop are coming — the gateway logic, swarm rail, and routing catalog work the same everywhere.</p>
+    </div>
+    <div class="roadmap-grid">
+      <div class="roadmap-card reveal">
+        <div class="rc-status">⋯ in progress</div>
+        <span class="rc-icon">🌐</span>
+        <h3>Web</h3>
+        <p>Full harness in the browser — same modes, same swarm rail, same route ribbon. Run it from any device without installing anything.</p>
+      </div>
+      <div class="roadmap-card reveal">
+        <div class="rc-status">⋯ planned</div>
+        <span class="rc-icon">🖥</span>
+        <h3>Desktop</h3>
+        <p>Native app (Tauri) with OS notifications, system tray, and deep terminal integration. All the premium UX — no browser overhead.</p>
+      </div>
+    </div>
+    <div class="notify-form reveal">
+      <input type="email" class="notify-input" id="notify-email" placeholder="you@example.com">
+      <button class="notify-btn" id="notify-btn">Notify me</button>
+    </div>
+    <div id="notify-msg">You're on the list. We'll ping you when web/desktop lands.</div>
+  </div>
+</div>
+
+<!-- ── Footer ─────────────────────────────────────── -->
+<footer>
+  <div class="foot-brand">OmniHarness</div>
+  <div class="foot-links">
+    <a href="https://github.com/mattycigemp-crypto/omniharness" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://www.npmjs.com/package/omniharness-cli" target="_blank" rel="noopener">npm</a>
+    <a href="https://github.com/mattycigemp-crypto/omniharness/blob/main/LICENSE" target="_blank" rel="noopener">MIT</a>
+    <a href="https://omniroute.ai" target="_blank" rel="noopener">OmniRoute</a>
+    <a href="#coming">Web &amp; Desktop ↑</a>
+  </div>
+  <div class="foot-r">
+    Go core · TypeScript TUI · MIT<br>
+    <span style="color:var(--accent)">web &amp; desktop coming</span>
+  </div>
+</footer>
+
+<!-- ── Three.js WebGL ─────────────────────────────── -->
+<script type="importmap">{"imports":{"three":"https://esm.sh/three@0.161.0"}}</script>
+<script type="module">
+import * as THREE from 'three';
+
+// ── Canvas & scene setup ─────────────────────
+const canvas = document.getElementById('bg-canvas');
+const heroEl = document.getElementById('hero');
+const renderer = new THREE.WebGLRenderer({canvas, alpha:true, antialias:true});
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(58, 1, 0.1, 120);
+camera.position.set(0, 2, 20);
+scene.fog = new THREE.FogExp2(0x000000, 0.022);
+
+function resize() {
+  const w = heroEl.clientWidth, h = heroEl.clientHeight;
+  renderer.setSize(w, h, false);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+resize();
+window.addEventListener('resize', resize);
+
+function accentColor() {
+  return new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue('--accent').trim());
+}
+
+// ── Nodes ────────────────────────────────────
+const N = 170, DIST = 4.8, B = 10;
+const nodes = Array.from({length: N}, () => {
+  const hub = Math.random() > 0.87;
+  return {
+    x:(Math.random()-.5)*B*2.2, y:(Math.random()-.5)*B*.9, z:(Math.random()-.5)*B*2,
+    vx:(Math.random()-.5)*.009, vy:(Math.random()-.5)*.005, vz:(Math.random()-.5)*.007,
+    hub, size: hub ? .11 : .035+Math.random()*.03, phase: Math.random()*Math.PI*2,
+  };
+});
+
+// Point cloud for regular nodes
+const ptGeo = new THREE.BufferGeometry();
+const ptPos = new Float32Array(N*3);
+ptGeo.setAttribute('position', new THREE.BufferAttribute(ptPos, 3));
+const ptMat = new THREE.PointsMaterial({size:.09, transparent:true, opacity:.75, sizeAttenuation:true, depthWrite:false});
+const pts = new THREE.Points(ptGeo, ptMat);
+scene.add(pts);
+
+// Hub spheres
+const hubs = nodes.filter(n=>n.hub).map(n=>{
+  const g = new THREE.SphereGeometry(n.size, 7, 7);
+  const m = new THREE.MeshBasicMaterial({transparent:true, opacity:.88});
+  const mesh = new THREE.Mesh(g, m);
+  mesh.position.set(n.x, n.y, n.z);
+  scene.add(mesh);
+  return {mesh, mat:m, node:n};
+});
+
+// Line segments for connections
+const MAX = 450;
+const lPos = new Float32Array(MAX*6);
+const lGeo = new THREE.BufferGeometry();
+lGeo.setAttribute('position', new THREE.BufferAttribute(lPos, 3));
+lGeo.setDrawRange(0, 0);
+const lMat = new THREE.LineBasicMaterial({transparent:true, opacity:.14, depthWrite:false});
+const lines = new THREE.LineSegments(lGeo, lMat);
+scene.add(lines);
+
+// ── Routing packet ───────────────────────────
+const pkGeo = new THREE.SphereGeometry(.13, 6, 6);
+const pkMat = new THREE.MeshBasicMaterial({transparent:true, opacity:0});
+const packet = new THREE.Mesh(pkGeo, pkMat);
+scene.add(packet);
+
+let path=[], pT=0, pActive=false;
+
+function newPath() {
+  const hs = nodes.filter(n=>n.hub);
+  if (hs.length<2) return;
+  const a=hs[Math.floor(Math.random()*hs.length)];
+  let b; do{b=hs[Math.floor(Math.random()*hs.length)]}while(b===a);
+  const p=[a]; let cur=a;
+  for(let s=0;s<5;s++){
+    let best=null,bd=DIST*1.8;
+    for(const n of nodes){
+      const dx=n.x-cur.x,dy=n.y-cur.y,dz=n.z-cur.z;
+      const d=Math.sqrt(dx*dx+dy*dy+dz*dz);
+      if(d<bd&&n!==cur&&!p.includes(n)){best=n;bd=d;}
+    }
+    if(!best) break;
+    p.push(best); cur=best; if(cur===b) break;
+  }
+  p.push(b); path=p; pT=0; pActive=true; pkMat.opacity=.92;
+}
+newPath();
+
+// ── Mouse parallax ───────────────────────────
+let mx=0,my=0;
+document.addEventListener('mousemove',e=>{mx=(e.clientX/innerWidth-.5)*2;my=(e.clientY/innerHeight-.5)*2;});
+
+// ── Animation ────────────────────────────────
+const clk = new THREE.Clock();
+let routeT=0;
+
+function frame() {
+  requestAnimationFrame(frame);
+  const dt=clk.getDelta(), t=clk.getElapsedTime();
+  routeT+=dt;
+  if(routeT>3.8){newPath();routeT=0;}
+
+  const col=accentColor();
+  ptMat.color=col; lMat.color=col; pkMat.color=col;
+  hubs.forEach(h=>{h.mat.color=col;});
+
+  // drift nodes
+  for(let i=0;i<N;i++){
+    const n=nodes[i];
+    n.x+=n.vx; n.y+=n.vy; n.z+=n.vz;
+    if(Math.abs(n.x)>B*1.1)n.vx*=-1;
+    if(Math.abs(n.y)>B*.5)n.vy*=-1;
+    if(Math.abs(n.z)>B*1.1)n.vz*=-1;
+    ptPos[i*3]=n.x; ptPos[i*3+1]=n.y; ptPos[i*3+2]=n.z;
+  }
+  ptGeo.attributes.position.needsUpdate=true;
+
+  // hub positions + pulse
+  hubs.forEach(({mesh,node},i)=>{
+    mesh.position.set(node.x,node.y,node.z);
+    const s=1+.12*Math.sin(t*1.4+i*1.1);
+    mesh.scale.setScalar(s);
+  });
+
+  // connections
+  let lc=0;
+  for(let i=0;i<N&&lc<MAX;i++){
+    for(let j=i+1;j<N&&lc<MAX;j++){
+      const a=nodes[i],b=nodes[j];
+      const dx=a.x-b.x,dy=a.y-b.y,dz=a.z-b.z;
+      if(dx*dx+dy*dy+dz*dz<DIST*DIST){
+        lPos[lc*6]=a.x;lPos[lc*6+1]=a.y;lPos[lc*6+2]=a.z;
+        lPos[lc*6+3]=b.x;lPos[lc*6+4]=b.y;lPos[lc*6+5]=b.z;
+        lc++;
+      }
+    }
+  }
+  lGeo.attributes.position.needsUpdate=true;
+  lGeo.setDrawRange(0,lc*2);
+
+  // packet travel
+  if(pActive&&path.length>=2){
+    pT+=dt*.38;
+    const segs=path.length-1, gt=pT*segs;
+    const si=Math.min(Math.floor(gt),segs-1);
+    const st=gt-si;
+    const a=path[si],b=path[si+1]||path[segs];
+    packet.position.set(a.x+(b.x-a.x)*st,a.y+(b.y-a.y)*st,a.z+(b.z-a.z)*st);
+    if(pT>=1) pkMat.opacity=Math.max(0,pkMat.opacity-dt*1.6);
+  }
+
+  // camera parallax
+  camera.position.x+=(mx*2.5-camera.position.x)*.018;
+  camera.position.y+=(-my*1.8-camera.position.y)*.018;
+  camera.lookAt(0,0,0);
+
+  renderer.render(scene,camera);
+}
+frame();
+
+// ── Theme toggle ─────────────────────────────
+const root=document.documentElement;
+const themeBtn=document.getElementById('theme-btn');
+function setTheme(t){
+  root.dataset.theme=t;
+  themeBtn.textContent=t==='dark'?'☀':'☾';
+  localStorage.setItem('oh-theme',t);
+}
+themeBtn.addEventListener('click',()=>setTheme(root.dataset.theme==='dark'?'light':'dark'));
+setTheme(localStorage.getItem('oh-theme')||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark'));
+
+// ── Brand toggle ─────────────────────────────
+const brandBtn=document.getElementById('brand-btn');
+const wordmarkEl=document.getElementById('wordmark');
+const eyebrowEl=document.getElementById('hero-eyebrow');
+const brandCopy={
+  omniharness:{mark:'OmniHarness',eyebrow:'Built for OmniRoute',btn:'⚡ OmniRoute'},
+  omniroute:{mark:'OmniHarness ✕ OmniRoute',eyebrow:'Powered by OmniRoute',btn:'← OmniHarness'},
+};
+function setBrand(b){
+  root.dataset.brand=b;
+  const c=brandCopy[b];
+  wordmarkEl.textContent=c.mark;
+  eyebrowEl.textContent=c.eyebrow;
+  brandBtn.textContent=c.btn;
+  brandBtn.classList.toggle('active',b==='omniroute');
+  localStorage.setItem('oh-brand',b);
+}
+brandBtn.addEventListener('click',()=>setBrand(root.dataset.brand==='omniroute'?'omniharness':'omniroute'));
+setBrand(localStorage.getItem('oh-brand')||'omniharness');
+
+// ── Progress bar ─────────────────────────────
+const prog=document.getElementById('prog');
+addEventListener('scroll',()=>{
+  const s=scrollY,t2=document.documentElement.scrollHeight-innerHeight;
+  prog.style.width=(s/t2*100)+'%';
+},{passive:true});
+
+// ── Scroll reveal ─────────────────────────────
+const io=new IntersectionObserver(entries=>{
+  entries.forEach((e,i)=>{
+    if(e.isIntersecting) setTimeout(()=>e.target.classList.add('vis'),i*55);
+  });
+},{threshold:.1});
+document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+
+// ── Copy buttons ──────────────────────────────
+document.querySelectorAll('.copy-btn[data-copy]').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const text=btn.dataset.copy.replace(/&#10;/g,'\n');
+    navigator.clipboard?.writeText(text).then(()=>{
+      btn.textContent='copied!'; btn.classList.add('ok');
+      setTimeout(()=>{btn.textContent='copy';btn.classList.remove('ok');},2000);
+    });
+  });
+});
+
+// ── Install button copy ───────────────────────
+document.getElementById('install-btn').addEventListener('click',function(){
+  const span=document.getElementById('install-text');
+  navigator.clipboard?.writeText('npm install -g omniharness-cli').then(()=>{
+    span.textContent='Copied!';
+    setTimeout(()=>span.textContent='npm i -g omniharness-cli',2000);
+  });
+});
+
+// ── Terminal typewriter ───────────────────────
+const tCmd=document.getElementById('t-cmd');
+const tCur=document.getElementById('t-cur');
+const tOut=document.getElementById('t-out');
+const CMD='omniharness doctor';
+let typed=0,started=false;
+
+new IntersectionObserver(entries=>{
+  if(entries[0].isIntersecting&&!started){
+    started=true; type();
+  }
+},{threshold:.5}).observe(document.querySelector('.term-demo'));
+
+function type(){
+  if(typed<CMD.length){
+    tCmd.textContent=CMD.slice(0,++typed);
+    setTimeout(type,55+Math.random()*45);
+  } else {
+    tCur.style.display='none';
+    setTimeout(()=>{tOut.style.display='block';},400);
+  }
+}
+
+// ── Notify form ───────────────────────────────
+document.getElementById('notify-btn').addEventListener('click',()=>{
+  const v=document.getElementById('notify-email').value;
+  if(!v||!v.includes('@')) return;
+  document.getElementById('notify-msg').style.display='block';
+  document.getElementById('notify-email').value='';
+});
+</script>
+</body>
+</html>
