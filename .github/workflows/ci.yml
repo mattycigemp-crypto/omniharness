@@ -1,11 +1,19 @@
 name: CI
 
-# Runs on every pull request into main. These two checks (`go`, `npm`) are the
-# required status checks for the protected main branch, so a PR cannot merge
-# until both pass. The release workflow (publish.yml) re-runs the same suites on
-# push to main before publishing.
+# These two checks (`go`, `npm`) are the required status checks for the protected
+# main branch, so a PR cannot merge until both pass. publish.yml runs the
+# TypeScript suite again before releasing, but not the Go suite — this workflow
+# is the only gate on the Go side.
+#
+# It also runs on push to main, for two reasons. It restores a Go signal on main
+# (publish.yml stopped providing one), and it populates the toolchain and build
+# caches. Actions cache scoping only lets a branch restore caches written by its
+# base branch, so without a run on main every pull request compiles the whole
+# dependency tree from cold — modernc.org/sqlite most of all.
 on:
   pull_request:
+    branches: [main]
+  push:
     branches: [main]
 
 permissions:
@@ -21,6 +29,9 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: "1.27"
+          # Caches the module cache and the build cache, keyed on go.sum.
+          cache: true
+          cache-dependency-path: go.sum
       # gofmt is a hard gate: the formatting is not a matter of taste, and a
       # drifting tree makes every later diff noisier than the change it carries.
       - name: gofmt

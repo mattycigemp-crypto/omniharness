@@ -125,6 +125,11 @@ func runCmd(ctx context.Context, dir, name string, args ...string) (string, erro
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Env = envguard.Filter()
+	// Killing the command is not enough on its own: CombinedOutput waits for the
+	// output pipe, which any surviving grandchild still holds open. Bound that
+	// wait so an evaluator timeout is honoured. `go test` in particular spawns
+	// the compiled test binaries.
+	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		return string(out), fmt.Errorf("evaluator command timed out")

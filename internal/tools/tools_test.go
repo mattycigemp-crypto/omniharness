@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newTestRegistry(t *testing.T, root string) *Registry {
@@ -147,12 +148,21 @@ func TestShellTool(t *testing.T) {
 func TestShellTimeout(t *testing.T) {
 	dir := t.TempDir()
 	r := newTestRegistry(t, dir)
+	start := time.Now()
 	_, err := mustTool(t, r, "shell").Run(context.Background(), map[string]any{"command": "sleep 30", "timeout_sec": 1})
+	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
 	if !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("error %v", err)
+	}
+	// The timeout has to actually free the caller, not just describe itself.
+	// Killing the shell leaves the grandchild holding the output pipe, so
+	// without cmd.WaitDelay this returned the right error a full 30s late —
+	// the agent stayed blocked for the whole runaway command.
+	if limit := 1*time.Second + shellWaitDelay + 3*time.Second; elapsed > limit {
+		t.Fatalf("shell returned after %s; a 1s timeout must not wait for the command (limit %s)", elapsed, limit)
 	}
 }
 

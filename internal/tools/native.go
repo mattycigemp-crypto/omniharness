@@ -348,6 +348,12 @@ func (n *Native) search(ctx context.Context, in map[string]any) (Result, error) 
 	return Result{Output: strings.TrimSuffix(b.String(), "\n")}, nil
 }
 
+// shellWaitDelay bounds how long a killed command's output pipes are drained
+// before they are force-closed. Long enough to collect the output of a command
+// that exits promptly, short enough that a stuck grandchild cannot hold the
+// caller open.
+const shellWaitDelay = 2 * time.Second
+
 func (n *Native) shell(ctx context.Context, in map[string]any) (Result, error) {
 	command, err := StringArg(in, "command")
 	if err != nil {
@@ -366,6 +372,13 @@ func (n *Native) shell(ctx context.Context, in map[string]any) (Result, error) {
 	cmd.Dir = n.WorkspaceRoot
 	// Never leak the OmniRoute credential into the command's environment.
 	cmd.Env = envguard.Filter()
+	// CommandContext kills the shell at the deadline, but CombinedOutput goes on
+	// waiting for the output pipe to close — and a grandchild that outlived the
+	// shell still holds its write end. Without a bound, `sleep 30` with a 1s
+	// timeout returns a timeout error 30 seconds late: the agent is blocked for
+	// the full runaway command. WaitDelay caps that wait, so the timeout the
+	// caller asked for is the timeout it gets.
+	cmd.WaitDelay = shellWaitDelay
 	out, err := cmd.CombinedOutput()
 	if len(out) > n.MaxOutput {
 		out = append(out[:n.MaxOutput], []byte("\n...[output truncated]")...)
