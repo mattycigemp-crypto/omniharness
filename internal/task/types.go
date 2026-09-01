@@ -65,30 +65,34 @@ const (
 
 // Spec is the immutable description of what the user asked for.
 type Spec struct {
-	Prompt    string          `json:"prompt"`
-	CWD       string          `json:"cwd,omitempty"`
-	SessionID string          `json:"sessionId,omitempty"`
-	Budget    budget.Budget   `json:"budget,omitempty"`
-	Deadline  time.Time       `json:"deadline,omitempty"`
+	Prompt    string            `json:"prompt"`
+	CWD       string            `json:"cwd,omitempty"`
+	SessionID string            `json:"sessionId,omitempty"`
+	Budget    budget.Budget     `json:"budget,omitempty"`
+	Deadline  time.Time         `json:"deadline,omitempty"`
 	Tags      map[string]string `json:"tags,omitempty"`
 }
 
 // Profile is the structured result of task analysis. Every judgment carries an
 // explanation in Signals so decisions are auditable.
 type Profile struct {
-	Domain             Domain       `json:"domain"`
-	Complexity         Complexity   `json:"complexity"`
-	Ambiguity          Level        `json:"ambiguity"`
-	Risk               Level        `json:"risk"`
-	Context            Level        `json:"context"`
-	Tools              []string     `json:"tools,omitempty"`
-	Parallelizable     bool         `json:"parallelizable"`
-	Verification       Verification `json:"verification"`
-	EstimatedCostUSD   float64      `json:"estimatedCostUsd"`
-	EstimatedLatencyMS int64        `json:"estimatedLatencyMs"`
-	ApprovalRecommended bool        `json:"approvalRecommended"`
-	Confidence         float64      `json:"confidence"`
-	Signals            []string     `json:"signals,omitempty"`
+	Domain         Domain     `json:"domain"`
+	Complexity     Complexity `json:"complexity"`
+	Ambiguity      Level      `json:"ambiguity"`
+	Risk           Level      `json:"risk"`
+	Context        Level      `json:"context"`
+	Tools          []string   `json:"tools,omitempty"`
+	Parallelizable bool       `json:"parallelizable"`
+	// ModifiesFiles reports whether the request asks for a change on disk.
+	// Only such tasks are held to a "the working tree actually changed"
+	// check; asking a question about the code is not a failed edit.
+	ModifiesFiles       bool         `json:"modifiesFiles"`
+	Verification        Verification `json:"verification"`
+	EstimatedCostUSD    float64      `json:"estimatedCostUsd"`
+	EstimatedLatencyMS  int64        `json:"estimatedLatencyMs"`
+	ApprovalRecommended bool         `json:"approvalRecommended"`
+	Confidence          float64      `json:"confidence"`
+	Signals             []string     `json:"signals,omitempty"`
 }
 
 // Result is the outcome of a completed task.
@@ -103,15 +107,15 @@ type Result struct {
 
 // Task is the durable runtime representation of a task.
 type Task struct {
-	ID        string      `json:"id"`
-	SessionID string      `json:"sessionId"`
-	Spec      Spec        `json:"spec"`
-	Profile   Profile     `json:"profile,omitempty"`
-	Strategy  string      `json:"strategy,omitempty"`
-	Status    Status      `json:"status"`
-	Repairs   int         `json:"repairs"`
-	CreatedAt time.Time   `json:"createdAt"`
-	UpdatedAt time.Time   `json:"updatedAt"`
-	Result    *Result     `json:"result,omitempty"`
-	Error     string      `json:"error,omitempty"`
+	ID        string    `json:"id"`
+	SessionID string    `json:"sessionId"`
+	Spec      Spec      `json:"spec"`
+	Profile   Profile   `json:"profile,omitempty"`
+	Strategy  string    `json:"strategy,omitempty"`
+	Status    Status    `json:"status"`
+	Repairs   int       `json:"repairs"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	Result    *Result   `json:"result,omitempty"`
+	Error     string    `json:"error,omitempty"`
 }

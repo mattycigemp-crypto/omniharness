@@ -61,6 +61,9 @@ func TestDiffCheck(t *testing.T) {
 	run(t, dir, "git", "config", "user.email", "t@t")
 	run(t, dir, "git", "config", "user.name", "t")
 	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644)
+	// diff-check skips a workspace with no go.mod, so the module file is part
+	// of the fixture: this test is about the git-status branch below it.
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module difftest\n\ngo 1.27\n"), 0o644)
 	run(t, dir, "git", "add", ".")
 	run(t, dir, "git", "commit", "-m", "init")
 
@@ -87,6 +90,18 @@ func TestDiffCheck(t *testing.T) {
 	}
 }
 
+// A workspace with no go.mod is not judged on its git state.
+func TestDiffCheckSkipsWorkspaceWithoutGoMod(t *testing.T) {
+	e := &DiffCheckEvaluator{}
+	outcome, detail, err := e.Evaluate(context.Background(), Request{CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != NeedsReview {
+		t.Fatalf("outcome = %s (%s), want NEEDS_REVIEW", outcome, detail)
+	}
+}
+
 func TestEvidenceEvaluator(t *testing.T) {
 	e := &EvidenceEvaluator{}
 	outcome, _, _ := e.Evaluate(context.Background(), Request{Result: task.Result{Summary: "see https://example.com"}})
@@ -104,14 +119,29 @@ func TestRegistrySelection(t *testing.T) {
 	if err := r.RegisterDefaults(); err != nil {
 		t.Fatal(err)
 	}
-	// Software task gets build/test/diff.
-	evs := r.ForTask(task.Profile{Domain: task.DomainSoftware})
+	// A software task that changes files gets build/test/diff.
+	evs := r.ForTask(task.Profile{Domain: task.DomainSoftware, ModifiesFiles: true})
 	names := map[string]bool{}
 	for _, e := range evs {
 		names[e.Name()] = true
 	}
 	if !names["go-build"] || !names["go-test"] || !names["diff-check"] {
 		t.Fatalf("software evaluators %v", names)
+	}
+	// A read-only software task still gets build/test, but no diff check: it
+	// never meant to write, so a clean tree is the expected outcome, not a
+	// failure. Selecting diff-check here is what made every task fail on a
+	// clean checkout.
+	evs = r.ForTask(task.Profile{Domain: task.DomainSoftware})
+	names = map[string]bool{}
+	for _, e := range evs {
+		names[e.Name()] = true
+	}
+	if names["diff-check"] {
+		t.Fatalf("read-only software task must not run diff-check: %v", names)
+	}
+	if !names["go-build"] || !names["go-test"] {
+		t.Fatalf("read-only software task still needs build/test: %v", names)
 	}
 	// Research task gets evidence.
 	evs = r.ForTask(task.Profile{Domain: task.DomainResearch})

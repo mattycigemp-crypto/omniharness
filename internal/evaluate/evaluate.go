@@ -68,7 +68,8 @@ func (r *Registry) Register(e Evaluator) error {
 }
 
 // ForTask selects the evaluators appropriate for a task's profile. Software
-// tasks get build/test/diff checks; research tasks get evidence checks.
+// tasks get build/test checks; diff-check is added only when the task set out
+// to change files. Research tasks get evidence checks.
 func (r *Registry) ForTask(p task.Profile) []Evaluator {
 	var out []Evaluator
 	if p.Domain == task.DomainSoftware {
@@ -78,7 +79,7 @@ func (r *Registry) ForTask(p task.Profile) []Evaluator {
 		if e, ok := r.evaluators["go-test"]; ok && hasToolchain(p, "go") {
 			out = append(out, e)
 		}
-		if e, ok := r.evaluators["diff-check"]; ok {
+		if e, ok := r.evaluators["diff-check"]; ok && p.ModifiesFiles {
 			out = append(out, e)
 		}
 	}

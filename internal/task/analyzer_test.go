@@ -95,3 +95,38 @@ func TestBudgetUnlimitedAndExceeded(t *testing.T) {
 		t.Fatal("default spec budget must be unlimited")
 	}
 }
+
+func TestModifiesFiles(t *testing.T) {
+	cases := []struct {
+		prompt string
+		want   bool
+	}{
+		{"Fix the typo in README.md.", true},
+		{"Add a retry to the gateway client.", true},
+		{"Rename the Runtime.Close method.", true},
+		{"Explain how the orchestrator picks a strategy.", false},
+		{"Review the gateway client for race conditions.", false},
+		{"What does the repair engine do?", false},
+		{"Summarize the event spine.", false},
+	}
+	var a Analyzer
+	for _, c := range cases {
+		if got := a.Analyze(Spec{Prompt: c.prompt}).ModifiesFiles; got != c.want {
+			t.Errorf("Analyze(%q).ModifiesFiles = %v, want %v", c.prompt, got, c.want)
+		}
+	}
+}
+
+// A read-only request must not be held to the "working tree changed" check.
+// Selecting that evaluator for every software task made the whole suite pass
+// only on a dirty checkout and fail on a clean one.
+func TestReadOnlyTaskSkipsDiffCheck(t *testing.T) {
+	var a Analyzer
+	p := a.Analyze(Spec{Prompt: "Explain how this Go package handles a panic."})
+	if p.Domain != DomainSoftware {
+		t.Fatalf("domain = %v, want SOFTWARE", p.Domain)
+	}
+	if p.ModifiesFiles {
+		t.Fatal("a read-only request must not be marked as modifying files")
+	}
+}

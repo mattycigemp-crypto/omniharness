@@ -43,6 +43,7 @@ func (a *Analyzer) Analyze(s Spec) Profile {
 	p.Risk = detectRisk(text, add)
 	p.Tools = detectTools(text, p.Domain, add)
 	p.Parallelizable = detectParallelizable(text, sentences, add)
+	p.ModifiesFiles = detectModifiesFiles(text, add)
 	p.Context = detectContext(text, words, a.RepoRoot, add)
 	p.Verification = detectVerification(text, p.Domain, add)
 	p.ApprovalRecommended = p.Risk == LevelHigh
@@ -312,6 +313,31 @@ func detectContext(text string, words int, repoRoot string, add func(string, ...
 	}
 	add("context=%s (%d words, repo score %d)", l, words, score)
 	return l
+}
+
+// detectModifiesFiles reports whether the request asks for a change on disk.
+// The distinction matters downstream: only a task that set out to change
+// something is held to the "the working tree actually changed" check. A
+// request to explain, review or summarise leaves a clean tree by design, and
+// failing it for that would be a false alarm.
+func detectModifiesFiles(text string, add func(string, ...any)) bool {
+	lower := strings.ToLower(text)
+	// Read-only intents win when they lead the request: "review the fix we
+	// added" asks for an opinion, not another edit.
+	for _, w := range []string{"explain", "review", "summarise", "summarize", "describe", "what does", "how does", "why does", "audit", "analyze", "analyse", "walk me through"} {
+		if strings.HasPrefix(lower, w) {
+			add("modifiesFiles=false (read-only intent %q)", w)
+			return false
+		}
+	}
+	for _, w := range []string{"fix", "add", "implement", "refactor", "rename", "delete", "remove", "write", "create", "update", "migrate", "port", "patch", "rewrite", "bump", "generate", "scaffold", "edit", "change", "replace", "extract", "inline", "format"} {
+		if strings.Contains(lower, w) {
+			add("modifiesFiles=true (signal %q)", w)
+			return true
+		}
+	}
+	add("modifiesFiles=false (no change verb)")
+	return false
 }
 
 func detectVerification(text string, d Domain, add func(string, ...any)) Verification {
