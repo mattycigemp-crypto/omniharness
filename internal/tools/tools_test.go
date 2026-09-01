@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -186,10 +187,50 @@ func TestResolvePathRejectsSymlinkEscape(t *testing.T) {
 
 func TestGitRejectsWorkspaceEscapeFlags(t *testing.T) {
 	n := NewNative(t.TempDir())
-	for _, arg := range []string{"-C", "--git-dir", "--git-dir=/elsewhere"} {
+	// Two classes must be refused. Relocation points git outside the
+	// workspace; execution makes git run a command, which matters because the
+	// shell tool is separately gated and off by default — `git -c
+	// alias.x=!cmd x` ran commands with shell execution disabled.
+	for _, arg := range []string{
+		"-C", "--git-dir", "--git-dir=/elsewhere", "--work-tree=/elsewhere",
+		"--exec-path=/elsewhere", "--namespace=x",
+		"-c", "--config-env=alias.x=EVIL",
+		"--upload-pack=evil", "--receive-pack=evil", "--exec=evil",
+	} {
 		if _, err := n.git(context.Background(), map[string]any{"args": []any{arg, "/etc", "status"}}); err == nil {
-			t.Fatalf("git arg %q must be rejected", arg)
+			t.Errorf("git arg %q must be rejected", arg)
 		}
+	}
+	// A global option is refused wherever it appears, so the subcommand must
+	// come first.
+	if _, err := n.git(context.Background(), map[string]any{"args": []any{"--no-pager", "status"}}); err == nil {
+		t.Error("a leading global option must be rejected: the subcommand comes first")
+	}
+	if _, err := n.git(context.Background(), map[string]any{"args": []any{}}); err == nil {
+		t.Error("an empty args array must be rejected")
+	}
+}
+
+// The git tool must not become a way to run arbitrary commands. git -c sets
+// config for one invocation, and several keys execute: core.pager,
+// core.sshCommand, and alias.<name>=!command. The shell tool is gated by
+// ShellAllowed and off by default, so this was a way around that setting.
+func TestGitCannotRunArbitraryCommands(t *testing.T) {
+	workspace := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "marker.txt")
+	payload := "!sh -c 'echo owned > " + marker + "'"
+	if runtime.GOOS == "windows" {
+		payload = "!echo owned > " + filepath.ToSlash(marker)
+	}
+
+	r := newTestRegistry(t, workspace) // shell not enabled
+	if _, err := mustTool(t, r, "git").Run(context.Background(), map[string]any{
+		"args": []any{"-c", "alias.pwn=" + payload, "pwn"},
+	}); err == nil {
+		t.Fatal("git must not accept -c")
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("git ran a command with shell execution disabled")
 	}
 }
 
