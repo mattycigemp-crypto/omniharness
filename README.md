@@ -142,7 +142,9 @@ cd npm && npm install && npm test && npm run build
 gofmt -l ./cmd ./internal && go vet ./... && go test ./...
 ```
 
-Every pull request runs [`ci.yml`](.github/workflows/ci.yml) — gofmt, `go vet`, the Go suite, and the TypeScript suite + build — and both checks are required to merge. That is where the Go side is gated. Every push to `main` then runs [`publish.yml`](.github/workflows/publish.yml), which re-runs the TypeScript suite, publishes `omniharness-cli` via npm **trusted publishing (OIDC)** — no token is stored, provenance is attached automatically — then cross-compiles the Go CLI for all six targets and attaches them to a tagged GitHub release.
+Every pull request runs [`ci.yml`](.github/workflows/ci.yml) — gofmt, `go vet`, the Go suite, and the TypeScript suite + build — and both checks are required to merge. That is where the Go side is gated. A push to `main` that changes shipped code then runs [`publish.yml`](.github/workflows/publish.yml), which re-runs the TypeScript suite, publishes `omniharness-cli` via npm **trusted publishing (OIDC)** — no token is stored, provenance is attached automatically — then cross-compiles the Go CLI for all six targets and attaches them to a tagged GitHub release with notes generated from that release's commits.
+
+A version number is something people depend on, so documentation, the landing page, tests and workflow edits do not cut one; a commit touching both docs and code still does. To release anyway — a corrected README inside the npm tarball, or a release that failed partway — run the workflow by hand from the Actions tab.
 
 The Go suite is hermetic: tests pin an explicit workspace, so results never depend on whether your checkout has uncommitted changes. Point a run at a different tree with `--workspace` or `OMNIHARNESS_WORKSPACE`.
 
