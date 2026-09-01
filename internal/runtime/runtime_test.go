@@ -15,8 +15,10 @@ import (
 
 func testRuntime(t *testing.T, fake *testutil.FakeOmniRoute, dir string) *Runtime {
 	t.Helper()
+	testutil.InitFakeWorkspace(t, dir)
 	cfg := config.Default()
 	cfg.Persistence.Dir = dir
+	cfg.Policy.WorkspaceRoot = dir
 	rt, err := New(cfg, Options{
 		Gateway:                fake.Client(),
 		DisablePersistenceSink: false,

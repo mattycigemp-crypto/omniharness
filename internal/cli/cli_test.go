@@ -126,7 +126,9 @@ func TestConfigShowRedactsKey(t *testing.T) {
 func TestRunHeadlessEndToEnd(t *testing.T) {
 	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "all done"})
 	dir := t.TempDir()
+	testutil.InitFakeWorkspace(t, dir)
 	t.Setenv("OMNIHARNESS_DATA_DIR", dir)
+	t.Setenv("OMNIHARNESS_WORKSPACE", dir)
 	t.Setenv("OMNIHARNESS_ENDPOINT", fake.URL())
 
 	root := NewRootCmd()
@@ -161,6 +163,7 @@ func TestSessionsCommandListsCreatedSession(t *testing.T) {
 	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "ok"})
 	dir := t.TempDir()
 	t.Setenv("OMNIHARNESS_DATA_DIR", dir)
+	t.Setenv("OMNIHARNESS_WORKSPACE", dir)
 	t.Setenv("OMNIHARNESS_ENDPOINT", fake.URL())
 
 	_ = captureStderr(t, func() {})
@@ -179,6 +182,7 @@ func TestSessionsCommandListsCreatedSession(t *testing.T) {
 func TestDoctorReportsUnreachableEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("OMNIHARNESS_DATA_DIR", dir)
+	t.Setenv("OMNIHARNESS_WORKSPACE", dir)
 	t.Setenv("OMNIHARNESS_ENDPOINT", "http://127.0.0.1:1")
 
 	root := NewRootCmd()
