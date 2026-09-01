@@ -7,10 +7,17 @@
 // node_modules/ink/build/ink.js). That is sensible for a real CI log, but the
 // TUI tests assert on stdout *during* a render — they check what is on screen
 // while a run is in flight, then unmount. Under GitHub Actions, which sets
-// CI=true, every one of those assertions saw an empty screen: the tests failed
-// with nothing but the raw kitty/sync probes in the buffer.
+// CI=true, every one of those assertions saw an empty screen.
 //
-// `is-in-ci` treats CI=false and CI=0 as an explicit opt-out, so this restores
-// the interactive render path the tests are written against. It affects only
+// That mode also left the test runner with handles it never released, so
+// `node --test` hung until the job's timeout. Both symptoms have the same
+// cause, and both go away here: with CI=false the suite renders normally and
+// the runner exits on its own, so no --test-force-exit is needed. Keeping the
+// runner able to hang is deliberate — a future leak should fail loudly rather
+// than be papered over.
+//
+// `is-in-ci` treats CI=false and CI=0 as an explicit opt-out. This affects only
 // this test process — nothing about how the published CLI detects CI.
+//
+// Reproduce the original failure with: CI=true npm test  (before this file).
 process.env.CI = 'false';

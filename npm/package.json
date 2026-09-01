@@ -21,7 +21,7 @@
     "dev": "tsx src/cli.tsx",
     "start": "node dist/cli.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test --test-force-exit --import ./test/setup.mjs --import tsx test/**/*.test.ts"
+    "test": "node --test --import ./test/setup.mjs --import tsx test/**/*.test.ts"
   },
   "keywords": ["omniroute", "omniharness", "agents", "orchestration", "cli"],
   "engines": {
