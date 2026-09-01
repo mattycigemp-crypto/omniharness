@@ -431,6 +431,40 @@ func shellFlag() string {
 	return "-c"
 }
 
+// gitForbiddenArgs are the git options this tool must never pass through.
+//
+// They fall into two groups, and both defeat guarantees made elsewhere:
+//
+//   - Relocation. -C, --git-dir, --work-tree, --exec-path and --namespace
+//     point git at a directory outside the workspace, so confinement stops
+//     meaning anything.
+//   - Execution. -c and --config-env set arbitrary config for the invocation,
+//     and several config keys run commands: core.pager, core.sshCommand,
+//     core.editor, and alias.<name>=!command. --upload-pack, --receive-pack
+//     and --exec name a command to run for a transfer. Any of them turns this
+//     tool into a shell, which matters because the shell tool is separately
+//     gated and off by default: `git -c alias.x='!cmd' x` ran commands with
+//     shell execution disabled.
+//
+// A denylist is not usually the right shape, but git's global options are a
+// closed, documented set; the positional check in git() is what actually bounds
+// them, and this is the specific, named backstop.
+var gitForbiddenArgs = []string{
+	"-C", "-c",
+	"--git-dir", "--work-tree", "--exec-path", "--namespace",
+	"--config-env", "--upload-pack", "--receive-pack", "--exec",
+}
+
+// checkGitArg rejects an argument that relocates git or makes it run a command.
+func checkGitArg(arg string) error {
+	for _, forbidden := range gitForbiddenArgs {
+		if arg == forbidden || strings.HasPrefix(arg, forbidden+"=") {
+			return fmt.Errorf("git arg %q is not allowed: it can relocate git or make it run a command", arg)
+		}
+	}
+	return nil
+}
+
 func (n *Native) git(ctx context.Context, in map[string]any) (Result, error) {
 	argsAny, ok := in["args"].([]any)
 	if !ok {
@@ -442,13 +476,19 @@ func (n *Native) git(ctx context.Context, in map[string]any) (Result, error) {
 		if !ok {
 			return Result{}, fmt.Errorf("git args must be strings")
 		}
-		// Workspace confinement: -C and --git-dir redirect git to an arbitrary
-		// directory. Reject them so the tool cannot escape the workspace
-		// regardless of policy.
-		if s == "-C" || s == "--git-dir" || strings.HasPrefix(s, "--git-dir=") {
-			return Result{}, fmt.Errorf("git arg %q is not allowed (workspace confinement)", s)
+		if err := checkGitArg(s); err != nil {
+			return Result{}, err
 		}
 		args = append(args, s)
+	}
+	if len(args) == 0 {
+		return Result{}, fmt.Errorf("git requires a subcommand")
+	}
+	// The first argument must be the subcommand. Everything git accepts before
+	// it is a global option, and that is where the escapes live — see
+	// checkGitArg. Nothing this tool offers needs one.
+	if strings.HasPrefix(args[0], "-") {
+		return Result{}, fmt.Errorf("git arg %q is not allowed: pass the subcommand first, without global options", args[0])
 	}
 	runCtx, cancel := context.WithTimeout(ctx, n.DefaultShellTimeout)
 	defer cancel()
