@@ -12,6 +12,26 @@ name: Publish
 on:
   push:
     branches: [main]
+    # A release is a version number people depend on, so only cut one when the
+    # shipped artifacts actually change. A README typo, a docs edit, or a
+    # landing-page tweak changes nothing a user installs.
+    #
+    # paths-ignore skips the run only when *every* changed file matches, so a
+    # commit touching both a doc and the CLI still releases.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "landing/**"
+      - ".github/**"
+      - "npm/test/**"
+      - ".gitignore"
+      - ".gitattributes"
+      - "LICENSE"
+
+  # The escape hatch: cut a release from main by hand when the change is one
+  # of the above but you want it published anyway — a corrected README in the
+  # npm tarball, say, or re-running a release that failed partway.
+  workflow_dispatch:
 
 permissions:
   id-token: write # required for OIDC trusted publishing
