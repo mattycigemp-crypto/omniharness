@@ -15,7 +15,7 @@ on:
 
 permissions:
   id-token: write # required for OIDC trusted publishing
-  contents: read
+  contents: write # create the release tag and upload the Go binaries
 
 jobs:
   publish:
@@ -37,9 +37,46 @@ jobs:
           node -e 'const p=require("./package.json"); if (p.bin?.omniharness !== "cli.cjs") throw new Error("npm bin must point to cli.cjs")'
           test -f cli.cjs
 
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.27"
+          cache: true
+          cache-dependency-path: go.sum
+
       # Bump the version, run the TypeScript suite, build, and publish. The Go
-      # side is gated on the pull request by ci.yml, not here.
+      # suite is gated on the pull request by ci.yml, not here.
       # npm CLI detects the OIDC environment and authenticates via trusted
       # publishing without any token.
       - name: Bump, verify and publish
+        id: release
         run: bash scripts/release-npm.sh
+
+      # Everything is pure Go (modernc.org/sqlite, no CGO), so one runner
+      # cross-compiles every target — no per-platform matrix.
+      #
+      # This runs after the npm publish because the version is only settled by
+      # the bump inside release-npm.sh. ci.yml already proves every target
+      # compiles on the pull request, so reaching this step with a broken
+      # cross-compile would take a change that never went through a PR.
+      - name: Build the Go binaries
+        run: bash scripts/build-binaries.sh "${{ steps.release.outputs.version }}" "${GITHUB_SHA::7}"
+
+      # Tag and publish the release last: npm has already succeeded by this
+      # point, so a failure here leaves the binaries unattached rather than the
+      # two channels disagreeing about what shipped.
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "v$VERSION" dist/* \
+            --title "v$VERSION" \
+            --notes "Prebuilt \`omniharness\` binaries for linux, macOS and Windows (amd64 and arm64).
+
+          The npm package \`omniharness-cli@$VERSION\` ships the TypeScript terminal UI; these archives are the Go orchestration CLI. Verify a download against \`SHA256SUMS\`.
+
+          \`\`\`
+          sha256sum -c SHA256SUMS --ignore-missing
+          \`\`\`"

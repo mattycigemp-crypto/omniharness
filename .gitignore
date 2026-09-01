@@ -1,6 +1,7 @@
 # Build output
 /bin/
 *.exe
+/dist/
 
 # Editor / tool state
 .freebuff/
