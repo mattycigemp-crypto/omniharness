@@ -19,13 +19,15 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 DRY_RUN=0
+PRINT_ONLY=0
 BUMP="patch"
 VERSION_ARG=""
 for arg in "$@"; do
   case "$arg" in
-    --dry-run) DRY_RUN=1 ;;
-    --minor)   BUMP="minor" ;;
-    --major)   BUMP="major" ;;
+    --dry-run)            DRY_RUN=1 ;;
+    --print-next-version) PRINT_ONLY=1 ;;
+    --minor)              BUMP="minor" ;;
+    --major)              BUMP="major" ;;
     -*)        echo "unknown option: $arg" >&2; exit 2 ;;
     *)         VERSION_ARG="$arg" ;;
   esac
@@ -35,6 +37,20 @@ done
 # Returns empty string when the package has never been published.
 latest_published() {
   npm view omniharness-cli version 2>/dev/null || true
+}
+
+# next_version prints the version that would be published, writing nothing.
+next_version() {
+  VERSION_ARG="$VERSION_ARG" BUMP="$BUMP" LATEST_PUBLISHED="$(latest_published)" node -e '
+    const fs = require("fs");
+    const j = JSON.parse(fs.readFileSync("npm/package.json", "utf8"));
+    const base = process.env.LATEST_PUBLISHED || j.version;
+    const [maj, min, pat] = base.split(".").map(Number);
+    if (process.env.VERSION_ARG) console.log(process.env.VERSION_ARG);
+    else if (process.env.BUMP === "major") console.log(`${maj + 1}.0.0`);
+    else if (process.env.BUMP === "minor") console.log(`${maj}.${min + 1}.0`);
+    else console.log(`${maj}.${min}.${pat + 1}`);
+  '
 }
 
 # bump_version writes the next version into npm/package.json and prints it.
@@ -60,10 +76,20 @@ bump_version() {
   '
 }
 
+# --print-next-version resolves the next version and stops, without publishing.
+# The release uses it to build and verify the Go binaries *before* npm goes
+# out, then passes the same version back in explicitly — so the two channels
+# cannot disagree about what shipped, and a broken build stops the release
+# rather than stranding a published npm version with no binaries.
+if [[ "$PRINT_ONLY" == "1" ]]; then
+  next_version
+  exit 0
+fi
+
 VERSION="$(bump_version)"
 
-# Hand the resolved version to the workflow so the Go release builds and the
-# git tag use exactly what was published, rather than re-deriving it.
+# Hand the resolved version to the workflow so the git tag matches what was
+# published, rather than re-deriving it.
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 fi

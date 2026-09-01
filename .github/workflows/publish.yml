@@ -44,23 +44,25 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
-      # Bump the version, run the TypeScript suite, build, and publish. The Go
-      # suite is gated on the pull request by ci.yml, not here.
-      # npm CLI detects the OIDC environment and authenticates via trusted
-      # publishing without any token.
-      - name: Bump, verify and publish
-        id: release
-        run: bash scripts/release-npm.sh
+      # Resolve the version first, writing nothing. Both channels are then
+      # built from this one value, so they cannot disagree about what shipped.
+      - name: Resolve the release version
+        id: version
+        run: echo "version=$(bash scripts/release-npm.sh --print-next-version)" >> "$GITHUB_OUTPUT"
 
-      # Everything is pure Go (modernc.org/sqlite, no CGO), so one runner
-      # cross-compiles every target — no per-platform matrix.
-      #
-      # This runs after the npm publish because the version is only settled by
-      # the bump inside release-npm.sh. ci.yml already proves every target
-      # compiles on the pull request, so reaching this step with a broken
-      # cross-compile would take a change that never went through a PR.
+      # Build the binaries before anything is published: a cross-compile that
+      # fails stops the release here, rather than leaving a published npm
+      # version with no binaries to go with it. Everything is pure Go
+      # (modernc.org/sqlite, no CGO), so one runner builds every target — no
+      # per-platform matrix.
       - name: Build the Go binaries
-        run: bash scripts/build-binaries.sh "${{ steps.release.outputs.version }}" "${GITHUB_SHA::7}"
+        run: bash scripts/build-binaries.sh "${{ steps.version.outputs.version }}" "${GITHUB_SHA::7}"
+
+      # Run the TypeScript suite, build, and publish at the version already
+      # used for the binaries. npm detects the OIDC environment and
+      # authenticates via trusted publishing without any token.
+      - name: Verify and publish to npm
+        run: bash scripts/release-npm.sh "${{ steps.version.outputs.version }}"
 
       # Tag and publish the release last: npm has already succeeded by this
       # point, so a failure here leaves the binaries unattached rather than the
@@ -68,7 +70,7 @@ jobs:
       - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.release.outputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           gh release create "v$VERSION" dist/* \
