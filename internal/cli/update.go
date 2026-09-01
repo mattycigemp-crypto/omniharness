@@ -196,7 +196,7 @@ func runUpdate(ctx context.Context) error {
 	if err == nil && latest != "" {
 		switch cmp := compareVersions(version.Version, latest); {
 		case cmp == 0:
-			fmt.Println("\n✓ up to date")
+			fmt.Println("\nup to date")
 			return nil
 		case cmp > 0:
 			fmt.Printf("\nnote: running %s is ahead of the published %s\n", version.Version, latest)
@@ -223,6 +223,6 @@ func runUpdate(ctx context.Context) error {
 		return fmt.Errorf("npm install -g %s: %w\n%s", npmPackage, err, string(out))
 	}
 	fmt.Print(string(out))
-	fmt.Println("✓ updated — open a new terminal, or re-run `omniharness --version`")
+	fmt.Println("updated. open a new terminal, or re-run `omniharness --version`")
 	return nil
 }

@@ -21,9 +21,9 @@ Route once, run anywhere — plan, build, research, or turn a swarm loose.
 
 ## Why
 
-If you use OmniRoute, generic coding agents feel slow against it — they were built for one provider and bolt routing on afterward. OmniHarness is the other way round: **OmniRoute is the execution layer, and everything above it is native to that model.** One `provider/model` intent goes out; routing, quota, failover, and provider translation stay where they belong. The result is a harness that stays fast on your gateway and still works phenomenally if you point it somewhere else.
+If you use OmniRoute, generic coding agents feel slow against it — they were built for one provider and bolt routing on afterward. OmniHarness is the other way round: **OmniRoute is the execution layer, and everything above it is native to that model.** One `provider/model` intent goes out; routing, quota, failover, and provider translation stay where they belong. The harness stays fast on your gateway and still works if you point it somewhere else.
 
-It ships as a polished terminal UI today; a web and desktop front end are on the roadmap over the same core.
+It ships as a terminal UI today; a web and desktop front end are on the roadmap over the same core.
 
 ## Install
 

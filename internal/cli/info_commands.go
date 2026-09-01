@@ -92,11 +92,11 @@ func newDoctorCmd() *cobra.Command {
 			results := []diagResult{}
 			check := func(name string, ok bool, detail string) {
 				results = append(results, diagResult{Name: name, OK: ok, Detail: detail})
-				mark := "✓"
+				mark := "ok"
 				if !ok {
-					mark = "✗"
+					mark = "FAIL"
 				}
-				fmt.Printf("%s %-28s %s\n", mark, name, detail)
+				fmt.Printf("%-5s %-28s %s\n", mark, name, detail)
 			}
 
 			check("config", err == nil, "default config valid")
@@ -294,7 +294,7 @@ func newPluginsCmd() *cobra.Command {
 				fmt.Println("  (none — add [[mcp.servers]] entries to your config)")
 			}
 			for _, s := range cfg.MCP.Servers {
-				line := fmt.Sprintf("  %s → %s %s", s.Name, s.Command, s.Args)
+				line := fmt.Sprintf("  %s -> %s %s", s.Name, s.Command, s.Args)
 				fmt.Println(line)
 			}
 

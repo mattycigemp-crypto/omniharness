@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -37,6 +38,10 @@ func newRunCmd() *cobra.Command {
 		Long: `Analyzes a task, selects a strategy, orchestrates agents and routes model
 execution through OmniRoute. The prompt may be given as an argument, with
 --prompt, or read from a file with --file.`,
+		Example: `  omniharness run "fix the failing test in ./internal/task"
+  omniharness run --file task.md --max-cost 0.50
+  git show HEAD | omniharness run --headless -
+  omniharness --yes run "bump the version and tag it"`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p, err := resolvePrompt(prompt, promptFile, args)
@@ -108,7 +113,7 @@ execution through OmniRoute. The prompt may be given as an argument, with
 }
 
 func resolvePrompt(prompt, promptFile string, args []string) (string, error) {
-	if len(args) > 0 {
+	if len(args) > 0 && args[0] != "-" {
 		return args[0], nil
 	}
 	if prompt != "" {
@@ -121,7 +126,17 @@ func resolvePrompt(prompt, promptFile string, args []string) (string, error) {
 		}
 		return strings.TrimSpace(string(b)), nil
 	}
-	return "", fmt.Errorf("no prompt given: pass it as an argument, or use --prompt / --file")
+	// Read stdin when the caller passed "-" or piped input in.
+	if (len(args) > 0 && args[0] == "-") || !isTerminal(os.Stdin) {
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", fmt.Errorf("read prompt from stdin: %w", err)
+		}
+		if s := strings.TrimSpace(string(b)); s != "" {
+			return s, nil
+		}
+	}
+	return "", fmt.Errorf("no prompt given: pass it as an argument, use --prompt / --file, or pipe it on stdin")
 }
 
 // installInterrupt cancels the context on SIGINT/SIGTERM.
@@ -188,27 +203,27 @@ func formatEvent(e event.Event) string {
 	case event.ModelRequested:
 		var d event.ModelRequestedData
 		_ = json.Unmarshal(e.Data, &d)
-		return fmt.Sprintf("model → %s", d.Model)
+		return fmt.Sprintf("model request %s", d.Model)
 	case event.ModelResponded:
 		var d event.ModelRespondedData
 		_ = json.Unmarshal(e.Data, &d)
-		return fmt.Sprintf("model ← %s (in=%d out=%d $%.4f %s)", d.Model, d.TokensIn, d.TokensOut, d.CostUSD, formatDuration(d.Latency))
+		return fmt.Sprintf("model reply   %s (in=%d out=%d $%.4f %s)", d.Model, d.TokensIn, d.TokensOut, d.CostUSD, formatDuration(d.Latency))
 	case event.ModelFailed:
 		var d event.ModelFailedData
 		_ = json.Unmarshal(e.Data, &d)
-		return fmt.Sprintf("model ✗ %s: %s", d.Model, truncate(d.Error, 120))
+		return fmt.Sprintf("model failed  %s: %s", d.Model, truncate(d.Error, 120))
 	case event.ToolRequested:
 		var d event.ToolRequestedData
 		_ = json.Unmarshal(e.Data, &d)
-		return fmt.Sprintf("tool → %s [%s] %s", d.Tool, d.Risk, truncate(d.Input, 100))
+		return fmt.Sprintf("tool request %s [%s] %s", d.Tool, d.Risk, truncate(d.Input, 100))
 	case event.ToolCompleted:
 		var d event.ToolFinishedData
 		_ = json.Unmarshal(e.Data, &d)
-		return fmt.Sprintf("tool ✓ %s (%s)", d.Tool, formatDuration(d.Duration))
+		return fmt.Sprintf("tool ok      %s (%s)", d.Tool, formatDuration(d.Duration))
 	case event.ToolFailed:
 		var d event.ToolFailedData
 		_ = json.Unmarshal(e.Data, &d)
-		return fmt.Sprintf("tool ✗ %s: %s", d.Tool, truncate(d.Error, 120))
+		return fmt.Sprintf("tool failed  %s: %s", d.Tool, truncate(d.Error, 120))
 	case event.EvaluationStarted:
 		var d event.EvaluationData
 		_ = json.Unmarshal(e.Data, &d)
@@ -216,19 +231,19 @@ func formatEvent(e event.Event) string {
 	case event.EvaluationComplete:
 		var d event.EvaluationCompletedData
 		_ = json.Unmarshal(e.Data, &d)
-		return fmt.Sprintf("evaluate: %s → %s", d.Evaluator, d.Outcome)
+		return fmt.Sprintf("evaluate: %s -> %s", d.Evaluator, d.Outcome)
 	case event.RepairStarted:
 		var d event.RepairData
 		_ = json.Unmarshal(e.Data, &d)
 		return fmt.Sprintf("repair #%d: %s (changed: %s)", d.Attempt, d.Strategy, strings.Join(d.Changed, ", "))
 	case event.TaskCompleted:
-		return "✓ task completed"
+		return "task completed"
 	case event.TaskFailed:
 		var d event.TaskFailedData
 		_ = json.Unmarshal(e.Data, &d)
-		return fmt.Sprintf("✗ task failed: %s", truncate(d.Error, 200))
+		return fmt.Sprintf("task failed: %s", truncate(d.Error, 200))
 	case event.TaskCancelled:
-		return "✗ task cancelled"
+		return "task cancelled"
 	case event.BudgetExceeded:
 		var d event.BudgetExceededData
 		_ = json.Unmarshal(e.Data, &d)

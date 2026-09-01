@@ -37,7 +37,7 @@ var rootOpts RootOptions
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "omniharness",
-		Short: "Intelligent agent orchestration above OmniRoute",
+		Short: "Agent orchestration above OmniRoute",
 		Long: `OmniHarness is an agent orchestration system that analyzes tasks, selects
 execution strategies, orchestrates capability-driven agents, and routes model
 execution through OmniRoute. It is local-first and headless-capable.`,
@@ -143,11 +143,11 @@ func installApprover(rt *runtime.Runtime, approveAll bool) {
 			return true, nil
 		}
 		if !isTerminal(os.Stdin) {
-			fmt.Fprintf(os.Stderr, "⛔ tool %q (%s risk) requires approval: %s — denying (stdin is not a terminal)\n",
+			fmt.Fprintf(os.Stderr, "denied: tool %q (%s risk) needs approval and stdin is not a terminal\n   reason: %s\n   re-run with --yes to auto-approve\n",
 				r.Tool, r.Risk, reason)
 			return false, nil
 		}
-		fmt.Fprintf(os.Stderr, "\n⚠  tool %q (%s risk) requires approval\n   reason: %s\n   Approve? [y/N] ", r.Tool, r.Risk, reason)
+		fmt.Fprintf(os.Stderr, "\napproval required: tool %q (%s risk)\n   reason: %s\n   approve? [y/N] ", r.Tool, r.Risk, reason)
 		reader := bufio.NewReader(os.Stdin)
 		line, _ := reader.ReadString('\n')
 		line = strings.ToLower(strings.TrimSpace(line))
@@ -173,7 +173,7 @@ func runTUI(ctx context.Context, opts RootOptions) error {
 	}
 	// Best-effort update notice: never blocks the launch and never fails it.
 	if notice := launchUpdateNotice(ctx, cfg.Persistence.Dir); notice != "" {
-		fmt.Fprintf(os.Stderr, "⚠ %s\n", notice)
+		fmt.Fprintf(os.Stderr, "%s\n", notice)
 	}
 	configPath := rootOpts.ConfigPath
 	if configPath == "" {

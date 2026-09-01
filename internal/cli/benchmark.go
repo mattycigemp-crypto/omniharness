@@ -122,11 +122,11 @@ func printBenchmarkReport(r *benchmark.Report) {
 	w.Flush()
 	fmt.Println()
 	for _, res := range r.Results {
-		mark := "✓"
+		mark := "ok"
 		if !res.Passed {
-			mark = "✗"
+			mark = "FAIL"
 		}
-		fmt.Printf("%s %s %s iter=%d %s %dms %s\n", mark, res.Model, res.CaseID, res.Iteration,
+		fmt.Printf("%-5s %s %s iter=%d %s %dms %s\n", mark, res.Model, res.CaseID, res.Iteration,
 			res.Strategy, res.LatencyMS, truncate(res.Detail, 80))
 	}
 	_ = time.Now

@@ -748,7 +748,7 @@ func (m *Model) applyCombo(id string) tea.Cmd {
 	m.cfg.Models.Default = id
 	m.comboSel = 0
 	m.input.Placeholder = "describe a task…"
-	m.chat(chatHarness, "combo → "+id+" — "+combo.Describe(id))
+	m.chat(chatHarness, "combo set: "+id+" — "+combo.Describe(id))
 	if m.configPath != "" {
 		cfg, err := config.Load(m.configPath)
 		if err != nil {
@@ -798,7 +798,7 @@ func (m *Model) applyEndpoint(url string) tea.Cmd {
 			return m.noteError(fmt.Errorf("saved endpoint but failed to persist: %w", err))
 		}
 	}
-	m.chat(chatHarness, "endpoint → "+m.cfg.OmniRoute.Endpoint+" — saved")
+	m.chat(chatHarness, "endpoint set: "+m.cfg.OmniRoute.Endpoint+" (saved)")
 	if m.rt != nil && m.rt.Gateway != nil {
 		m.rt.Gateway = gateway.New(m.cfg.OmniRoute.Endpoint, m.cfg.OmniRoute.Timeout, m.cfg.OmniRoute.APIKey)
 	}
@@ -919,7 +919,7 @@ func (m *Model) applyEvent(e event.Event) {
 			s.Cost += d.CostUSD
 			s.LastState = "ok"
 		})
-		m.chat(chatHarness, fmt.Sprintf("model ← %s (%d+%d tok, $%.4f)", d.Model, d.TokensIn, d.TokensOut, d.CostUSD))
+		m.chat(chatHarness, fmt.Sprintf("model reply %s (%d+%d tok, $%.4f)", d.Model, d.TokensIn, d.TokensOut, d.CostUSD))
 	case event.RepairStarted:
 		var d event.RepairData
 		decode(e, &d)
@@ -957,9 +957,9 @@ func (m *Model) applyEvent(e event.Event) {
 			}
 		})
 		if d.Reason != "" {
-			m.chat(chatHarness, "model → "+d.Model+" ("+d.Reason+")")
+			m.chat(chatHarness, "model request "+d.Model+" ("+d.Reason+")")
 		} else {
-			m.chat(chatHarness, "model → "+d.Model)
+			m.chat(chatHarness, "model request "+d.Model)
 		}
 	case event.ModelFailed:
 		var d event.ModelFailedData
@@ -969,7 +969,7 @@ func (m *Model) applyEvent(e event.Event) {
 			s.Failures++
 			s.LastState = "failed"
 		})
-		m.chat(chatError, "model ✗ "+d.Model+": "+truncate(d.Error, 200))
+		m.chat(chatError, "model failed "+d.Model+": "+truncate(d.Error, 200))
 	case event.ToolRequested:
 		var d event.ToolRequestedData
 		decode(e, &d)
@@ -977,11 +977,11 @@ func (m *Model) applyEvent(e event.Event) {
 	case event.ToolFailed:
 		var d event.ToolFailedData
 		decode(e, &d)
-		m.chat(chatError, "tool ✗ "+d.Tool+": "+truncate(d.Error, 160))
+		m.chat(chatError, "tool failed "+d.Tool+": "+truncate(d.Error, 160))
 	case event.EvaluationComplete:
 		var d event.EvaluationCompletedData
 		decode(e, &d)
-		m.chat(chatHarness, "verified · "+d.Evaluator+" → "+d.Outcome)
+		m.chat(chatHarness, "verified: "+d.Evaluator+" -> "+d.Outcome)
 	}
 	m.pushEvent(e)
 }
