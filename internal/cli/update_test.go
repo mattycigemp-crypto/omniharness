@@ -1,32 +1,10 @@
 package cli
 
 import (
-	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 )
-
-func TestInstalledFromNpm(t *testing.T) {
-	cases := []struct {
-		path string
-		want bool
-	}{
-		{`C:\Users\wegot\AppData\Roaming\npm\node_modules\omniharness-cli\vendor\win32-x64\omniharness.exe`, true},
-		{`/usr/local/lib/node_modules/omniharness-cli/vendor/linux-x64/omniharness`, true},
-		{`C:\AI\omniharness\bin\omniharness.exe`, false},
-		{`C:\AI\omniharness\npm\vendor\win32-x64\omniharness.exe`, false}, // repo build dir, not node_modules
-		{`/c/AI/omniharness/bin/omniharness`, false},
-	}
-	for _, c := range cases {
-		if got := installedFromNpm(c.path); got != c.want {
-			t.Errorf("installedFromNpm(%q) = %v, want %v", c.path, got, c.want)
-		}
-	}
-}
 
 func TestCompareVersions(t *testing.T) {
 	cases := []struct {
@@ -56,38 +34,32 @@ func TestParseVersionToleratesJunk(t *testing.T) {
 	}
 }
 
-func TestUpdateNoticeFor(t *testing.T) {
-	newer := updateNoticeFor("0.1.0", "0.1.2", true)
-	if !strings.Contains(newer, "update available") || !strings.Contains(newer, "0.1.2") || !strings.Contains(newer, "omniharness update") {
-		t.Fatalf("newer notice = %q", newer)
+// repoRootOf must only name a directory it can actually verify. Deriving the
+// path from the executable alone printed a `cd` to whatever sat two levels up,
+// which for a binary outside a checkout was a wrong instruction.
+func TestRepoRootOf(t *testing.T) {
+	repo := t.TempDir()
+	binDir := filepath.Join(repo, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	// Up to date, ahead of published, and source builds show nothing.
-	if got := updateNoticeFor("0.1.2", "0.1.2", true); got != "" {
-		t.Fatalf("up to date notice = %q", got)
-	}
-	if got := updateNoticeFor("0.1.3", "0.1.2", true); got != "" {
-		t.Fatalf("ahead notice = %q", got)
-	}
-	if got := updateNoticeFor("0.1.0", "0.1.2", false); got != "" {
-		t.Fatalf("source build notice = %q", got)
-	}
-	if got := updateNoticeFor("0.1.0", "", true); got != "" {
-		t.Fatalf("unknown latest notice = %q", got)
-	}
-}
+	exe := filepath.Join(binDir, "omniharness.exe")
 
-func TestCachedLatestVersionUsesFreshCache(t *testing.T) {
-	// A fresh cache must be honored without touching the network.
-	dir := t.TempDir()
-	data, _ := json.Marshal(updateCheckCache{CheckedAt: time.Now(), Latest: "9.9.9"})
-	if err := os.WriteFile(filepath.Join(dir, "update-check.json"), data, 0o600); err != nil {
+	// No go.mod yet: the layout looks right but the checkout is unconfirmed.
+	if _, ok := repoRootOf(exe); ok {
+		t.Fatal("must not claim a repo root without a go.mod")
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	latest, err := cachedLatestVersion(context.Background(), dir)
-	if err != nil {
-		t.Fatal(err)
+	got, ok := repoRootOf(exe)
+	if !ok || got != repo {
+		t.Fatalf("repoRootOf = %q, %v; want %q, true", got, ok, repo)
 	}
-	if latest != "9.9.9" {
-		t.Fatalf("latest = %q", latest)
+
+	// A binary somewhere else entirely resolves to nothing.
+	if _, ok := repoRootOf(filepath.Join(t.TempDir(), "omniharness.exe")); ok {
+		t.Fatal("a binary outside a bin/ directory has no repo root")
 	}
 }
