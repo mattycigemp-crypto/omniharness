@@ -53,10 +53,19 @@ if (command === 'update') {
   })();
 } else if (command === 'models') {
   void (async () => {
+    const client = new OmniRouteClient();
     try {
-      console.log((await models(new OmniRouteClient())).join('\n'));
+      console.log((await models(client)).join('\n'));
     } catch (error) {
-      console.error(`omniharness models: ${error instanceof Error ? error.message : String(error)}`);
+      // "fetch failed" on its own tells the user nothing they can act on.
+      // Name the endpoint that was tried and what to check, the way doctor
+      // does — a connection failure here almost always means the gateway is
+      // not running or OMNIROUTE_URL points somewhere else.
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`omniharness models: ${reason}`);
+      console.error(`  endpoint: ${client.endpoint}`);
+      console.error('  check that OmniRoute is running, and that OMNIROUTE_URL points at it');
+      console.error("  run 'omniharness doctor' for a full connection report");
       process.exitCode = 1;
     }
   })();
