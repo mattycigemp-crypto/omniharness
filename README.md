@@ -114,12 +114,21 @@ Two front ends over one core. `internal/gateway` is the **only** place that talk
 The Go side (`internal/**`) carries the orchestration engine and a scriptable CLI:
 
 ```bash
-go build ./cmd/omniharness
 omniharness doctor                       # check endpoint + auth, safely
 omniharness run "fix the failing test"   # headless, current directory
 omniharness stack                        # choose the model combo
 omniharness sessions | models | serve
 ```
+
+Prebuilt binaries ship with every [release](https://github.com/shipking-ai/omniharness/releases) — linux, macOS and Windows, amd64 and arm64. Download the archive for your platform, or build from a checkout with `go build ./cmd/omniharness`.
+
+Each release carries a `SHA256SUMS` file:
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+Note these are two different programs on a shared version line: `omniharness-cli` on npm is the terminal UI, and the release archives are this Go CLI.
 
 Full write-up: [`docs/architecture.md`](docs/architecture.md).
 
@@ -133,7 +142,7 @@ cd npm && npm install && npm test && npm run build
 gofmt -l ./cmd ./internal && go vet ./... && go test ./...
 ```
 
-Every pull request runs [`ci.yml`](.github/workflows/ci.yml) — gofmt, `go vet`, the Go suite, and the TypeScript suite + build — and both checks are required to merge. That is where the Go side is gated. Every push to `main` then runs [`publish.yml`](.github/workflows/publish.yml), which re-runs the TypeScript suite and publishes `omniharness-cli` via npm **trusted publishing (OIDC)** — no token is stored, provenance is attached automatically.
+Every pull request runs [`ci.yml`](.github/workflows/ci.yml) — gofmt, `go vet`, the Go suite, and the TypeScript suite + build — and both checks are required to merge. That is where the Go side is gated. Every push to `main` then runs [`publish.yml`](.github/workflows/publish.yml), which re-runs the TypeScript suite, publishes `omniharness-cli` via npm **trusted publishing (OIDC)** — no token is stored, provenance is attached automatically — then cross-compiles the Go CLI for all six targets and attaches them to a tagged GitHub release.
 
 The Go suite is hermetic: tests pin an explicit workspace, so results never depend on whether your checkout has uncommitted changes. Point a run at a different tree with `--workspace` or `OMNIHARNESS_WORKSPACE`.
 

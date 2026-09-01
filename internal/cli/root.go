@@ -44,7 +44,7 @@ execution strategies, orchestrates capability-driven agents, and routes model
 execution through OmniRoute. It is local-first and headless-capable.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Version:       version.String(),
+		Version:       version.Short(), // cobra prefixes the program name itself
 		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Bare `omniharness` opens the TUI when attached to a terminal,

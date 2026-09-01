@@ -61,7 +61,12 @@ bump_version() {
 }
 
 VERSION="$(bump_version)"
-LDFLAGS="-X omniharness/internal/version.Version=$VERSION -X omniharness/internal/version.Commit=release"
+
+# Hand the resolved version to the workflow so the Go release builds and the
+# git tag use exactly what was published, rather than re-deriving it.
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+  echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+fi
 
 # The package ships the new Ink/Mastra TUI. Build it before packaging so the
 # published launcher executes the TypeScript interface rather than the legacy
