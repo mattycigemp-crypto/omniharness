@@ -142,14 +142,39 @@ func (n *Native) resolvePath(input map[string]any) (string, error) {
 	if err := n.confine(root, abs); err != nil {
 		return "", err
 	}
-	// Follow symlinks for paths that already exist; the resolved location
-	// must also stay inside the root.
-	if real, err := filepath.EvalSymlinks(abs); err == nil {
+	// Follow symlinks; the resolved location must also stay inside the root.
+	// EvalSymlinks fails outright on a path that does not exist yet, so
+	// resolving only the full path skipped this check for every file the agent
+	// was about to create — a new file under a symlinked directory escaped.
+	if real, err := resolveDeepest(abs); err == nil {
 		if err := n.confine(root, real); err != nil {
 			return "", err
 		}
 	}
 	return abs, nil
+}
+
+// resolveDeepest resolves symlinks as far down the path as actually exists,
+// then rejoins the components that do not exist yet. For an existing path this
+// is filepath.EvalSymlinks; for a path being created it is the resolved
+// location of its nearest existing ancestor, which is what confinement has to
+// judge.
+func resolveDeepest(p string) (string, error) {
+	var trailing []string
+	current := p
+	for {
+		real, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			return filepath.Join(append([]string{real}, trailing...)...), nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			// Reached the volume root without resolving anything.
+			return "", err
+		}
+		trailing = append([]string{filepath.Base(current)}, trailing...)
+		current = parent
+	}
 }
 
 func (n *Native) confine(root, p string) error {

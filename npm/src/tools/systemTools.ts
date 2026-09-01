@@ -9,11 +9,47 @@ const execFileAsync = promisify(execFile);
 const MAX_OUTPUT = 32_000;
 const relativePath = z.string().min(1).refine((value) => !path.isAbsolute(value) && value !== '..' && !value.startsWith(`..${path.sep}`));
 
-function within(root: string, target: string): string {
-  const absoluteRoot = path.resolve(root);
-  const absoluteTarget = path.resolve(root, target);
-  const relative = path.relative(absoluteRoot, absoluteTarget);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('path escapes workspace root');
+function escapes(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative.startsWith('..') || path.isAbsolute(relative);
+}
+
+/**
+ * Resolve symlinks as far down the path as actually exists, then rejoin the
+ * components that do not. A path being created cannot be resolved outright, and
+ * it is exactly the one confinement has to judge before the write happens.
+ */
+async function resolveDeepest(target: string): Promise<string> {
+  const trailing: string[] = [];
+  let current = target;
+  for (;;) {
+    try {
+      return path.join(await fs.realpath(current), ...trailing);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return target; // reached the root, nothing resolved
+      trailing.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Confine a path to the workspace, lexically and through symlinks.
+ *
+ * The lexical check alone is not confinement: a symlink inside the workspace
+ * pointing out of it satisfies every string comparison while resolving
+ * somewhere else entirely, and repositories carry symlinks routinely — the
+ * agent does not have to create one. Both the read and the write path were
+ * escaping through them.
+ */
+async function within(root: string, target: string): Promise<string> {
+  const absoluteRoot = await resolveDeepest(path.resolve(root));
+  const absoluteTarget = path.resolve(absoluteRoot, target);
+  if (escapes(absoluteRoot, absoluteTarget)) throw new Error('path escapes workspace root');
+  if (escapes(absoluteRoot, await resolveDeepest(absoluteTarget))) {
+    throw new Error('path escapes workspace root through a symlink');
+  }
   return absoluteTarget;
 }
 
@@ -31,7 +67,7 @@ export function createSystemTools(workspaceRoot: string, shellAllowed = false): 
     name: 'read_file', description: 'Read a UTF-8 file inside the workspace.', risk: 'low', inputSchema: { path: 'relative file path' },
     async execute(input) {
       const parsed = relativePath.parse(input.path);
-      const target = within(root, parsed);
+      const target = await within(root, parsed);
       return { path: parsed, content: await fs.readFile(target, 'utf8') };
     },
   };
@@ -39,7 +75,7 @@ export function createSystemTools(workspaceRoot: string, shellAllowed = false): 
     name: 'write_file', description: 'Write a UTF-8 file inside the workspace.', risk: 'high', inputSchema: { path: 'relative file path', content: 'file contents' },
     async execute(input) {
       const parsed = relativePath.parse(input.path);
-      const target = within(root, parsed);
+      const target = await within(root, parsed);
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, input.content, 'utf8');
       return { path: parsed, bytes: Buffer.byteLength(input.content) };
