@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -172,12 +173,19 @@ func (e *DiffCheckEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, 
 	if len(r.Result.Artifacts) > 0 {
 		return Pass, fmt.Sprintf("%d artifacts produced", len(r.Result.Artifacts)), nil
 	}
-	// Skip when the workspace has no recognisable project structure.
-	// Mirrors the go-build / go-test evaluators which already return
-	// NeedsReview when go.mod is absent — a bare temp dir used in tests
-	// would otherwise always fail this check in a clean CI checkout.
-	if _, err := os.Stat(filepath.Join(r.CWD, "go.mod")); err != nil {
-		return NeedsReview, "no go.mod — diff check skipped", nil
+	// The check is only meaningful when the workspace is itself the root of a
+	// git work tree. A directory that merely sits inside some other repository
+	// would otherwise be judged on that repository's diff, which this task never
+	// touched — that is what made a bare temp workspace inherit the harness's own
+	// checkout state. Deliberately not keyed on go.mod: the harness drives
+	// projects in any language, and a TypeScript or Python workspace needs this
+	// check just as much as a Go one.
+	top, err := runCmd(ctx, r.CWD, "git", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return NeedsReview, "not a git repo — diff check skipped", nil
+	}
+	if !sameDir(strings.TrimSpace(top), r.CWD) {
+		return NeedsReview, "workspace is not a repository root — diff check skipped", nil
 	}
 	out, err := runCmd(ctx, r.CWD, "git", "status", "--porcelain")
 	if err != nil {
@@ -187,6 +195,27 @@ func (e *DiffCheckEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, 
 		return Pass, "working tree has changes", nil
 	}
 	return Fail, "no changes detected in working tree", nil
+}
+
+// sameDir reports whether two paths name the same directory. git prints the
+// work-tree root with forward slashes, temp directories are often reached
+// through a symlink, and Windows paths differ only by case — so compare the
+// resolved, cleaned forms rather than the raw strings.
+func sameDir(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(a); err == nil {
+		a = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(b); err == nil {
+		b = resolved
+	}
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // EvidenceEvaluator checks research results carry source evidence.

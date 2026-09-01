@@ -8,7 +8,8 @@
 #   scripts\release-npm.ps1 0.2.0      # explicit version
 #   scripts\release-npm.ps1 --dry-run  # bump + verify only
 #
-# Requires Git Bash (installed with Git for Windows) and `npm adduser` once.
+# Requires Git Bash (installed with Git for Windows), and npm auth for a real
+# publish (see the prerequisites in release-npm.sh).
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot

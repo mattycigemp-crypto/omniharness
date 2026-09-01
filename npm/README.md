@@ -52,8 +52,9 @@ Slash commands: `/help` `/clear` `/sessions` `/save <name>` `/forget <name>`
 
 - Node.js 20 or newer.
 - Publishing is automatic: every push to `main` runs
-  `.github/workflows/publish.yml`, which verifies both the Go and TypeScript
-  suites, builds, and publishes via **npm trusted publishing (OIDC)** — no token
-  is stored, provenance is attached automatically. Locally,
-  `scripts/release-npm.sh` does the same (`--dry-run` to skip publish;
-  `--minor` / `--major` / an explicit version to control the bump).
+  `.github/workflows/publish.yml`, which runs the TypeScript suite, builds, and
+  publishes via **npm trusted publishing (OIDC)** — no token is stored,
+  provenance is attached automatically. The Go suite gates earlier, on the pull
+  request (`.github/workflows/ci.yml`). Locally, `scripts/release-npm.sh` does
+  the same (`--dry-run` to skip publish; `--minor` / `--major` / an explicit
+  version to control the bump).

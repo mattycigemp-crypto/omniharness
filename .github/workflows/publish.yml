@@ -37,7 +37,8 @@ jobs:
           node -e 'const p=require("./package.json"); if (p.bin?.omniharness !== "cli.cjs") throw new Error("npm bin must point to cli.cjs")'
           test -f cli.cjs
 
-      # Bump the version, verify (vet + full test suite), build, and publish.
+      # Bump the version, run the TypeScript suite, build, and publish. The Go
+      # side is gated on the pull request by ci.yml, not here.
       # npm CLI detects the OIDC environment and authenticates via trusted
       # publishing without any token.
       - name: Bump, verify and publish
