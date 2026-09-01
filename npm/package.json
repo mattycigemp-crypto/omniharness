@@ -14,7 +14,9 @@
   "files": [
     "cli.cjs",
     "dist/",
-    "README.md"
+    "README.md",
+    "!dist/**/*.map",
+    "!dist/**/*.d.ts"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
