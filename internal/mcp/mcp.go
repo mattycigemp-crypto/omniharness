@@ -27,8 +27,8 @@ type Server struct {
 
 // ToolInfo is the metadata MCP returns for a tool.
 type ToolInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
 	InputSchema map[string]any `json:"inputSchema"`
 }
 

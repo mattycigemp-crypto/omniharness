@@ -143,10 +143,10 @@ func ByModel(store *session.Store) ([]ModelStats, error) {
 
 // ToolStats breaks down tool usage.
 type ToolStats struct {
-	Tool    string `json:"tool"`
-	Calls   int    `json:"calls"`
-	Failed  int    `json:"failed"`
-	Denied  int    `json:"denied"`
+	Tool   string `json:"tool"`
+	Calls  int    `json:"calls"`
+	Failed int    `json:"failed"`
+	Denied int    `json:"denied"`
 }
 
 // ByTool aggregates tool usage.

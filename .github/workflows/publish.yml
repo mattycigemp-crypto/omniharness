@@ -9,8 +9,6 @@ name: Publish
 #   Package settings (omniharness-cli) -> Settings -> Trusted publishing
 #   -> GitHub Actions -> user "shipking-ai", repo "omniharness",
 #   workflow filename "publish.yml", allowed action "npm publish".
-# NOTE: repo moved from mattycigemp-crypto → shipking-ai; update the npm
-# trusted publishing entry to match or publishes will 404.
 on:
   push:
     branches: [main]
@@ -42,7 +40,7 @@ jobs:
         working-directory: npm
         run: |
           node -e 'const p=require("./package.json"); if (p.bin?.omniharness !== "cli.cjs") throw new Error("npm bin must point to cli.cjs")'
-          test -f cli.js
+          test -f cli.cjs
 
       # Bump the version, verify (vet + full test suite), build, and publish.
       # npm CLI detects the OIDC environment and authenticates via trusted

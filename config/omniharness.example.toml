@@ -53,6 +53,10 @@ max_repair_cycles = 3
 [policy]
 shell_allowed = false
 git_push_requires_approval = true
+# workspace_root confines filesystem tools, and scopes the verification pass,
+# to this directory tree. Unset it defaults to the current working directory.
+# Override per run with --workspace or OMNIHARNESS_WORKSPACE.
+# workspace_root = "/path/to/project"
 
 [policy.risk_action]
 low = "allow"

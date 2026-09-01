@@ -25,12 +25,12 @@ type FileRef struct {
 
 // Input to the composer.
 type Input struct {
-	Spec       task.Spec
-	Profile    task.Profile
+	Spec                task.Spec
+	Profile             task.Profile
 	ProjectInstructions []string
-	Files      []FileRef
-	History    []Message // prior conversation (assistant messages + tool results)
-	Summary    string    // running condensation summary
+	Files               []FileRef
+	History             []Message // prior conversation (assistant messages + tool results)
+	Summary             string    // running condensation summary
 	// SystemPrompt is the base system prompt (role instructions etc.).
 	SystemPrompt string
 }

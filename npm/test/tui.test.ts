@@ -130,9 +130,9 @@ test('todos events render the visible plan panel with markers and progress', asy
   const text = stripAnsi(stdout.output);
   assert.match(text, /plan/);
   assert.match(text, /1\/3 done/);
-  assert.match(text, /✓ read the file/);
-  assert.match(text, /◈ fix the bug/);
-  assert.match(text, /○ run tests/);
+  assert.match(text, /ok read the file/);
+  assert.match(text, /> fix the bug/);
+  assert.match(text, /- run tests/);
   instance.unmount();
 });
 
@@ -151,7 +151,7 @@ test('settled replies flow into the static transcript', async () => {
   // Every settled reply is written once into scrollback (Static) — earliest and latest present.
   assert.match(text, /answer-0/);
   assert.match(text, /answer-5/);
-  assert.match(text, /◆ test-model/);
+  assert.match(text, /test-model/);
   instance.unmount();
 });
 
@@ -259,7 +259,7 @@ test('current tool shows in the busy line during a run', async () => {
     await sleep(20);
   }
   assert.match(text, /reading files/); // statusline phase label follows the active tool
-  assert.match(text, /◍ read/); // live tool card
+  assert.match(text, /\.\. read/); // live tool card
   instance.unmount();
 });
 
@@ -385,7 +385,7 @@ test('the swarm rail renders one lane per agent event with progress', async () =
   const text = stripAnsi(stdout.output);
   assert.match(text, /swarm/);
   assert.match(text, /1\/2 lanes done/);
-  assert.match(text, /✓ A1/);
-  assert.match(text, /◍ A2/);
+  assert.match(text, /ok A1/);
+  assert.match(text, /\.\. A2/);
   instance.unmount();
 });

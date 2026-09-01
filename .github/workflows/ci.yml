@@ -21,6 +21,16 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: "1.27"
+      # gofmt is a hard gate: the formatting is not a matter of taste, and a
+      # drifting tree makes every later diff noisier than the change it carries.
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l ./cmd ./internal)"
+          if [ -n "$unformatted" ]; then
+            echo "these files need gofmt -w:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
       - run: go vet ./...
       - run: go test ./...
 

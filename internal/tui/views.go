@@ -197,7 +197,7 @@ func (m *Model) renderActivity() string {
 	} else {
 		action = "working"
 	}
-	return m.styles.muted.Render(m.spinner()+" "+action)
+	return m.styles.muted.Render(m.spinner() + " " + action)
 }
 
 // renderFooter renders the input bar and status.

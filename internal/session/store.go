@@ -155,16 +155,16 @@ type ModelCall struct {
 
 // ToolCall is a recorded tool invocation.
 type ToolCall struct {
-	ID        string    `json:"id"`
-	SessionID string    `json:"sessionId"`
-	TaskID    string    `json:"taskId,omitempty"`
-	AgentID   string    `json:"agentId,omitempty"`
-	Tool      string    `json:"tool"`
-	Status    string    `json:"status"` // completed | failed | denied | cancelled
-	Risk      string    `json:"risk"`
-	DurationMS int64    `json:"durationMs"`
-	Error     string    `json:"error,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID         string    `json:"id"`
+	SessionID  string    `json:"sessionId"`
+	TaskID     string    `json:"taskId,omitempty"`
+	AgentID    string    `json:"agentId,omitempty"`
+	Tool       string    `json:"tool"`
+	Status     string    `json:"status"` // completed | failed | denied | cancelled
+	Risk       string    `json:"risk"`
+	DurationMS int64     `json:"durationMs"`
+	Error      string    `json:"error,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
 }
 
 // Evaluation is a recorded evaluation outcome.
@@ -193,23 +193,23 @@ type AgentRecord struct {
 
 // ProjectMemory is a durable project-level memory entry.
 type ProjectMemory struct {
-	ID        int64     `json:"id"`
-	ProjectKey string   `json:"projectKey"`
-	Kind      string    `json:"kind"`
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID         int64     `json:"id"`
+	ProjectKey string    `json:"projectKey"`
+	Kind       string    `json:"kind"`
+	Content    string    `json:"content"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // Checkpoint is a resumable snapshot of work.
 type Checkpoint struct {
-	ID         string    `json:"id"`
-	SessionID  string    `json:"sessionId"`
-	TaskID     string    `json:"taskId,omitempty"`
-	AgentID    string    `json:"agentId,omitempty"`
-	Reason     string    `json:"reason,omitempty"`
-	Payload    []byte    `json:"payload"`
-	CreatedAt  time.Time `json:"createdAt"`
+	ID        string    `json:"id"`
+	SessionID string    `json:"sessionId"`
+	TaskID    string    `json:"taskId,omitempty"`
+	AgentID   string    `json:"agentId,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
+	Payload   []byte    `json:"payload"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // Store is a SQLite-backed session store.

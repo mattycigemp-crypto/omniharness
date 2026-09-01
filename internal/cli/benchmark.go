@@ -15,11 +15,11 @@ import (
 
 func newBenchmarkCmd() *cobra.Command {
 	var (
-		models      []string
-		cases       []string
-		iterations  int
-		jsonOut     bool
-		sessionID   string
+		models     []string
+		cases      []string
+		iterations int
+		jsonOut    bool
+		sessionID  string
 	)
 	cmd := &cobra.Command{
 		Use:   "benchmark",

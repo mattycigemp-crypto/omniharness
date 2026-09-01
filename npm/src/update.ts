@@ -37,19 +37,19 @@ export function runUpdate(): number {
   console.log(`omniharness ${current} — checking npm for updates…`);
   const latest = latestVersion();
   if (latest === undefined) {
-    console.error('✗ could not reach the npm registry — check your connection, or run: npm install -g omniharness-cli@latest');
+    console.error('could not reach the npm registry — check your connection, or run: npm install -g omniharness-cli@latest');
     return 1;
   }
   if (compareVersions(current, latest) >= 0) {
-    console.log(`✓ up to date (${current})`);
+    console.log(`up to date (${current})`);
     return 0;
   }
-  console.log(`updating ${current} → ${latest}…`);
+  console.log(`updating ${current} -> ${latest}…`);
   const install = npm(['install', '-g', `${PKG}@latest`], 'inherit');
   if (install.status !== 0) {
-    console.error('✗ update failed — run manually: npm install -g omniharness-cli@latest');
+    console.error('update failed — run manually: npm install -g omniharness-cli@latest');
     return install.status ?? 1;
   }
-  console.log(`✓ updated to ${latest} — restart omniharness`);
+  console.log(`updated to ${latest} — restart omniharness`);
   return 0;
 }

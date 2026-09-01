@@ -11,14 +11,14 @@ import (
 
 // Capability names understood by the selection engine.
 const (
-	CapReasoning    = "reasoning"
-	CapFast         = "fast"
-	CapCheap        = "cheap"
-	CapLongContext  = "long-context"
-	CapCoding       = "coding"
-	CapVision       = "vision"
-	CapResearch     = "research"
-	CapReview       = "review"
+	CapReasoning   = "reasoning"
+	CapFast        = "fast"
+	CapCheap       = "cheap"
+	CapLongContext = "long-context"
+	CapCoding      = "coding"
+	CapVision      = "vision"
+	CapResearch    = "research"
+	CapReview      = "review"
 )
 
 // AllCapabilities lists every supported capability.

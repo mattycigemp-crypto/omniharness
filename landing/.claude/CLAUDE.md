@@ -62,5 +62,6 @@ To swap accent color for theme/brand changes: `accentColor()` reads `--accent` f
 3. Framework preset = **Other** (no build command)
 4. Deploy — that's it. Auto-deploys on push to `main`.
 
-To update the version badge: search `ver-badge` in index.html and bump the text.
-The npm badge could also be fetched at build time via Vercel edge middleware if needed later.
+The version badge (`#ver-badge`) reads the published version from the npm registry
+on load; the literal in the markup is only the offline fallback, so there is nothing
+to bump by hand.

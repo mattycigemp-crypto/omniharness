@@ -116,9 +116,9 @@ test('CRAZY mode: a planned run fans out and the swarm rail shows every worker l
       await sleep(50);
     }
 
-    assert.match(text, /⚡ swarm/, 'the swarm rail rendered');
+    assert.match(text, /swarm/, 'the swarm rail rendered');
     assert.match(text, /3\/3 lanes done/, 'all three worker lanes completed');
-    for (const id of ['A1', 'A2', 'A3']) assert.match(text, new RegExp(`✓ ${id}`), `lane ${id} shown done`);
+    for (const id of ['A1', 'A2', 'A3']) assert.match(text, new RegExp(`ok ${id}`), `lane ${id} shown done`);
 
     // The engine really fanned out: three distinct worker system frames were served,
     // and every planned todo was completed by a worker.

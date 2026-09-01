@@ -292,14 +292,20 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("OMNIHARNESS_LOG_LEVEL"); v != "" {
 		c.Logging.Level = v
 	}
+	if v := os.Getenv("OMNIHARNESS_WORKSPACE"); v != "" {
+		c.Policy.WorkspaceRoot = v
+	}
 }
 
 // DefaultPath returns the conventional config file location.
 func DefaultPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".omniharness.toml")
-} // Save writes the configuration back to path as TOML. Used by `stack set`
-// and the TUI settings so endpoint, API key, and model choices persist across launches.
+}
+
+// Save writes the configuration back to path as TOML. Used by `stack set` and
+// the TUI settings so endpoint, API key, and model choices persist across
+// launches.
 func (c *Config) Save(path string) error {
 	if path == "" {
 		return fmt.Errorf("no config path")

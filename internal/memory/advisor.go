@@ -169,4 +169,3 @@ func (a *Advisor) StrategyPerformance() (map[string]strategy.Performance, error)
 func (a *Advisor) RecommendStrategy(profileChoice string, history map[string]strategy.Performance) (string, string, bool) {
 	return strategy.RecommendStrategy(profileChoice, history, a.minRuns())
 }
-

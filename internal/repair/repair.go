@@ -1,4 +1,4 @@
-// Package repair turns failures into intelligent recovery. A failed execution
+// Package repair turns a failure into the next attempt. A failed execution
 // is classified, its probable root cause estimated, and the next attempt
 // alters variables (model, role, context, instructions, tools, strategy)
 // instead of blindly repeating the identical execution.
@@ -163,12 +163,12 @@ func (e *Engine) Plan(f Failure, attempt, maxAttempts int) (Plan, error) {
 				exec = "sequential"
 			}
 			return Plan{
-				Strategy:           "rewrite-restructure",
-				Role:               "debugger",
-				ModelCapability:    "reasoning",
-				ExecutionStrategy:  exec,
-				ExtraInstructions:  "The prior execution failed verification repeatedly under the same structure. Reproduce the failure, trace the root cause precisely, and implement a fix; then re-run verification.",
-				Changed:            []string{"restructured into " + exec + " execution", "role → debugger", "model → reasoning", "targeted fix"},
+				Strategy:          "rewrite-restructure",
+				Role:              "debugger",
+				ModelCapability:   "reasoning",
+				ExecutionStrategy: exec,
+				ExtraInstructions: "The prior execution failed verification repeatedly under the same structure. Reproduce the failure, trace the root cause precisely, and implement a fix; then re-run verification.",
+				Changed:           []string{"restructured into " + exec + " execution", "role → debugger", "model → reasoning", "targeted fix"},
 			}, nil
 		}
 	case "tool":

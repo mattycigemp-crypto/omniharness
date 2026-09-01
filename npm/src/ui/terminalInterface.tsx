@@ -12,6 +12,7 @@ import { palette, type Palette } from './palette.js';
 import { contextMeter, meterBar } from './modelWindows.js';
 import { BEL, SYNC_QUERY, isSyncOutputReply, osc9Notify, osc52Copy, shouldNudgeOnFinish, wrapSynchronizedOutput } from './termcaps.js';
 import { KITTY_POP, KITTY_PUSH, KITTY_QUERY, isEncodedKey, isKittyQueryResponse, parseRawKey, type KeyAction } from './keys.js';
+import { ownVersion } from '../update.js';
 
 interface Props { engine: MastraEngine }
 
@@ -105,7 +106,6 @@ const MODE_SEQ: AgentMode[] = ['plan', 'build', 'research', 'crazy'];
 
 const PERM_SEQ: PermissionMode[] = ['ask', 'acceptEdits', 'bypass'];
 const PERM_LABEL: Record<PermissionMode, string> = { ask: 'manual', acceptEdits: 'accept edits', bypass: 'bypass' };
-const PERM_GLYPH: Record<PermissionMode, string> = { ask: '○', acceptEdits: '◐', bypass: '●' };
 const PERM_COLOR = (p: PermissionMode): string => (p === 'bypass' ? PALETTE.error : p === 'acceptEdits' ? PALETTE.warn : PALETTE.muted);
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
@@ -193,7 +193,7 @@ function TranscriptEntry({ line, width, fallbackModel }: { line: Line; width: nu
   const rows: MarkdownSegment[][] = asMarkdown
     ? renderMarkdown(line.text, width)
     : wrap(line.text, width).map((text) => [{ text }]);
-  const bullet = line.role === 'user' ? '❯' : line.role === 'assistant' ? '◆' : line.role === 'thinking' ? '·' : line.role === 'error' ? '✕' : '⋯';
+  const bullet = line.role === 'user' ? '>' : line.role === 'error' ? '!' : '-';
   return <Box flexDirection="column" marginTop={1}>
     <Text bold color={colorFor(line.role)}>{bullet} {label}</Text>
     {rows.map((segments, index) => <SegmentText key={index} segments={segments} role={line.role} />)}
@@ -201,10 +201,10 @@ function TranscriptEntry({ line, width, fallbackModel }: { line: Line; width: nu
   </Box>;
 }
 
-/** Branded splash shown until the first prompt. */
+/** Shown until the first prompt: what the harness is pointed at, and how to drive it. */
 function Hero({ width, endpoint, model, mode, perm }: { width: number; endpoint: string; model: string; mode: AgentMode; perm: PermissionMode }): React.ReactElement {
-  return <Box flexDirection="column" borderStyle="round" borderColor={PALETTE.accent} paddingX={2} paddingY={1} marginBottom={1} width={Math.min(width, 76)}>
-    <Text bold color={PALETTE.accent}>◇ OMNIHARNESS</Text>
+  return <Box flexDirection="column" marginBottom={1} width={Math.min(width, 76)}>
+    <Text bold color={PALETTE.accent}>omniharness {ownVersion()}</Text>
     <Text dimColor>the OmniRoute-native agent harness</Text>
     <Box marginTop={1} flexDirection="column">
       <Text><Text dimColor>gateway  </Text>{endpoint}</Text>
@@ -507,7 +507,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     '/attach <files> — attach files to the next message',
     '/find <text> — list transcript lines containing <text>',
     '/chapters — list the turns in this session',
-    'keys: Ctrl+O models · Ctrl+E mode · Shift+Tab permissions (manual · accept edits · bypass) · Ctrl+T tool card · Ctrl+Y copy reply · Ctrl+L layout · Ctrl+C cancel/quit · ↑/↓ history',
+    'keys: Ctrl+O models · Ctrl+E mode · Shift+Tab permissions (manual · accept edits · bypass) · Ctrl+T tool card · Ctrl+Y copy reply · Ctrl+L layout · Ctrl+C cancel/quit · up/down history',
     'history scrolls in your terminal · a prompt typed mid-run is queued and sent when the run ends',
   ];
 
@@ -780,13 +780,13 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
         {liveThinkView.map((segments, index) => <SegmentText key={index} segments={segments} role="thinking" />)}
       </Box>}
       {liveAnswer !== '' && <Box flexDirection="column" marginTop={1}>
-        <Text bold color={PALETTE.accent}>◆ {engine.state.activeModel}</Text>
+        <Text bold color={PALETTE.accent}>{engine.state.activeModel}</Text>
         {liveAnswerView.map((segments, index) => <SegmentText key={index} segments={segments} role="assistant" />)}
       </Box>}
 
       {toolCards.slice(-5).map((card) => {
         const expanded = expandedTool === card.id;
-        const dot = card.status === 'running' ? <Text color={PALETTE.warn}>◍</Text> : card.status === 'error' ? <Text color={PALETTE.error}>✕</Text> : <Text color={PALETTE.success}>✓</Text>;
+        const dot = card.status === 'running' ? <Text color={PALETTE.warn}>..</Text> : card.status === 'error' ? <Text color={PALETTE.error}>FAIL</Text> : <Text color={PALETTE.success}>ok</Text>;
         const head = card.name === 'run_command'
           ? `$ ${clip(card.target || '…', Math.max(10, contentWidth - 20))}`
           : `${toolVerb(card.name)}${card.target ? ` ${clip(card.target, Math.max(10, contentWidth - 24))}` : ''}`;
@@ -798,12 +798,12 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
 
       {agents.length > 0 && <Box flexDirection="column" borderStyle="round" borderColor={PALETTE.error} paddingX={2} marginTop={1}>
         <Box justifyContent="space-between">
-          <Text bold color={PALETTE.error}>⚡ swarm</Text>
+          <Text bold color={PALETTE.error}>swarm</Text>
           <Text dimColor>{doneAgents}/{agents.length} lanes done</Text>
         </Box>
         {agents.map((lane, index) => {
           const color = AGENT_COLORS[index % AGENT_COLORS.length];
-          const glyph = lane.status === 'done' ? '✓' : lane.status === 'error' ? '✕' : lane.status === 'working' ? '◍' : '○';
+          const glyph = lane.status === 'done' ? 'ok' : lane.status === 'error' ? 'FAIL' : lane.status === 'working' ? '..' : '--';
           const detail = lane.note ?? (lane.label !== lane.id ? lane.label : lane.status);
           return <Text key={lane.id} color={color}>{glyph} {lane.id}  <Text dimColor>{clip(detail, Math.max(12, contentWidth - 8))}</Text></Text>;
         })}
@@ -811,31 +811,31 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
 
       {taskQueue.length > 0 && <Box flexDirection="column" borderStyle="round" borderColor={PALETTE.accent} paddingX={2} marginTop={1}>
         <Box justifyContent="space-between">
-          <Text bold color={PALETTE.accent}>◇ plan</Text>
+          <Text bold color={PALETTE.accent}>plan</Text>
           <Text dimColor>{taskQueue.filter((item) => item.status === 'done').length}/{taskQueue.length} done</Text>
         </Box>
         {taskQueue.slice(-6).map((item) => {
-          const marker = item.status === 'done' ? '✓' : item.status === 'active' ? '◈' : '○';
+          const marker = item.status === 'done' ? 'ok' : item.status === 'active' ? '>' : '-';
           const color = item.status === 'done' ? PALETTE.success : item.status === 'active' ? PALETTE.accent : undefined;
           return <Text key={item.id} color={color} dimColor={item.status === 'done'}>{marker} {clip(item.title, contentWidth - 4)}</Text>;
         })}
       </Box>}
 
-      {engine.state.preview && <Text color={PALETTE.success}>▸ preview live · {engine.state.preview.url}</Text>}
+      {engine.state.preview && <Text color={PALETTE.success}>preview live · {engine.state.preview.url}</Text>}
 
       {sessionsOpen && <Box flexDirection="column" borderStyle="round" borderColor={PALETTE.info} paddingX={2} marginTop={1}>
         <Text bold color={PALETTE.info}>saved sessions</Text>
-        <Text dimColor>↑↓ navigate · enter resume · esc close</Text>
+        <Text dimColor>up/down navigate · enter resume · esc close</Text>
         {sessionsList.map((session, index) => (
           <Text key={session.name} color={index === sessionsIndex ? PALETTE.info : undefined}>
-            {index === sessionsIndex ? '❯ ' : '  '}{session.name}{session.savedAt ? <Text dimColor>  ·  {session.savedAt}</Text> : null}
+            {index === sessionsIndex ? '> ' : '  '}{session.name}{session.savedAt ? <Text dimColor>  ·  {session.savedAt}</Text> : null}
           </Text>
         ))}
       </Box>}
 
       {pickerOpen && <Box flexDirection="column" borderStyle="round" borderColor={PALETTE.accent} paddingX={2} marginTop={1}>
         <Text bold color={PALETTE.accent}>choose an OmniRoute model</Text>
-        <Text dimColor>↑↓ / j k navigate · enter select · esc close</Text>
+        <Text dimColor>up/down / j k navigate · enter select · esc close</Text>
         {pickerError && <Text color={PALETTE.error}>{clip(pickerError, contentWidth)}</Text>}
         {pickerItems.length === 0 && !pickerError && <Text dimColor>no models returned by OmniRoute.</Text>}
         {pickerItems.map((item, index) => {
@@ -843,7 +843,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
             ? <Text key={`h-${item.group}`} dimColor bold>{item.group === 'combos' ? 'your combos' : 'auto engine'}</Text>
             : null;
           return <Box key={item.id} flexDirection="column">{header}
-            <Text color={index === pickerIndex ? PALETTE.accent : undefined}>{index === pickerIndex ? '❯ ' : '  '}{item.id}{item.strategy ? <Text dimColor>  · {item.strategy}</Text> : null}{item.id === engine.state.activeModel ? '  ✓' : ''}</Text>
+            <Text color={index === pickerIndex ? PALETTE.accent : undefined}>{index === pickerIndex ? '> ' : '  '}{item.id}{item.strategy ? <Text dimColor>  · {item.strategy}</Text> : null}{item.id === engine.state.activeModel ? '  *' : ''}</Text>
           </Box>;
         })}
       </Box>}
@@ -861,23 +861,23 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
         <Text dimColor>plan {taskQueue.length} · swarm {agents.length} · tool cards {toolCards.length} · editor rows {editorLayout.lines.length}</Text>
       </Box>}
 
-      {queued && <Text color={PALETTE.warn}>⏎ queued · {clip(queued, Math.max(12, contentWidth - 12))}</Text>}
+      {queued && <Text color={PALETTE.warn}>queued · {clip(queued, Math.max(12, contentWidth - 12))}</Text>}
 
       <Box borderStyle="round" borderColor={error ? PALETTE.error : modeAccent} paddingX={1} marginTop={1} flexDirection="column">
         {edit.value === ''
-          ? <Text color={modeAccent}>❯ <Text dimColor>{busy ? 'type to queue the next task' : 'describe the work and press enter'}</Text></Text>
-          : editorLayout.lines.map((text, index) => <Text key={index} color={modeAccent}>{index === 0 ? '❯ ' : '  '}{text}</Text>)}
+          ? <Text color={modeAccent}>{'>'} <Text dimColor>{busy ? 'type to queue the next task' : 'describe the work and press enter'}</Text></Text>
+          : editorLayout.lines.map((text, index) => <Text key={index} color={modeAccent}>{index === 0 ? '> ' : '  '}{text}</Text>)}
       </Box>
 
       {kitty !== null && <Text dimColor>{kitty ? 'kitty protocol active — Shift+Enter makes a new line' : 'this terminal can\'t distinguish Shift+Enter from Enter — use Ctrl+J for a new line'}</Text>}
 
       <Box flexDirection="column">
         <Box justifyContent="space-between">
-          <Text color={busy ? modeAccent : PALETTE.muted}>{busy && <Spinner type="dots" />}{busy ? ' ' : ''}{phase}{elapsed ? ` · ${elapsed}` : ''}{agents.length > 0 ? ` · swarm ${doneAgents}/${agents.length}` : ''}</Text>
+          <Text color={busy ? modeAccent : PALETTE.muted}>{busy && <Spinner type="line" />}{busy ? ' ' : ''}{phase}{elapsed ? ` · ${elapsed}` : ''}{agents.length > 0 ? ` · swarm ${doneAgents}/${agents.length}` : ''}</Text>
           <Text color={PALETTE.muted}>
             <Text color={modeAccent}>{mode}</Text>
             <Text> · </Text>
-            <Text color={mode === 'crazy' ? PALETTE.error : PERM_COLOR(permMode)}>{PERM_GLYPH[mode === 'crazy' ? 'bypass' : permMode]} {mode === 'crazy' ? 'bypass' : PERM_LABEL[permMode]}</Text>
+            <Text color={mode === 'crazy' ? PALETTE.error : PERM_COLOR(permMode)}>{mode === 'crazy' ? 'bypass' : PERM_LABEL[permMode]}</Text>
             <Text> · {engine.state.activeModel}</Text>
             {metrics.fallback.activeProvider ? <Text> · via {metrics.fallback.activeProvider}</Text> : null}
             {contextLabel ? <Text color={meterColor}> · {contextLabel}</Text> : null}

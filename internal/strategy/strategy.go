@@ -62,10 +62,10 @@ type Input struct {
 
 // Performance is the historical aggregate for one strategy.
 type Performance struct {
-	Runs          int     `json:"runs"`
-	SuccessRate   float64 `json:"successRate"`
-	AvgRepairs    float64 `json:"avgRepairs"`
-	AvgCostUSD    float64 `json:"avgCostUsd"`
+	Runs        int     `json:"runs"`
+	SuccessRate float64 `json:"successRate"`
+	AvgRepairs  float64 `json:"avgRepairs"`
+	AvgCostUSD  float64 `json:"avgCostUsd"`
 }
 
 // Selector picks a strategy.

@@ -63,18 +63,18 @@ type RunOptions struct {
 
 // Result is one measured execution.
 type Result struct {
-	CaseID      string  `json:"caseId"`
-	Model       string  `json:"model"`
-	Strategy    string  `json:"strategy"`
-	Iteration   int     `json:"iteration"`
-	Passed      bool    `json:"passed"`
-	Detail      string  `json:"detail,omitempty"`
-	LatencyMS   int64   `json:"latencyMs"`
-	TokensIn    int64   `json:"tokensIn"`
-	TokensOut   int64   `json:"tokensOut"`
-	CostUSD     float64 `json:"costUsd"`
-	Repairs     int     `json:"repairs"`
-	ToolCalls   int     `json:"toolCalls"`
+	CaseID    string  `json:"caseId"`
+	Model     string  `json:"model"`
+	Strategy  string  `json:"strategy"`
+	Iteration int     `json:"iteration"`
+	Passed    bool    `json:"passed"`
+	Detail    string  `json:"detail,omitempty"`
+	LatencyMS int64   `json:"latencyMs"`
+	TokensIn  int64   `json:"tokensIn"`
+	TokensOut int64   `json:"tokensOut"`
+	CostUSD   float64 `json:"costUsd"`
+	Repairs   int     `json:"repairs"`
+	ToolCalls int     `json:"toolCalls"`
 }
 
 // Report aggregates results.
@@ -130,7 +130,7 @@ type ModelSummary struct {
 
 // Runner executes benchmark cases.
 type Runner struct {
-	RT       *runtime.Runtime
+	RT        *runtime.Runtime
 	SessionID string
 }
 

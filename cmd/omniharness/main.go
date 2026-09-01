@@ -1,4 +1,4 @@
-// OmniHarness — intelligent agent orchestration above OmniRoute.
+// Command omniharness is the agent harness that runs above OmniRoute.
 package main
 
 import (

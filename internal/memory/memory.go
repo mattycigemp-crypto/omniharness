@@ -22,16 +22,16 @@ type PerfKey struct {
 // PerfStat is the aggregated performance of one (model, strategy) pair.
 type PerfStat struct {
 	PerfKey
-	Runs          int     `json:"runs"`
-	Successes     int     `json:"successes"`
-	SuccessRate   float64 `json:"successRate"`
-	AvgLatencyMS  int64   `json:"avgLatencyMs"`
-	AvgTokensIn   int64   `json:"avgTokensIn"`
-	AvgTokensOut  int64   `json:"avgTokensOut"`
-	AvgCostUSD    float64 `json:"avgCostUsd"`
-	AvgToolCalls  float64 `json:"avgToolCalls"`
-	AvgRepairs    float64 `json:"avgRepairs"`
-	Outcomes      map[string]int `json:"outcomes"` // evaluation outcome counts
+	Runs         int            `json:"runs"`
+	Successes    int            `json:"successes"`
+	SuccessRate  float64        `json:"successRate"`
+	AvgLatencyMS int64          `json:"avgLatencyMs"`
+	AvgTokensIn  int64          `json:"avgTokensIn"`
+	AvgTokensOut int64          `json:"avgTokensOut"`
+	AvgCostUSD   float64        `json:"avgCostUsd"`
+	AvgToolCalls float64        `json:"avgToolCalls"`
+	AvgRepairs   float64        `json:"avgRepairs"`
+	Outcomes     map[string]int `json:"outcomes"` // evaluation outcome counts
 }
 
 // Aggregate computes performance statistics over recorded tasks. Empty

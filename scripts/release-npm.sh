@@ -9,10 +9,10 @@
 #   scripts/release-npm.sh --dry-run     # bump + verify only, skip publish
 #
 # Prerequisites:
-#   - npm authenticated. Interactive: `npm publish` prompts for the 2FA OTP.
-#     Unattended: a granular token with "Bypass 2FA for publish" enabled, set
-#     as NODE_AUTH_TOKEN or in .npmrc — without a bypass token every publish
-#     needs your one-time code.
+#   - npm authenticated. In CI this is npm trusted publishing (OIDC): the
+#     workflow's id-token permission is the credential, so no token is stored.
+#     Running it by hand needs `npm login`, or a granular token with "Bypass
+#     2FA for publish" set as NODE_AUTH_TOKEN or in .npmrc.
 #   - The portable Go toolchain (scripts/env.sh handles PATH).
 set -euo pipefail
 
@@ -75,6 +75,12 @@ LDFLAGS="-X omniharness/internal/version.Version=$VERSION -X omniharness/interna
 # Go Bubble Tea cockpit.
 cd npm
 npm install --ignore-scripts
+
+# Verify the TypeScript side before building it. This is the same suite CI
+# runs on pull requests; running it here too means a release can never ship a
+# tarball whose tests were never executed.
+echo "Verifying: npm test"
+npm test
 npm run build
 cd "$REPO_ROOT"
 

@@ -24,10 +24,10 @@ func (a *ToolAdapter) Spec() tools.Spec {
 	}
 	risk := tools.RiskHigh
 	return tools.Spec{
-		Name:        ToolName(a.Client.server.Name, a.Info.Name),
-		Description: a.Info.Description,
-		Parameters:  params,
-		Risk:        risk,
+		Name:         ToolName(a.Client.server.Name, a.Info.Name),
+		Description:  a.Info.Description,
+		Parameters:   params,
+		Risk:         risk,
 		ExecutesCode: true,
 	}
 }

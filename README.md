@@ -6,10 +6,10 @@
 Route once, run anywhere — plan, build, research, or turn a swarm loose.
 
 [![npm](https://img.shields.io/npm/v/omniharness-cli?color=2dd4bf&label=omniharness-cli&logo=npm)](https://www.npmjs.com/package/omniharness-cli)
-[![Publish](https://github.com/mattycigemp-crypto/omniharness/actions/workflows/publish.yml/badge.svg)](https://github.com/mattycigemp-crypto/omniharness/actions/workflows/publish.yml)
+[![Publish](https://github.com/shipking-ai/omniharness/actions/workflows/publish.yml/badge.svg)](https://github.com/shipking-ai/omniharness/actions/workflows/publish.yml)
 [![node](https://img.shields.io/node/v/omniharness-cli?color=56b6ff&logo=node.js&logoColor=white)](https://nodejs.org)
 [![Go](https://img.shields.io/badge/go-1.27-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![license](https://img.shields.io/github/license/mattycigemp-crypto/omniharness?color=8b93a7)](LICENSE)
+[![license](https://img.shields.io/github/license/shipking-ai/omniharness?color=8b93a7)](LICENSE)
 
 <br/>
 
@@ -130,10 +130,12 @@ Full write-up: [`docs/architecture.md`](docs/architecture.md).
 cd npm && npm install && npm test && npm run build
 
 # Go core
-go vet ./... && go test ./...
+gofmt -l ./cmd ./internal && go vet ./... && go test ./...
 ```
 
-Every push to `main` runs [`publish.yml`](.github/workflows/publish.yml): it verifies both suites, then publishes `omniharness-cli` via npm **trusted publishing (OIDC)** — no token is stored, provenance is attached automatically.
+Every pull request runs [`ci.yml`](.github/workflows/ci.yml) — gofmt, `go vet`, the Go suite, and the TypeScript suite + build — and both checks are required to merge. Every push to `main` then runs [`publish.yml`](.github/workflows/publish.yml), which re-verifies both suites before publishing `omniharness-cli` via npm **trusted publishing (OIDC)** — no token is stored, provenance is attached automatically.
+
+The Go suite is hermetic: tests pin an explicit workspace, so results never depend on whether your checkout has uncommitted changes. Point a run at a different tree with `--workspace` or `OMNIHARNESS_WORKSPACE`.
 
 ## License
 

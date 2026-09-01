@@ -44,10 +44,10 @@ monitoring. Endpoints:
 			mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 				diag := rt.Gateway.Diagnose(r.Context())
 				writeJSON(w, http.StatusOK, map[string]any{
-					"ok":         true,
-					"version":    version.String(),
-					"omniroute":  diag.State == gateway.AuthOK || diag.State == gateway.AuthNotRequired,
-					"authState":  string(diag.State),
+					"ok":              true,
+					"version":         version.String(),
+					"omniroute":       diag.State == gateway.AuthOK || diag.State == gateway.AuthNotRequired,
+					"authState":       string(diag.State),
 					"omnirouteDetail": diag.Detail,
 				})
 			})
@@ -57,9 +57,9 @@ monitoring. Endpoints:
 					return
 				}
 				var req struct {
-					Prompt    string `json:"prompt"`
-					SessionID string `json:"sessionId,omitempty"`
-					ApproveAll bool  `json:"approveAll,omitempty"`
+					Prompt     string `json:"prompt"`
+					SessionID  string `json:"sessionId,omitempty"`
+					ApproveAll bool   `json:"approveAll,omitempty"`
 				}
 				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 					http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
@@ -137,4 +137,3 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
-

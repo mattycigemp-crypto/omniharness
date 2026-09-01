@@ -12,11 +12,11 @@ import (
 // Budget describes the resource boundaries of a task. Zero values mean
 // "unlimited" for that dimension.
 type Budget struct {
-	MaxTokens     int64         `json:"maxTokens,omitempty"`     // total input+output tokens across all agents
-	MaxCostUSD    float64       `json:"maxCostUsd,omitempty"`    // estimated cost ceiling
-	MaxDuration   time.Duration `json:"maxDuration,omitempty"`   // wall-clock ceiling
-	MaxAgents     int           `json:"maxAgents,omitempty"`     // concurrent agents
-	MaxToolCalls  int           `json:"maxToolCalls,omitempty"`  // total tool calls
+	MaxTokens     int64         `json:"maxTokens,omitempty"`       // total input+output tokens across all agents
+	MaxCostUSD    float64       `json:"maxCostUsd,omitempty"`      // estimated cost ceiling
+	MaxDuration   time.Duration `json:"maxDuration,omitempty"`     // wall-clock ceiling
+	MaxAgents     int           `json:"maxAgents,omitempty"`       // concurrent agents
+	MaxToolCalls  int           `json:"maxToolCalls,omitempty"`    // total tool calls
 	MaxRepairCycl int           `json:"maxRepairCycles,omitempty"` // repair iterations per task
 }
 

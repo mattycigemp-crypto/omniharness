@@ -2,7 +2,7 @@
  * Collapsible message groups for the transcript.
  *
  * Pure module: folds runs of tool-role lines into a single synthetic summary
- * line so a long tool trail reads as one line ("▸ 4 tool calls · Ctrl+G to
+ * line so a long tool trail reads as one line ("4 tool calls · Ctrl+G to
  * expand") instead of a wall of output. Runs shorter than 3 lines stay
  * unfolded (a lone tool note isn't noise). Expansion is controlled by the
  * caller (Ctrl+G toggles globally); non-tool lines always pass through.
@@ -46,7 +46,7 @@ export function foldToolGroups(lines: readonly GroupableLine[], expanded: boolea
     } else {
       out.push({
         role: 'tool',
-        text: `▸ ${run.length} tool calls · Ctrl+G to expand`,
+        text: `${run.length} tool calls · Ctrl+G to expand`,
         group: { count: run.length, hidden: run.map((entry) => entry.line.text) },
       });
     }

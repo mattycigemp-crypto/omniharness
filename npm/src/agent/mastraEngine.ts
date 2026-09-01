@@ -565,7 +565,7 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
         const summary = content.split('\n')[0]?.slice(0, 160) ?? '';
         try {
           await mkdir(join(state.workspace.root, '.omniharness'), { recursive: true });
-          await appendFile(memoryPath, `- ${new Date().toISOString()}: ran "${prompt.slice(0, 80)}" → ${summary}\n`, 'utf8');
+          await appendFile(memoryPath, `- ${new Date().toISOString()}: ran "${prompt.slice(0, 80)}" -> ${summary}\n`, 'utf8');
         } catch { /* memory persistence is best-effort */ }
       }
       const answer = content;

@@ -4,7 +4,7 @@
 Route once, run anywhere: plan, build, research, or turn a swarm loose.
 
 This package ships the interactive **terminal UI** (Ink/React). The orchestration
-core and a headless CLI live in the [Go source tree](https://github.com/mattycigemp-crypto/omniharness).
+core and a headless CLI live in the [Go source tree](https://github.com/shipking-ai/omniharness).
 
 ```bash
 npm install -g omniharness-cli

@@ -173,9 +173,9 @@ func TestSingleAgentIsDefault(t *testing.T) {
 func TestSwarmOnlyWhenJustified(t *testing.T) {
 	in := Input{
 		Profile: task.Profile{
-			Complexity:     task.ComplexityHigh,
-			Parallelizable: true,
-			Context:        task.LevelLarge,
+			Complexity:       task.ComplexityHigh,
+			Parallelizable:   true,
+			Context:          task.LevelLarge,
 			EstimatedCostUSD: 1.0,
 		},
 		Budget: budget.Budget{MaxCostUSD: 10},

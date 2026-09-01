@@ -215,6 +215,9 @@ h2{
 .reveal{opacity:0;transform:perspective(1400px) translateY(28px) translateZ(-60px);transition:opacity .7s ease,transform .7s cubic-bezier(.22,1,.36,1)}
 .reveal.vis{opacity:1;transform:perspective(1400px) translateY(0) translateZ(0)}
 @media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none}}
+/* The reveal animation must never be the reason content is missing: when
+   printing, or with scripting off, show everything outright. */
+@media print{.reveal{opacity:1!important;transform:none!important}}
 
 /* ── Hero floating labels ──────────────────────── */
 .hero-float{
@@ -490,6 +493,13 @@ footer{
 </style>
 </head>
 <body>
+<noscript>
+  <style>
+    /* Without scripting the reveal observer never runs, which would leave
+       every section below the hero permanently transparent. */
+    .reveal{opacity:1!important;transform:none!important}
+  </style>
+</noscript>
 
 <div id="prog"></div>
 
@@ -497,7 +507,7 @@ footer{
 <nav>
   <div class="nav-brand">
     <a href="#hero" class="wordmark" id="wordmark">OmniHarness</a>
-    <span class="ver-badge">v0.1.45</span>
+    <span class="ver-badge" id="ver-badge">v0.1.45</span>
   </div>
   <div class="nav-links">
     <a href="#why">Why</a>
@@ -995,7 +1005,12 @@ let routeT=0;
 
 function frame() {
   requestAnimationFrame(frame);
+  // Always read the clock so the delta never accumulates across skipped
+  // frames, then bail before doing any work the viewer cannot see. The hero
+  // canvas is decorative and fixed behind the fold; once it is scrolled past
+  // (or the tab is hidden) rendering it is pure battery drain.
   const dt=clk.getDelta(), t=clk.getElapsedTime();
+  if(document.hidden || scrollY > heroEl.clientHeight) return;
   routeT+=dt;
   if(routeT>3.8){newPath();routeT=0;}
 
@@ -1100,12 +1115,29 @@ addEventListener('scroll',()=>{
 },{passive:true});
 
 // ── Scroll reveal ─────────────────────────────
-const io=new IntersectionObserver(entries=>{
-  entries.forEach((e,i)=>{
-    if(e.isIntersecting) setTimeout(()=>e.target.classList.add('vis'),i*55);
+// Everything below the hero starts at opacity 0 and is revealed on scroll, so
+// a reveal that never fires is indistinguishable from a blank page. Treat the
+// animation as an enhancement: if the observer is unavailable, show the lot.
+const reveals=document.querySelectorAll('.reveal');
+function revealAll(){ reveals.forEach(el=>el.classList.add('vis')); }
+if(!('IntersectionObserver' in window)){
+  revealAll();
+} else {
+  const io=new IntersectionObserver(entries=>{
+    entries.forEach((e,i)=>{
+      if(e.isIntersecting) setTimeout(()=>e.target.classList.add('vis'),i*55);
+    });
+  },{threshold:.1});
+  reveals.forEach(el=>io.observe(el));
+  // A tall element can never reach a 0.1 ratio in a short viewport, and a jump
+  // straight to an anchor can outrun the observer. Sweep once after load and
+  // reveal anything that is already at or above the fold.
+  addEventListener('load',()=>{
+    reveals.forEach(el=>{
+      if(el.getBoundingClientRect().top < innerHeight) el.classList.add('vis');
+    });
   });
-},{threshold:.1});
-document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+}
 
 // ── Copy buttons ──────────────────────────────
 document.querySelectorAll('.copy-btn[data-copy]').forEach(btn=>{
@@ -1154,6 +1186,30 @@ function type(){
 const REPO='shipking-ai/omniharness';
 const commitList=document.getElementById('commit-list');
 
+// Commit messages and author names are arbitrary text from the API and are
+// interpolated into innerHTML below, so escape them first.
+function esc(v){
+  return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// The version badge is read from the npm registry rather than hardcoded:
+// releases are automatic on every push to main, so a literal in this file is
+// stale the moment it is written. The markup keeps the last known value as
+// the fallback for an offline or rate-limited visitor.
+async function fetchVersion(){
+  const el=document.getElementById('ver-badge');
+  if(!el) return;
+  try{
+    const r=await fetch('https://registry.npmjs.org/omniharness-cli/latest');
+    if(!r.ok) throw new Error(r.status);
+    const d=await r.json();
+    if(d && d.version) el.textContent='v'+d.version;
+  } catch{
+    // Keep the fallback already in the markup.
+  }
+}
+fetchVersion();
+
 function timeAgo(iso){
   const s=Math.floor((Date.now()-new Date(iso))/1000);
   if(s<60) return `${s}s ago`;
@@ -1170,11 +1226,11 @@ async function fetchCommits(){
     if(!r.ok) throw new Error(r.status);
     const commits=await r.json();
     commitList.innerHTML=commits.map(c=>{
-      const sha=c.sha.slice(0,7);
-      const msg=(c.commit.message.split('\n')[0]||'').slice(0,90);
-      const author=c.commit.author?.name||'';
+      const sha=esc(c.sha.slice(0,7));
+      const msg=esc((c.commit.message.split('\n')[0]||'').slice(0,90));
+      const author=esc(c.commit.author?.name||'');
       const when=timeAgo(c.commit.author?.date||c.commit.committer?.date);
-      const url=c.html_url;
+      const url=esc(c.html_url);
       return `<div class="commit-row">
         <span class="c-sha"><a href="${url}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">${sha}</a></span>
         <span class="c-msg"><a href="${url}" target="_blank" rel="noopener">${msg}</a></span>

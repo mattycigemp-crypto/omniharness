@@ -28,6 +28,7 @@ type RootOptions struct {
 	DataDir    string
 	Endpoint   string
 	LogLevel   string
+	Workspace  string
 	Yes        bool // approve-all for the run commands
 }
 
@@ -58,6 +59,7 @@ execution through OmniRoute. It is local-first and headless-capable.`,
 	root.PersistentFlags().StringVar(&rootOpts.DataDir, "data-dir", "", "override persistence directory")
 	root.PersistentFlags().StringVar(&rootOpts.Endpoint, "endpoint", "", "override OmniRoute endpoint")
 	root.PersistentFlags().StringVar(&rootOpts.LogLevel, "log-level", "", "override log level (debug|info|warn|error)")
+	root.PersistentFlags().StringVar(&rootOpts.Workspace, "workspace", "", "directory the agent may touch (default: current directory)")
 	root.PersistentFlags().BoolVar(&rootOpts.Yes, "yes", false, "auto-approve high-risk actions (use with care)")
 
 	root.AddCommand(
@@ -123,6 +125,13 @@ func loadConfig() (config.Config, error) {
 	}
 	if rootOpts.LogLevel != "" {
 		cfg.Logging.Level = rootOpts.LogLevel
+	}
+	if rootOpts.Workspace != "" {
+		abs, err := filepath.Abs(rootOpts.Workspace)
+		if err != nil {
+			return cfg, fmt.Errorf("--workspace %s: %w", rootOpts.Workspace, err)
+		}
+		cfg.Policy.WorkspaceRoot = abs
 	}
 	return cfg, nil
 }

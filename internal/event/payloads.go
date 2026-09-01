@@ -122,8 +122,8 @@ func (*TaskCompletedData) EventType() Type { return TaskCompleted }
 
 // TaskFailedData accompanies TaskFailed.
 type TaskFailedData struct {
-	Status  task.Status `json:"status"`
-	Error   string      `json:"error,omitempty"`
+	Status task.Status `json:"status"`
+	Error  string      `json:"error,omitempty"`
 }
 
 func (*TaskFailedData) EventType() Type { return TaskFailed }
@@ -149,15 +149,15 @@ func (*AgentCreatedData) EventType() Type { return AgentCreated }
 
 // AgentStateData accompanies agent lifecycle transitions.
 type AgentStateData struct {
-	Role     string      `json:"role,omitempty"`
-	Status   task.Status `json:"status"`
-	Model    string      `json:"model,omitempty"`
-	Action   string      `json:"action,omitempty"`
-	Tokens   int64       `json:"tokens,omitempty"`
-	CostUSD  float64     `json:"costUsd,omitempty"`
-	Latency  time.Duration `json:"latency,omitempty"`
-	Error    string      `json:"error,omitempty"`
-	Message  string      `json:"message,omitempty"`
+	Role    string        `json:"role,omitempty"`
+	Status  task.Status   `json:"status"`
+	Model   string        `json:"model,omitempty"`
+	Action  string        `json:"action,omitempty"`
+	Tokens  int64         `json:"tokens,omitempty"`
+	CostUSD float64       `json:"costUsd,omitempty"`
+	Latency time.Duration `json:"latency,omitempty"`
+	Error   string        `json:"error,omitempty"`
+	Message string        `json:"message,omitempty"`
 }
 
 func (*AgentStateData) EventType() Type { return AgentUpdated }
@@ -216,13 +216,13 @@ func (*ModelRequestedData) EventType() Type { return ModelRequested }
 
 // ModelRespondedData accompanies ModelResponded.
 type ModelRespondedData struct {
-	Provider  string `json:"provider,omitempty"`
-	Model     string `json:"model"`
-	TaskID    string `json:"taskId,omitempty"`
-	AgentID   string `json:"agentId,omitempty"`
-	TokensIn  int64  `json:"tokensIn"`
-	TokensOut int64  `json:"tokensOut"`
-	CostUSD   float64 `json:"costUsd"`
+	Provider  string        `json:"provider,omitempty"`
+	Model     string        `json:"model"`
+	TaskID    string        `json:"taskId,omitempty"`
+	AgentID   string        `json:"agentId,omitempty"`
+	TokensIn  int64         `json:"tokensIn"`
+	TokensOut int64         `json:"tokensOut"`
+	CostUSD   float64       `json:"costUsd"`
 	Latency   time.Duration `json:"latency"`
 }
 
@@ -241,9 +241,9 @@ func (*ModelFailedData) EventType() Type { return ModelFailed }
 
 // ToolRequestedData accompanies ToolRequested (before policy evaluation).
 type ToolRequestedData struct {
-	Tool   string `json:"tool"`
-	Input  string `json:"input,omitempty"` // truncated for logs
-	Risk   string `json:"risk"`
+	Tool    string `json:"tool"`
+	Input   string `json:"input,omitempty"` // truncated for logs
+	Risk    string `json:"risk"`
 	AgentID string `json:"agentId,omitempty"`
 }
 
@@ -259,12 +259,12 @@ func (*ToolStartedData) EventType() Type { return ToolStarted }
 
 // ToolFinishedData accompanies ToolCompleted and ToolFailed.
 type ToolFinishedData struct {
-	Tool      string `json:"tool"`
-	AgentID   string `json:"agentId,omitempty"`
-	Status    string `json:"status"` // "completed" | "failed" | "denied" | "cancelled"
+	Tool      string        `json:"tool"`
+	AgentID   string        `json:"agentId,omitempty"`
+	Status    string        `json:"status"` // "completed" | "failed" | "denied" | "cancelled"
 	Duration  time.Duration `json:"duration"`
-	Error     string `json:"error,omitempty"`
-	OutputLen int    `json:"outputLen"`
+	Error     string        `json:"error,omitempty"`
+	OutputLen int           `json:"outputLen"`
 }
 
 func (*ToolFinishedData) EventType() Type { return ToolCompleted }
@@ -287,8 +287,8 @@ func (*ObservationCreatedData) EventType() Type { return ObservationCreated }
 
 // ContextData accompanies ContextUpdated and ContextCondensed.
 type ContextData struct {
-	TokensBefore int64 `json:"tokensBefore"`
-	TokensAfter  int64 `json:"tokensAfter"`
+	TokensBefore int64  `json:"tokensBefore"`
+	TokensAfter  int64  `json:"tokensAfter"`
 	Reason       string `json:"reason,omitempty"`
 }
 
@@ -316,9 +316,9 @@ func (*EvaluationCompletedData) EventType() Type { return EvaluationComplete }
 
 // RepairData accompanies RepairStarted and RepairCompleted.
 type RepairData struct {
-	Attempt  int    `json:"attempt"`
-	Strategy string `json:"strategy"`
-	Reason   string `json:"reason"`
+	Attempt  int      `json:"attempt"`
+	Strategy string   `json:"strategy"`
+	Reason   string   `json:"reason"`
 	Changed  []string `json:"changed,omitempty"` // variables altered
 }
 
