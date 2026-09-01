@@ -258,4 +258,27 @@ test('without a management token, MCP discovery is inert', async () => {
     assert.equal(client.hasMcpToken, false);
     assert.deepEqual(await client.listMcpTools(), []);
   } finally { live.close(); }
-});
+});
+test('a blank endpoint or OMNIROUTE_URL falls back to the default', () => {
+  const previous = process.env.OMNIROUTE_URL;
+  try {
+    // `??` only falls back on null/undefined, so an empty OMNIROUTE_URL — routine
+    // in a .env file or a docker-compose entry — used to produce an empty
+    // endpoint, and every request failed with "Failed to parse URL".
+    process.env.OMNIROUTE_URL = '';
+    assert.equal(new OmniRouteClient().endpoint, 'http://localhost:20128');
+
+    process.env.OMNIROUTE_URL = '   ';
+    assert.equal(new OmniRouteClient().endpoint, 'http://localhost:20128');
+
+    // An explicitly blank config value defers to the environment, then default.
+    process.env.OMNIROUTE_URL = 'http://example.test:9999';
+    assert.equal(new OmniRouteClient({ endpoint: '' }).endpoint, 'http://example.test:9999');
+
+    // A real value still wins, and is still trimmed of a trailing slash.
+    assert.equal(new OmniRouteClient({ endpoint: 'http://host:1/' }).endpoint, 'http://host:1');
+  } finally {
+    if (previous === undefined) delete process.env.OMNIROUTE_URL;
+    else process.env.OMNIROUTE_URL = previous;
+  }
+});

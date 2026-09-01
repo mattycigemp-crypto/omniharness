@@ -27,6 +27,16 @@ function dumpTranscript(messages: readonly HarnessMessage[]): void {
   process.stdout.write('\n');
 }
 
+// A crash anywhere below would otherwise surface as a raw Node stack trace, or
+// as an unhandled rejection that terminates the process without saying why.
+// A CLI should fail with a sentence.
+function die(error: unknown): never {
+  console.error(`omniharness: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
+process.on('unhandledRejection', die);
+process.on('uncaughtException', die);
+
 const command = process.argv[2];
 
 if (command === 'update') {
@@ -50,6 +60,12 @@ if (command === 'update') {
       process.exitCode = 1;
     }
   })();
+} else if (command !== undefined) {
+  // Anything else is a mistake, not an invitation to open the TUI: `omniharness
+  // doctr` used to start an interactive session instead of naming the typo.
+  console.error(`omniharness: unknown command '${command}'`);
+  console.error("run 'omniharness --help' for usage");
+  process.exitCode = 1;
 } else {
   void (async () => {
     const saved = await readActiveCombo();

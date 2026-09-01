@@ -73,6 +73,22 @@ export class OmniRouteError extends Error {
 
 const DEFAULT_ENDPOINT = 'http://localhost:20128';
 
+/**
+ * First value that is actually set, treating blank strings as unset.
+ *
+ * `??` only falls back on null/undefined, so `OMNIROUTE_URL=` — routine in a
+ * .env file, a docker-compose entry, or CI where a variable is declared but
+ * left empty — produced an empty endpoint and every request failed with
+ * "Failed to parse URL". The Go side has always treated empty as unset; this
+ * matches it.
+ */
+function firstSet(...values: (string | undefined)[]): string | undefined {
+  for (const value of values) {
+    if (value !== undefined && value.trim() !== '') return value.trim();
+  }
+  return undefined;
+}
+
 export class OmniRouteClient {
   public readonly endpoint: string;
   private readonly timeoutMs: number;
@@ -86,7 +102,7 @@ export class OmniRouteClient {
   };
 
   public constructor(config: OmniRouteConfig = {}) {
-    this.endpoint = (config.endpoint ?? process.env.OMNIROUTE_URL ?? DEFAULT_ENDPOINT).replace(/\/$/, '');
+    this.endpoint = (firstSet(config.endpoint, process.env.OMNIROUTE_URL) ?? DEFAULT_ENDPOINT).replace(/\/$/, '');
     this.apiKey = config.apiKey ?? process.env.OMNIROUTE_API_KEY ?? '';
     this.mgmtToken = config.mgmtToken ?? process.env.OMNIROUTE_MGMT_TOKEN ?? '';
     this.timeoutMs = config.timeoutMs ?? 120_000;
