@@ -257,3 +257,40 @@ func TestDecodeArgs(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+// A new file under a symlinked directory must not escape the workspace.
+// EvalSymlinks fails outright on a path that does not exist yet, so resolving
+// only the full path skipped confinement for every file the agent was about to
+// create — reads through a symlink were blocked, writes to new paths were not.
+func TestWriteThroughSymlinkedDirIsConfined(t *testing.T) {
+	base := t.TempDir()
+	workspace := filepath.Join(base, "workspace")
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A repository can carry a symlink like this; the agent need not create it.
+	if err := os.Symlink(outside, filepath.Join(workspace, "escape")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	r := newTestRegistry(t, workspace)
+	if _, err := mustTool(t, r, "write_file").Run(context.Background(), map[string]any{
+		"path": "escape/planted.txt", "content": "written outside",
+	}); err == nil {
+		t.Fatal("write through a symlinked directory must be rejected")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "planted.txt")); err == nil {
+		t.Fatal("a file was created outside the workspace")
+	}
+
+	// Confinement must not break ordinary writes, including new nested paths.
+	if _, err := mustTool(t, r, "write_file").Run(context.Background(), map[string]any{
+		"path": "sub/dir/new.txt", "content": "inside",
+	}); err != nil {
+		t.Fatalf("a normal nested write must still work: %v", err)
+	}
+}
