@@ -12,7 +12,7 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,900;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
 <style>
 /* ── Reset ──────────────────────────────────────── */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -33,11 +33,11 @@ button{cursor:pointer;font-family:inherit}
   --success:#8fd66f;
   --warn:#e6b955;
   --error:#f2637e;
-  --font-sans:'Inter',system-ui,sans-serif;
+  --font-sans:'JetBrains Mono',monospace;
   --font-mono:'JetBrains Mono','Fira Code',monospace;
-  --radius:8px;
-  --radius-sm:4px;
-  --radius-lg:16px;
+  --radius:4px;
+  --radius-sm:2px;
+  --radius-lg:6px;
   --glow-accent:0 0 28px rgba(45,212,191,.22);
   --glow-error:0 0 28px rgba(242,99,126,.22);
   --glow-info:0 0 28px rgba(86,182,255,.2);
@@ -74,7 +74,7 @@ body{
   font-family:var(--font-sans);
   background:var(--ground);
   color:var(--ink);
-  line-height:1.65;
+  line-height:1.72;
   overflow-x:hidden;
   transition:background .3s,color .3s;
 }
@@ -107,7 +107,7 @@ nav{
 .ver-badge{
   font-family:var(--font-mono);font-size:.62rem;color:var(--muted);
   background:var(--surface);border:1px solid var(--hairline);
-  border-radius:999px;padding:.12rem .48rem;
+  border-radius:2px;padding:.1rem .4rem;
 }
 .nav-links{display:flex;align-items:center;gap:1.5rem}
 .nav-links a{color:var(--muted);font-size:.85rem;font-weight:500;transition:color .2s}
@@ -149,10 +149,9 @@ nav{
   background:var(--accent);opacity:.4;
 }
 h1{
-  font-size:clamp(2.6rem,7vw,5.4rem);font-weight:900;line-height:1.04;
-  letter-spacing:-.035em;margin-bottom:1.2rem;
-  background:linear-gradient(140deg,var(--ink) 35%,var(--accent) 100%);
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  font-size:clamp(2.4rem,6.5vw,5rem);font-weight:700;line-height:1.06;
+  letter-spacing:-.04em;margin-bottom:1.2rem;
+  color:var(--ink);
 }
 .hero-sub{
   font-size:1.15rem;color:var(--muted);max-width:500px;
@@ -204,8 +203,8 @@ h1{
   text-transform:uppercase;letter-spacing:.16em;margin-bottom:.7rem;
 }
 h2{
-  font-size:clamp(1.7rem,3.8vw,2.8rem);font-weight:800;
-  letter-spacing:-.025em;line-height:1.12;margin-bottom:1rem;
+  font-size:clamp(1.6rem,3.5vw,2.6rem);font-weight:700;
+  letter-spacing:-.03em;line-height:1.14;margin-bottom:1rem;
 }
 .section-lead{
   font-size:1.05rem;color:var(--muted);max-width:580px;
@@ -288,7 +287,7 @@ kbd{
 }
 .feat{background:var(--surface);padding:1.4rem;transition:background .2s}
 .feat:hover{background:var(--surface-raised)}
-.feat-icon{font-size:1.3rem;margin-bottom:.5rem}
+.feat-icon{font-family:var(--font-mono);font-size:.65rem;color:var(--accent);letter-spacing:.06em;margin-bottom:.65rem;opacity:.8}
 .feat-title{font-weight:600;font-size:.88rem;margin-bottom:.25rem}
 .feat-desc{font-size:.795rem;color:var(--muted);line-height:1.55}
 
@@ -296,8 +295,8 @@ kbd{
 .steps{display:flex;flex-direction:column;gap:1.6rem}
 .step{display:grid;grid-template-columns:2.4rem 1fr;gap:1.2rem;align-items:start}
 .step-num{
-  width:2.4rem;height:2.4rem;border-radius:50%;
-  border:2px solid var(--accent);color:var(--accent);
+  width:2.4rem;height:2.4rem;border-radius:2px;
+  border:1px solid var(--accent);color:var(--accent);
   font-family:var(--font-mono);font-weight:700;font-size:.88rem;
   display:flex;align-items:center;justify-content:center;flex-shrink:0;
 }
@@ -375,18 +374,13 @@ kbd{
   border-radius:var(--radius);padding:1.8rem;position:relative;overflow:hidden;
   text-align:left;
 }
-.roadmap-card::before{
-  content:'';position:absolute;inset:0;
-  background:linear-gradient(135deg,rgba(45,212,191,.06) 0%,transparent 55%);
-  pointer-events:none;
-}
 .rc-status{
   display:inline-flex;align-items:center;gap:.35rem;
   font-family:var(--font-mono);font-size:.64rem;color:var(--warn);
   background:rgba(230,185,85,.1);border:1px solid rgba(230,185,85,.2);
-  border-radius:999px;padding:.18rem .55rem;margin-bottom:1rem;
+  border-radius:2px;padding:.15rem .45rem;margin-bottom:1rem;
 }
-.rc-icon{font-size:1.9rem;margin-bottom:.65rem;display:block}
+.rc-icon{font-family:var(--font-mono);font-size:.75rem;color:var(--accent);margin-bottom:.65rem;display:block}
 .roadmap-card h3{font-size:1.05rem;font-weight:700;margin-bottom:.45rem}
 .roadmap-card p{font-size:.84rem;color:var(--muted);line-height:1.58}
 .notify-form{
@@ -459,12 +453,12 @@ footer{
     <a href="#modes">Modes</a>
     <a href="#install">Install</a>
     <a href="#playground">Try it</a>
-    <a href="https://github.com/mattycigemp-crypto/omniharness" target="_blank" rel="noopener">GitHub ↗</a>
+    <a href="https://github.com/shipking-ai/omniharness" target="_blank" rel="noopener">GitHub ↗</a>
   </div>
   <div class="nav-actions">
     <button class="icon-btn" id="theme-btn" title="Toggle light/dark">☀</button>
     <button class="icon-btn" id="brand-btn" title="Toggle OmniRoute branding">⚡ OmniRoute</button>
-    <a href="#install" class="cta-nav">Get started</a>
+    <a href="#install" class="cta-nav">install →</a>
   </div>
 </nav>
 
@@ -473,14 +467,14 @@ footer{
   <canvas id="bg-canvas"></canvas>
   <div class="hero-content">
     <div class="hero-eyebrow" id="hero-eyebrow">Built for OmniRoute</div>
-    <h1>Route once.<br>Run anywhere.</h1>
+    <h1><span style="color:var(--accent)">Route</span> once.<br>Run anywhere.</h1>
     <p class="hero-sub">Plan, build, research, or turn a parallel swarm loose. The agent harness built for <a href="https://omniroute.ai" target="_blank" rel="noopener">OmniRoute</a>.</p>
     <div class="hero-ctas">
       <button class="cta-primary" id="install-btn">
         <span id="install-text">npm i -g omniharness-cli</span>
         <span class="ci">⎘</span>
       </button>
-      <a href="https://github.com/mattycigemp-crypto/omniharness" class="cta-secondary" target="_blank" rel="noopener">
+      <a href="https://github.com/shipking-ai/omniharness" class="cta-secondary" target="_blank" rel="noopener">
         View on GitHub →
       </a>
     </div>
@@ -545,7 +539,7 @@ footer{
       </div>
     </div>
     <div class="perm-note reveal">
-      <span>🔒</span>
+      <span style="font-family:var(--font-mono);color:var(--accent);font-size:.8rem">[ perm ]</span>
       <span><strong>Permission axis — independent of mode.</strong> <kbd>Shift+Tab</kbd> cycles <code>○ manual</code> → <code>◐ accept edits</code> → <code>● bypass</code>. Crazy mode forces bypass automatically.</span>
     </div>
   </div>
@@ -581,42 +575,42 @@ footer{
     </div>
     <div class="feat-grid reveal">
       <div class="feat">
-        <div class="feat-icon">📜</div>
+        <div class="feat-icon">[ scrollback ]</div>
         <div class="feat-title">Native scrollback is the history</div>
         <div class="feat-desc">Settled turns flow into your terminal's own buffer. No parallel log. The full transcript is restored on exit via the alt-buffer.</div>
       </div>
       <div class="feat">
-        <div class="feat-icon">🌐</div>
+        <div class="feat-icon">[ route-ribbon ]</div>
         <div class="feat-title">Route ribbon</div>
         <div class="feat-desc">Every reply is labelled with the provider it came from. Failovers appear inline — you always know what ran and why.</div>
       </div>
       <div class="feat">
-        <div class="feat-icon">📊</div>
+        <div class="feat-icon">[ ctx-meter ]</div>
         <div class="feat-title">Context meter</div>
         <div class="feat-desc">Per-model window usage, live. Colour-coded zones: ok → warn → danger. Knows the window for every model in the routing catalog.</div>
       </div>
       <div class="feat">
-        <div class="feat-icon">🃏</div>
+        <div class="feat-icon">[ tool-cards ]</div>
         <div class="feat-title">Per-tool cards with diffs</div>
         <div class="feat-desc">Each tool call is a collapsible card: name, input, result. File edits show the unified diff inline. History compresses behind you.</div>
       </div>
       <div class="feat">
-        <div class="feat-icon">🔒</div>
+        <div class="feat-icon">[ scoped-acl ]</div>
         <div class="feat-title">Scoped-trust approvals</div>
         <div class="feat-desc">"Trust this command exactly" or "trust this tool" — not all-or-nothing. Scope is remembered for the session.</div>
       </div>
       <div class="feat">
-        <div class="feat-icon">⏎</div>
+        <div class="feat-icon">[ input-buf ]</div>
         <div class="feat-title">Input queuing</div>
         <div class="feat-desc">Type your next instruction while the agent is still running. It's queued and delivered the moment the run finishes.</div>
       </div>
       <div class="feat">
-        <div class="feat-icon">📋</div>
+        <div class="feat-icon">[ ^Y · osc52 ]</div>
         <div class="feat-title">OSC 52 clipboard copy</div>
         <div class="feat-desc">Ctrl+Y copies the last code block over OSC 52 — works over SSH where the clipboard is normally inaccessible.</div>
       </div>
       <div class="feat">
-        <div class="feat-icon">🔄</div>
+        <div class="feat-icon">[ decset-2026 ]</div>
         <div class="feat-title">Tear-free streaming</div>
         <div class="feat-desc">DECSET 2026 synchronized output suppresses partial-render flicker. Probed at launch; gracefully skipped if unsupported.</div>
       </div>
@@ -782,20 +776,20 @@ footer{
 <div id="coming" class="full-bleed">
   <div class="section-inner" style="text-align:center">
     <div class="reveal">
-      <div class="section-label">What's Next</div>
+      <div class="section-label">Roadmap</div>
       <h2>Same harness.<br>Any surface.</h2>
       <p class="section-lead" style="margin:0 auto 2.5rem">The Go core doesn't care where the front-end lives. Web and desktop are coming — the gateway logic, swarm rail, and routing catalog work the same everywhere.</p>
     </div>
     <div class="roadmap-grid">
       <div class="roadmap-card reveal">
         <div class="rc-status">⋯ in progress</div>
-        <span class="rc-icon">🌐</span>
+        <span class="rc-icon">[ web ]</span>
         <h3>Web</h3>
         <p>Full harness in the browser — same modes, same swarm rail, same route ribbon. Run it from any device without installing anything.</p>
       </div>
       <div class="roadmap-card reveal">
         <div class="rc-status">⋯ planned</div>
-        <span class="rc-icon">🖥</span>
+        <span class="rc-icon">[ desktop ]</span>
         <h3>Desktop</h3>
         <p>Native app (Tauri) with OS notifications, system tray, and deep terminal integration. All the premium UX — no browser overhead.</p>
       </div>
@@ -812,9 +806,9 @@ footer{
 <footer>
   <div class="foot-brand">OmniHarness</div>
   <div class="foot-links">
-    <a href="https://github.com/mattycigemp-crypto/omniharness" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/shipking-ai/omniharness" target="_blank" rel="noopener">GitHub</a>
     <a href="https://www.npmjs.com/package/omniharness-cli" target="_blank" rel="noopener">npm</a>
-    <a href="https://github.com/mattycigemp-crypto/omniharness/blob/main/LICENSE" target="_blank" rel="noopener">MIT</a>
+    <a href="https://github.com/shipking-ai/omniharness/blob/main/LICENSE" target="_blank" rel="noopener">MIT</a>
     <a href="https://omniroute.ai" target="_blank" rel="noopener">OmniRoute</a>
     <a href="#coming">Web &amp; Desktop ↑</a>
   </div>
