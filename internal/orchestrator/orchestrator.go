@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"omniharness/internal/agent"
+	"omniharness/internal/budget"
 	composer "omniharness/internal/context"
 	"omniharness/internal/evaluate"
 	"omniharness/internal/event"
@@ -150,7 +151,10 @@ func (o *Orchestrator) Run(ctx context.Context, sessionID string, spec task.Spec
 	})
 
 	artifacts := &sync.Map{}
-	outputs, planErr := o.executePlan(runCtx, tsk, plan, artifacts)
+	// One tracker per task, shared by every agent working on it: the limits are
+	// task-wide, not a per-agent allowance.
+	budgets := budget.NewTracker(tsk.Spec.Budget)
+	outputs, planErr := o.executePlan(runCtx, tsk, plan, artifacts, budgets)
 	if runCtx.Err() != nil {
 		tsk.Status = task.StatusCancelled
 		tsk.Error = "cancelled"
@@ -164,7 +168,7 @@ func (o *Orchestrator) Run(ctx context.Context, sessionID string, spec task.Spec
 	}
 
 	// Task-level verification + repair loop.
-	if err := o.verifyAndRepair(runCtx, tsk, plan, outputs, artifacts); err != nil {
+	if err := o.verifyAndRepair(runCtx, tsk, plan, outputs, artifacts, budgets); err != nil {
 		if runCtx.Err() != nil {
 			tsk.Status = task.StatusCancelled
 			_ = o.deps.Store.UpdateTask(tsk)
@@ -231,7 +235,7 @@ func (o *Orchestrator) selectStrategy(t *task.Task) (strategy.Plan, error) {
 
 // executePlan runs all steps respecting dependencies, up to MaxConcurrency at
 // a time. Artifacts produced by any agent are collected into the shared map.
-func (o *Orchestrator) executePlan(ctx context.Context, t *task.Task, plan strategy.Plan, artifacts *sync.Map) (map[string]string, error) {
+func (o *Orchestrator) executePlan(ctx context.Context, t *task.Task, plan strategy.Plan, artifacts *sync.Map, budgets *budget.Tracker) (map[string]string, error) {
 	outputs := map[string]string{}
 	if len(plan.Steps) == 0 {
 		return outputs, nil
@@ -301,7 +305,7 @@ func (o *Orchestrator) executePlan(ctx context.Context, t *task.Task, plan strat
 		go func() {
 			defer wg.Done()
 			for step := range ready {
-				res := o.executeStep(ctx, t, step, artifacts)
+				res := o.executeStep(ctx, t, step, artifacts, budgets)
 
 				mu.Lock()
 				pending.Add(-1)
@@ -340,7 +344,7 @@ type stepResult struct {
 // executeStep runs one plan step with a single agent and a per-step repair
 // loop. Repairs change variables (role, model capability, instructions) — the
 // exact failed execution is never blindly repeated.
-func (o *Orchestrator) executeStep(ctx context.Context, t *task.Task, step strategy.Step, artifacts *sync.Map) stepResult {
+func (o *Orchestrator) executeStep(ctx context.Context, t *task.Task, step strategy.Step, artifacts *sync.Map, budgets *budget.Tracker) stepResult {
 	role := agent.Role(step.Role)
 	if role == "" {
 		role = agent.RoleImplementer
@@ -356,7 +360,7 @@ func (o *Orchestrator) executeStep(ctx context.Context, t *task.Task, step strat
 		if ctx.Err() != nil {
 			return stepResult{ID: step.ID, Err: ctx.Err()}
 		}
-		ag, err := o.runAgent(ctx, t, role, modelRef, extra, step.Task, artifacts)
+		ag, err := o.runAgent(ctx, t, role, modelRef, extra, step.Task, artifacts, budgets)
 		if err == nil {
 			return stepResult{ID: step.ID, Output: ag.LastOutput()}
 		}
@@ -388,7 +392,7 @@ func (o *Orchestrator) executeStep(ctx context.Context, t *task.Task, step strat
 }
 
 // runAgent creates and runs one agent for the task.
-func (o *Orchestrator) runAgent(ctx context.Context, t *task.Task, role agent.Role, modelRef, extra, stepTask string, artifacts *sync.Map) (*agent.Agent, error) {
+func (o *Orchestrator) runAgent(ctx context.Context, t *task.Task, role agent.Role, modelRef, extra, stepTask string, artifacts *sync.Map, budgets *budget.Tracker) (*agent.Agent, error) {
 	spec := t.Spec
 	if stepTask != "" && stepTask != "execute the task" && !strings.HasPrefix(stepTask, "step ") {
 		spec.Prompt = spec.Prompt + "\n\n[This step] " + stepTask
@@ -406,6 +410,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task.Task, role agent.Ro
 		Composer:  o.deps.Composer,
 		Roles:     o.deps.Roles,
 		Workspace: o.deps.Workspace,
+		Budget:    budgets,
 	}
 	ag := agent.New(deps, t.SessionID, t.ID, role, modelRef, spec, t.Profile)
 	if err := ag.Run(ctx); err != nil {
@@ -423,7 +428,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task.Task, role agent.Ro
 // verifyAndRepair runs evaluators and drives the task-level repair loop. The
 // task may be re-run up to MaxTaskRepairs times with changed variables before
 // the failure is terminal.
-func (o *Orchestrator) verifyAndRepair(ctx context.Context, t *task.Task, plan strategy.Plan, outputs map[string]string, artifacts *sync.Map) error {
+func (o *Orchestrator) verifyAndRepair(ctx context.Context, t *task.Task, plan strategy.Plan, outputs map[string]string, artifacts *sync.Map, budgets *budget.Tracker) error {
 	final := o.finalOutput(plan, outputs)
 	t.Result = &task.Result{Summary: final, Output: final, Artifacts: artifactList(artifacts)}
 
@@ -492,7 +497,7 @@ func (o *Orchestrator) verifyAndRepair(ctx context.Context, t *task.Task, plan s
 		o.taskEvent(t, &event.StrategySelectedData{
 			Strategy: string(selPlan.Strategy), Reason: selPlan.Reason, Steps: stepNames(selPlan.Steps),
 		})
-		outputs, err = o.executePlan(ctx, t, selPlan, artifacts)
+		outputs, err = o.executePlan(ctx, t, selPlan, artifacts, budgets)
 		if err != nil {
 			continue
 		}
