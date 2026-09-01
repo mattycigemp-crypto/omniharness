@@ -237,8 +237,8 @@ func New(cfg config.Config, rt *runtime.Runtime, configPath string) *Model {
 	in.CharLimit = 1000
 
 	convo := []chatLine{
-		{Kind: chatHarness, Text: "Welcome to OmniHarness! Agent orchestration for OmniRoute.", Time: time.Now().Format("15:04:05")},
-		{Kind: chatHarness, Text: "Start by describing a task. Press Ctrl+O to pick a model.", Time: time.Now().Format("15:04:05")},
+		{Kind: chatHarness, Text: "omniharness — agent orchestration for OmniRoute", Time: time.Now().Format("15:04:05")},
+		{Kind: chatHarness, Text: "describe a task below · Ctrl+O picks a model", Time: time.Now().Format("15:04:05")},
 	}
 
 	return &Model{
@@ -266,7 +266,7 @@ func makeStyles(color bool) Styles {
 			warn:   lipgloss.NewStyle().Bold(true),
 			border: lipgloss.NewStyle().Padding(0, 1),
 			footer: lipgloss.NewStyle().Faint(true).Padding(0, 1),
-			title:  lipgloss.NewStyle().Bold(true).Underline(true),
+			title:  lipgloss.NewStyle().Bold(true),
 		}
 	}
 	return Styles{
@@ -276,9 +276,9 @@ func makeStyles(color bool) Styles {
 		ok:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42")),
 		err:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203")),
 		warn:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")),
-		border: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1),
+		border: lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1),
 		footer: lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("244")).Padding(0, 1),
-		title:  lipgloss.NewStyle().Bold(true).Underline(true),
+		title:  lipgloss.NewStyle().Bold(true),
 	}
 }
 
@@ -290,7 +290,7 @@ func (m *Model) Init() tea.Cmd {
 // startBoot kicks off the boot sequence.
 func (m *Model) startBoot() tea.Cmd {
 	return func() tea.Msg {
-		return bootMsg{phase: 0, msg: "initializing OmniHarness v" + version.Version}
+		return bootMsg{phase: 0, msg: "initializing omniharness v" + version.Version}
 	}
 }
 
@@ -330,35 +330,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.bootMsgs = append(m.bootMsgs, msg.msg)
 		switch msg.phase {
 		case 0:
-			return m, tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
+			return m, func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
 				err := m.rt.Gateway.Ping(ctx)
 				if err != nil {
-					return bootMsg{phase: 1, msg: "⚠ gateway unreachable at " + m.cfg.OmniRoute.Endpoint}
+					return bootMsg{phase: 1, msg: "! gateway unreachable at " + m.cfg.OmniRoute.Endpoint}
 				}
-				return bootMsg{phase: 1, msg: "✓ connected to " + m.cfg.OmniRoute.Endpoint}
-			})
+				return bootMsg{phase: 1, msg: "connected to " + m.cfg.OmniRoute.Endpoint}
+			}
 		case 1:
-			return m, tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
+			return m, func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
 				diag := m.rt.Gateway.Diagnose(ctx)
 				if m.cfg.OmniRoute.APIKey != "" {
 					if diag.State == gateway.AuthRejected {
-						return bootMsg{phase: 2, msg: "⚠ API key rejected — press Ctrl+K to replace it"}
+						return bootMsg{phase: 2, msg: "! API key rejected — press Ctrl+K to replace it"}
 					}
-					return bootMsg{phase: 2, msg: "✓ authenticated (key_" + last4(m.cfg.OmniRoute.APIKey) + ")"}
+					return bootMsg{phase: 2, msg: "authenticated (key_" + last4(m.cfg.OmniRoute.APIKey) + ")"}
 				}
 				switch diag.State {
 				case gateway.AuthNotRequired:
-					return bootMsg{phase: 2, msg: "✓ anonymous mode (no API key needed)"}
+					return bootMsg{phase: 2, msg: "anonymous mode (no API key needed)"}
 				default:
-					return bootMsg{phase: 2, msg: "⚠ no API key — press Ctrl+K to set one"}
+					return bootMsg{phase: 2, msg: "! no API key — press Ctrl+K to set one"}
 				}
-			})
+			}
 		case 2:
-			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+			return m, func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 				defer cancel()
 				var providers []providerInfo
@@ -385,17 +385,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.accountCombos = accountCombos
 				count := len(accountCombos)
 				if count > 0 {
-					return bootMsg{phase: 3, msg: fmt.Sprintf("✓ loaded %d account combos, %d providers", count, len(providers))}
+					return bootMsg{phase: 3, msg: fmt.Sprintf("loaded %d account combos, %d providers", count, len(providers))}
 				}
 				if comboErr != nil {
-					return bootMsg{phase: 3, msg: "⚠ could not load account combos — check API key and endpoint"}
+					return bootMsg{phase: 3, msg: "! could not load account combos — check API key and endpoint"}
 				}
-				return bootMsg{phase: 3, msg: fmt.Sprintf("✓ %d providers connected", len(providers))}
-			})
+				return bootMsg{phase: 3, msg: fmt.Sprintf("%d providers connected", len(providers))}
+			}
 		case 3:
-			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+			return m, func() tea.Msg {
 				return bootCompleteMsg{}
-			})
+			}
 		}
 		return m, nil
 

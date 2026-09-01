@@ -19,47 +19,10 @@ var (
 	pMuted  = lipgloss.Color("#8A93A3")
 )
 
-var brandLogo = []string{
-	"╔══════════════════════════════════════╗",
-	"║          ◉  O M N I H A R N E S S    ║",
-	"╚══════════════════════════════════════╝",
-}
-
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+var spinnerFrames = []string{"|", "/", "-", "\\"}
 
 func (m *Model) spinner() string {
 	return spinnerFrames[m.frame%len(spinnerFrames)]
-}
-
-func hueToHex(h int) string {
-	s, l := 0.72, 0.62
-	c := (1 - abs(2*l-1)) * s
-	x := c * (1 - abs(float64((h/60)%2)-1))
-	var r, g, b float64
-	switch h / 60 {
-	case 0:
-		r, g, b = c, x, 0
-	case 1:
-		r, g, b = x, c, 0
-	case 2:
-		r, g, b = 0, c, x
-	case 3:
-		r, g, b = 0, x, c
-	case 4:
-		r, g, b = x, 0, c
-	default:
-		r, g, b = c, 0, x
-	}
-	mn := l - c/2
-	return fmt.Sprintf("#%02X%02X%02X",
-		int((r+mn)*255), int((g+mn)*255), int((b+mn)*255))
-}
-
-func abs(v float64) float64 {
-	if v < 0 {
-		return -v
-	}
-	return v
 }
 
 func last4(s string) string {
@@ -172,7 +135,7 @@ func (m *Model) renderChat() string {
 	}
 
 	if len(blocks) == 0 {
-		blocks = append(blocks, m.styles.muted.Render("  describe a task to get started…"))
+		blocks = append(blocks, m.styles.muted.Render("  describe a task to get started"))
 	}
 
 	// Flatten to lines, keep tail.
@@ -188,54 +151,39 @@ func (m *Model) renderChat() string {
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
-func (m *Model) renderUserBubble(text string) string {
-	inner := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#EAF2FF")).
-		Background(lipgloss.Color("#173A5E")).
-		Padding(0, 1).
-		MaxWidth(m.width - 4).
+// block renders a labelled body with a single left rule — no filled bubbles,
+// no rounded borders.
+func (m *Model) block(label string, labelStyle lipgloss.Style, rule lipgloss.Color, text string) string {
+	body := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#DCE6F2")).
+		Border(lipgloss.NormalBorder(), false, false, false, true).
+		BorderForeground(rule).
+		PaddingLeft(1).
+		MaxWidth(m.width - 2).
 		Render(text)
-	return m.styles.muted.Render("you") + "\n" + inner
+	return labelStyle.Render(label) + "\n" + body
+}
+
+func (m *Model) renderUserBubble(text string) string {
+	return m.styles.accent.Render("> ") +
+		lipgloss.NewStyle().MaxWidth(m.width-4).Render(text)
 }
 
 func (m *Model) renderResultBubble(text string) string {
-	body := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#DCE6F2")).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(pOK).
-		Padding(0, 1).
-		MaxWidth(m.width - 2).
-		Render(text)
-	return m.styles.ok.Render("✓ result") + "\n" + body
+	return m.block("[ result ]", m.styles.ok, pMuted, text)
 }
 
 func (m *Model) renderStreamingBubble(text string) string {
-	body := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#DCE6F2")).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(pAccent).
-		Padding(0, 1).
-		MaxWidth(m.width - 2).
-		Render(text + m.spinner())
-	return m.styles.accent.Render("◉ result") + "\n" + body
+	return m.block("[ working ]", m.styles.accent, pAccent, text+" "+m.spinner())
 }
 
 func (m *Model) renderErrorBubble(text string) string {
-	body := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FFD9D9")).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(pErr).
-		Padding(0, 1).
-		MaxWidth(m.width - 2).
-		Render(text)
-	return m.styles.err.Render("✗") + "\n" + body
+	return m.block("[ error ]", m.styles.err, pErr, text)
 }
 
 func (m *Model) renderHarnessLine(text, tm string) string {
-	label := m.styles.accent.Render("●")
-	time := m.styles.muted.Render(tm)
-	body := lipgloss.NewStyle().MaxWidth(m.width - 6).Render(text)
-	return label + " " + time + "  " + body
+	return m.styles.muted.Render(tm) + "  " +
+		lipgloss.NewStyle().MaxWidth(m.width-6).Render(text)
 }
 
 func (m *Model) renderActivity() string {
@@ -249,21 +197,19 @@ func (m *Model) renderActivity() string {
 	} else {
 		action = "working"
 	}
-	return m.styles.accent.Render(m.spinner()) + " " + m.styles.muted.Render(action)
+	return m.styles.muted.Render(m.spinner()+" "+action)
 }
 
 // renderFooter renders the input bar and status.
 func (m *Model) renderFooter() string {
 	if m.approval != nil {
-		return m.styles.warn.Render("⚠ approval required  ") +
+		return m.styles.warn.Render("approval required  ") +
 			m.styles.footer.Render("[y] approve    [n] deny")
 	}
 
 	input := m.input.View()
 	if m.inputFocused {
 		input = m.styles.accent.Render("> ") + m.input.View()
-	} else {
-		input = m.styles.muted.Render("⌨ ") + m.input.View()
 	}
 
 	status := m.styles.muted.Render(fmt.Sprintf("$%.3f  %s", m.metrics.CostUSD, m.cfg.Models.Default))
@@ -276,32 +222,26 @@ func (m *Model) renderFooter() string {
 	)
 }
 
-// renderBoot shows the animated boot sequence.
+// renderBoot shows the boot sequence: a plain wordmark and the checks as they
+// resolve. No colour cycling, no fake progress bar.
 func (m *Model) renderBoot() string {
 	var b strings.Builder
 	b.WriteString("\n\n")
 
-	hue := 200 + (m.frame*5)%60
-	for _, l := range brandLogo {
-		b.WriteString(lipgloss.NewStyle().
-			Foreground(lipgloss.Color(hueToHex(hue))).
-			Bold(true).
-			Render(l) + "\n")
-	}
-	b.WriteString("\n")
-	b.WriteString(m.styles.muted.Render("  v" + version.Version))
-	b.WriteString("\n\n")
+	b.WriteString("  " +
+		m.styles.accent.Render("omni") +
+		lipgloss.NewStyle().Bold(true).Render("harness") + "\n")
+	b.WriteString("  " + m.styles.muted.Render("v"+version.Version) + "\n\n")
 
-	totalPhases := 4
-	filled := (m.bootPhase * 40) / totalPhases
-	if filled > 40 {
-		filled = 40
+	total := 4
+	step := m.bootPhase + 1
+	if step > total {
+		step = total
 	}
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", 40-filled)
-	b.WriteString("  " + m.styles.accent.Render(bar) + "\n\n")
+	b.WriteString("  " + m.styles.muted.Render(fmt.Sprintf("step %d/%d", step, total)) + "\n\n")
 
 	for _, msg := range m.bootMsgs {
-		if strings.HasPrefix(msg, "⚠") {
+		if strings.HasPrefix(msg, "!") {
 			b.WriteString("  " + m.styles.warn.Render(msg) + "\n")
 		} else {
 			b.WriteString("  " + m.styles.ok.Render(msg) + "\n")
@@ -309,7 +249,7 @@ func (m *Model) renderBoot() string {
 	}
 
 	if !m.bootDone {
-		b.WriteString("\n  " + m.spinner() + " " + m.styles.muted.Render("booting...") + "\n")
+		b.WriteString("\n  " + m.styles.muted.Render(m.spinner()+" booting") + "\n")
 	}
 
 	return b.String()
@@ -332,7 +272,7 @@ func (m *Model) renderOverlay() string {
 func (m *Model) renderModelPicker() string {
 	var b strings.Builder
 	b.WriteString(m.styles.title.Render("pick a combo") + "\n")
-	b.WriteString(m.styles.muted.Render("↑↓ navigate  enter select  esc close") + "\n\n")
+	b.WriteString(m.styles.muted.Render("up/down navigate  enter select  esc close") + "\n\n")
 
 	if len(m.accountCombos) == 0 {
 		b.WriteString(m.styles.muted.Render("no combos found on your OmniRoute account") + "\n")
@@ -342,11 +282,11 @@ func (m *Model) renderModelPicker() string {
 			marker := "  "
 			name := c.Name
 			if i == m.comboSel {
-				marker = m.styles.accent.Render("▸ ")
+				marker = m.styles.accent.Render("> ")
 				name = m.styles.accent.Render(c.Name)
 			}
 			if c.Name == m.cfg.Models.Default {
-				name = name + m.styles.ok.Render("  ✓")
+				name = name + m.styles.ok.Render("  *")
 			}
 			strategy := ""
 			if c.Strategy != "" {
@@ -371,7 +311,7 @@ func (m *Model) renderModelPicker() string {
 func (m *Model) renderSessionsOverlay() string {
 	var b strings.Builder
 	b.WriteString(m.styles.title.Render("sessions") + "\n")
-	b.WriteString(m.styles.muted.Render("↑↓ navigate  enter resume  esc close") + "\n\n")
+	b.WriteString(m.styles.muted.Render("up/down navigate  enter resume  esc close") + "\n\n")
 
 	if len(m.sessions) == 0 {
 		b.WriteString(m.styles.muted.Render("no sessions yet"))
@@ -379,7 +319,7 @@ func (m *Model) renderSessionsOverlay() string {
 		for i, ss := range m.sessions {
 			marker := "  "
 			if i == m.selected {
-				marker = m.styles.accent.Render("▸ ")
+				marker = m.styles.accent.Render("> ")
 			}
 			fmt.Fprintf(&b, "%s%-9s %-40s %s\n", marker, ss.Status, truncate(ss.Title, 40),
 				ss.CreatedAt.Local().Format("2006-01-02 15:04"))
@@ -433,15 +373,15 @@ func compactEvent(e event.Event) string {
 	case event.ModelRequested:
 		var d event.ModelRequestedData
 		decode(e, &d)
-		return "→ " + d.Model
+		return "-> " + d.Model
 	case event.ModelResponded:
 		var d event.ModelRespondedData
 		decode(e, &d)
-		return fmt.Sprintf("← %s %d+%d tok $%.4f", d.Model, d.TokensIn, d.TokensOut, d.CostUSD)
+		return fmt.Sprintf("<- %s %d+%d tok $%.4f", d.Model, d.TokensIn, d.TokensOut, d.CostUSD)
 	case event.ModelFailed:
 		var d event.ModelFailedData
 		decode(e, &d)
-		return "✗ " + d.Model + " " + truncate(d.Error, 80)
+		return "failed " + d.Model + " " + truncate(d.Error, 80)
 	case event.ToolRequested:
 		var d event.ToolRequestedData
 		decode(e, &d)
@@ -449,11 +389,11 @@ func compactEvent(e event.Event) string {
 	case event.ToolCompleted:
 		var d event.ToolFinishedData
 		decode(e, &d)
-		return "✓ " + d.Tool
+		return "ok " + d.Tool
 	case event.ToolFailed:
 		var d event.ToolFailedData
 		decode(e, &d)
-		return "✗ tool " + d.Tool + ": " + truncate(d.Error, 80)
+		return "failed tool " + d.Tool + ": " + truncate(d.Error, 80)
 	case event.TaskCompleted:
 		return "task completed"
 	case event.TaskFailed:
