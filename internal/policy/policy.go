@@ -128,9 +128,15 @@ func (e *Engine) Evaluate(ctx context.Context, r Request) (Decision, string, err
 		}
 	}
 
+	// An unrecognised risk class is not a licence to run. The four known
+	// classes are always present in the config (Default seeds them and a
+	// partial TOML table merges into it rather than replacing it), so reaching
+	// this fallback means a tool declared something outside that set — an
+	// empty risk, or a value this build does not know. Allowing it would let a
+	// tool opt out of the gate simply by mislabelling itself.
 	action, ok := e.cfg.RiskAction[string(r.Risk)]
 	if !ok {
-		action = "allow"
+		return Ask, fmt.Sprintf("tool %q declares an unrecognised risk class %q; approval required", r.Tool, r.Risk), nil
 	}
 	switch action {
 	case "block":
