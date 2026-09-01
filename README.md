@@ -133,7 +133,7 @@ cd npm && npm install && npm test && npm run build
 gofmt -l ./cmd ./internal && go vet ./... && go test ./...
 ```
 
-Every pull request runs [`ci.yml`](.github/workflows/ci.yml) — gofmt, `go vet`, the Go suite, and the TypeScript suite + build — and both checks are required to merge. Every push to `main` then runs [`publish.yml`](.github/workflows/publish.yml), which re-verifies both suites before publishing `omniharness-cli` via npm **trusted publishing (OIDC)** — no token is stored, provenance is attached automatically.
+Every pull request runs [`ci.yml`](.github/workflows/ci.yml) — gofmt, `go vet`, the Go suite, and the TypeScript suite + build — and both checks are required to merge. That is where the Go side is gated. Every push to `main` then runs [`publish.yml`](.github/workflows/publish.yml), which re-runs the TypeScript suite and publishes `omniharness-cli` via npm **trusted publishing (OIDC)** — no token is stored, provenance is attached automatically.
 
 The Go suite is hermetic: tests pin an explicit workspace, so results never depend on whether your checkout has uncommitted changes. Point a run at a different tree with `--workspace` or `OMNIHARNESS_WORKSPACE`.
 

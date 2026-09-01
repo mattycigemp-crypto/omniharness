@@ -60,10 +60,9 @@ func TestDiffCheck(t *testing.T) {
 	run(t, dir, "git", "init")
 	run(t, dir, "git", "config", "user.email", "t@t")
 	run(t, dir, "git", "config", "user.name", "t")
+	// Deliberately not a Go module: diff-check must work in a workspace of any
+	// language, so nothing here identifies the project's toolchain.
 	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644)
-	// diff-check skips a workspace with no go.mod, so the module file is part
-	// of the fixture: this test is about the git-status branch below it.
-	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module difftest\n\ngo 1.27\n"), 0o644)
 	run(t, dir, "git", "add", ".")
 	run(t, dir, "git", "commit", "-m", "init")
 
@@ -90,8 +89,41 @@ func TestDiffCheck(t *testing.T) {
 	}
 }
 
-// A workspace with no go.mod is not judged on its git state.
-func TestDiffCheckSkipsWorkspaceWithoutGoMod(t *testing.T) {
+// A workspace nested inside someone else's repository must not be judged on
+// that repository's diff. This is the case that made the harness's own tests
+// inherit the developer's checkout state: a clean tree failed every task, a
+// dirty one passed, so the suite's result depended on uncommitted work.
+func TestDiffCheckSkipsWorkspaceNestedInAnotherRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	outer := t.TempDir()
+	run(t, outer, "git", "init")
+	run(t, outer, "git", "config", "user.email", "t@t")
+	run(t, outer, "git", "config", "user.name", "t")
+	os.WriteFile(filepath.Join(outer, "tracked.txt"), []byte("x"), 0o644)
+	run(t, outer, "git", "add", ".")
+	run(t, outer, "git", "commit", "-m", "init")
+
+	// A sub-directory of the outer repo, with nothing of its own to report.
+	nested := filepath.Join(outer, "workspace")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	e := &DiffCheckEvaluator{}
+	outcome, detail, err := e.Evaluate(context.Background(), Request{CWD: nested})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != NeedsReview {
+		t.Fatalf("outcome = %s (%s), want NEEDS_REVIEW for a non-root workspace", outcome, detail)
+	}
+}
+
+// A workspace that is not a git repository at all cannot be judged on its
+// diff, and must not be failed for it.
+func TestDiffCheckSkipsNonGitWorkspace(t *testing.T) {
 	e := &DiffCheckEvaluator{}
 	outcome, detail, err := e.Evaluate(context.Background(), Request{CWD: t.TempDir()})
 	if err != nil {
