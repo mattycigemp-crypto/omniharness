@@ -165,3 +165,34 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+// A tool that declares a risk class the engine does not know must not slip
+// through the gate. The four known classes are always configured, so reaching
+// the fallback means the tool mislabelled itself — previously that was treated
+// as "allow", which let a tool opt out of approval by naming a risk nobody
+// recognised.
+func TestUnknownRiskClassRequiresApproval(t *testing.T) {
+	e := NewEngine(Config{
+		RiskAction: map[string]string{
+			"low": "allow", "medium": "allow", "high": "ask", "critical": "block",
+		},
+	}, nil)
+
+	for _, risk := range []tools.Risk{"", "unspecified", "LOW", "extreme"} {
+		decision, reason, err := e.Evaluate(context.Background(), Request{Tool: "some_tool", Risk: risk})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision == Allow {
+			t.Errorf("risk %q was allowed outright (%s); an unknown class must not bypass the gate", risk, reason)
+		}
+	}
+
+	// The known classes keep behaving exactly as configured.
+	if d, _, _ := e.Evaluate(context.Background(), Request{Tool: "read_file", Risk: tools.RiskLow}); d != Allow {
+		t.Errorf("low risk = %v, want Allow", d)
+	}
+	if d, _, _ := e.Evaluate(context.Background(), Request{Tool: "write_file", Risk: tools.RiskHigh}); d != Ask {
+		t.Errorf("high risk = %v, want Ask", d)
+	}
+}
