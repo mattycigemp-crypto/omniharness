@@ -22,6 +22,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Release notes are the commits since the previous tag, so the
+          # release needs the history and the tags. The default shallow
+          # checkout has neither, and would report the entire history as new.
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -73,12 +79,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
+          bash scripts/release-notes.sh "$VERSION" > /tmp/notes.md
           gh release create "v$VERSION" dist/* \
             --title "v$VERSION" \
-            --notes "Prebuilt \`omniharness\` binaries for linux, macOS and Windows (amd64 and arm64).
-
-          The npm package \`omniharness-cli@$VERSION\` ships the TypeScript terminal UI; these archives are the Go orchestration CLI. Verify a download against \`SHA256SUMS\`.
-
-          \`\`\`
-          sha256sum -c SHA256SUMS --ignore-missing
-          \`\`\`"
+            --notes-file /tmp/notes.md
