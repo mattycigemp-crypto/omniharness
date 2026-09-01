@@ -1,0 +1,17 @@
+# Keep the working tree LF on every platform.
+#
+# Without this, core.autocrlf=true checks source out with CRLF on Windows, and
+# `gofmt -l ./cmd ./internal` then flags every Go file purely on line endings —
+# the same check ci.yml gates on, so local and CI results disagree for anyone
+# on Windows. Blobs are already stored LF; this only fixes the checkout.
+* text=auto eol=lf
+
+# Binary and pre-encoded assets must never be touched.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.exe binary
+*.db binary
