@@ -1,12 +1,17 @@
 # OmniHarness — Architecture & OmniRoute Integration Report
 
-Status: **Phase 0 complete; implementation in progress**
+Status: **shipping.** The harness is built and published to npm as
+`omniharness-cli`; the sections below are the design of record, and section 1
+is kept as the original Phase 0 survey that the design was derived from.
 
-## 1. Environment findings (Phase 0)
+## 1. Environment findings (Phase 0, historical)
 
-- The workspace (`/c/AI/omniharness`) is empty. **No OmniRoute source repository exists
-  anywhere on this machine.**
-- OmniRoute exists as a **local runtime** at `~/.omniroute`:
+*Recorded before any code was written. Kept because the integration surface below
+was reverse-engineered here and still describes how OmniRoute is addressed; the
+statements about the workspace are no longer true of this repository.*
+
+- There was no OmniRoute **source** repository on the machine — only the runtime.
+- OmniRoute runs as a **local runtime** at `~/.omniroute`:
   - `storage.sqlite` (encrypted at rest), `call_logs/<date>/*.json`, `logs/application/app.log`
   - HTTP routing/proxy server (Anthropic-style + OpenAI-style endpoints), dashboard WS on
     `127.0.0.1:20128` HTTP API / `20131` WebSocket-only listener / `20132` live
@@ -24,8 +29,8 @@ Status: **Phase 0 complete; implementation in progress**
 - Providers observed: cursor, openai, claude, gemini, opencode-zen, opencode-go, agnes,
   free-stack, openrouter, kilocode, siliconflow, api-airforce, ollama-local, g4f-ollama,
   agentrouter.
-- Toolchain: **Go is not installed** → portable Go 1.27.0 installed at `~/go-sdk/go`
-  (user-approved). Host: Windows/AMD64.
+- Toolchain: Go 1.27. `scripts/env.sh` puts a portable toolchain at `~/go-sdk`
+  on PATH for hosts without a system Go.
 
 ## 2. Integration boundary (what OmniHarness must NOT duplicate)
 
@@ -122,7 +127,8 @@ Dependency direction is downward only; `event` and `config` are leaves. No cycle
 - **Event system is the spine.** Typed envelope (`Event{Type, Data(json.RawMessage)}`),
   fan-out bus with bounded subscriber buffers (drop-oldest, never blocks the runtime),
   full persistence per session for replay/debug.
-- **SQLite via `modernc.org/sqlite`** — pure Go, no CGO (no gcc on this host).
+- **SQLite via `modernc.org/sqlite`** — pure Go, no CGO, so the build needs no C
+  toolchain on any platform.
 - **Strategy selection is a pure function** of `TaskProfile` + budgets + historical
   performance → testable without any runtime.
 - **Single-agent is a first-class strategy.** The strategy engine must be able to say
@@ -153,7 +159,9 @@ Dependency direction is downward only; `event` and `config` are leaves. No cycle
 
 ## 6. Phases
 
-1. Core runtime (event, config, session, task model) — *in progress*
+All eleven landed; each maps to a package under `internal/` with its own tests.
+
+1. Core runtime (event, config, session, task model)
 2. Agent runtime
 3. OmniRoute integration (gateway, model selection, budget)
 4. Tools + policy + MCP
@@ -165,11 +173,14 @@ Dependency direction is downward only; `event` and `config` are leaves. No cycle
 10. Benchmark
 11. Hardening (concurrency, security, UX, docs, regression)
 
+The terminal UI users actually run is the TypeScript one under `npm/`; the Go
+`internal/tui` cockpit is the original and still builds.
+
 ## 7. OmniRoute authentication (verified from the runtime)
 
 OmniRoute authenticates gateway requests with an API key. The mechanism was
 verified directly against the installed OmniRoute server source
-(`C:\Users\wegot\AppData\Roaming\npm\node_modules\omniroute`, v3.8.48,
+(the installed `omniroute` npm package, v3.8.48,
 `src/sse/services/auth.ts` and `src/server/authz/policies/clientApi.ts`):
 
 - **Header**: `Authorization: Bearer <key>` on every client request. The
