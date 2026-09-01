@@ -212,9 +212,30 @@ h2{
 }
 
 /* ── Scroll reveal ──────────────────────────────── */
-.reveal{opacity:0;transform:translateY(22px);transition:opacity .55s ease,transform .55s ease}
-.reveal.vis{opacity:1;transform:none}
+.reveal{opacity:0;transform:perspective(1400px) translateY(28px) translateZ(-60px);transition:opacity .7s ease,transform .7s cubic-bezier(.22,1,.36,1)}
+.reveal.vis{opacity:1;transform:perspective(1400px) translateY(0) translateZ(0)}
 @media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none}}
+
+/* ── Hero floating labels ──────────────────────── */
+.hero-float{
+  position:absolute;z-index:1;pointer-events:none;
+  font-family:var(--font-mono);font-size:.58rem;color:var(--muted);
+  background:var(--surface);border:1px solid var(--hairline);
+  border-radius:2px;padding:.2rem .5rem;opacity:.45;
+}
+.hf1{top:28%;left:7%}
+.hf2{top:55%;right:8%}
+.hf3{bottom:30%;left:10%}
+.hf4{top:40%;right:5%}
+@keyframes hfloat{
+  0%,100%{transform:translateY(0) rotate(-.5deg)}
+  50%{transform:translateY(-10px) rotate(.5deg)}
+}
+.hf1{animation:hfloat 7s ease-in-out infinite}
+.hf2{animation:hfloat 9.3s ease-in-out infinite;animation-delay:-3.2s}
+.hf3{animation:hfloat 11.5s ease-in-out infinite;animation-delay:-6.5s}
+.hf4{animation:hfloat 8.7s ease-in-out infinite;animation-delay:-1.8s}
+@media(max-width:768px){.hero-float{display:none}}
 
 /* ── Why ────────────────────────────────────────── */
 .arch-pre{
@@ -231,7 +252,8 @@ h2{
 .mode-card{
   background:var(--surface);border:1px solid var(--hairline);
   border-radius:var(--radius);padding:1.5rem;
-  transition:border-color .2s,box-shadow .2s,transform .2s;
+  transition:border-color .2s,box-shadow .2s,transform .12s;
+  transform-style:preserve-3d;will-change:transform;
 }
 .mode-card:hover{transform:translateY(-2px)}
 .mode-card[data-m=plan]:hover{border-color:var(--info);box-shadow:var(--glow-info)}
@@ -285,7 +307,7 @@ kbd{
   gap:1px;background:var(--hairline);
   border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;
 }
-.feat{background:var(--surface);padding:1.4rem;transition:background .2s}
+.feat{background:var(--surface);padding:1.4rem;transition:background .2s,transform .12s;transform-style:preserve-3d;will-change:transform}
 .feat:hover{background:var(--surface-raised)}
 .feat-icon{font-family:var(--font-mono);font-size:.65rem;color:var(--accent);letter-spacing:.06em;margin-bottom:.65rem;opacity:.8}
 .feat-title{font-weight:600;font-size:.88rem;margin-bottom:.25rem}
@@ -398,9 +420,12 @@ kbd{
 .notify-btn{
   background:var(--accent);color:#0e1016;border:none;
   border-radius:var(--radius);padding:.58rem 1.1rem;
-  font-weight:700;font-size:.88rem;transition:opacity .2s;
+  font-weight:700;font-size:.88rem;font-family:var(--font-mono);
+  transition:opacity .2s;
 }
 .notify-btn:hover{opacity:.9}
+.notify-btn:disabled{opacity:.55;cursor:wait}
+#notify-msg{display:none;font-family:var(--font-mono);font-size:.75rem;color:var(--muted);margin-top:.9rem;letter-spacing:.01em}
 #notify-msg{margin-top:.65rem;font-size:.78rem;color:var(--success);display:none}
 
 /* ── Playground section ─────────────────────────── */
@@ -465,6 +490,10 @@ footer{
 <!-- ── Hero ─────────────────────────────────────── -->
 <section id="hero">
   <canvas id="bg-canvas"></canvas>
+  <div class="hero-float hf1">7,622 models</div>
+  <div class="hero-float hf2">failover · quota · routing</div>
+  <div class="hero-float hf3">∞ providers</div>
+  <div class="hero-float hf4">[ crazy mode ] ⚡</div>
   <div class="hero-content">
     <div class="hero-eyebrow" id="hero-eyebrow">Built for OmniRoute</div>
     <h1><span style="color:var(--accent)">Route</span> once.<br>Run anywhere.</h1>
@@ -794,11 +823,11 @@ footer{
         <p>Native app (Tauri) with OS notifications, system tray, and deep terminal integration. All the premium UX — no browser overhead.</p>
       </div>
     </div>
-    <div class="notify-form reveal">
-      <input type="email" class="notify-input" id="notify-email" placeholder="you@example.com">
-      <button class="notify-btn" id="notify-btn">Notify me</button>
-    </div>
-    <div id="notify-msg">You're on the list. We'll ping you when web/desktop lands.</div>
+    <form class="notify-form reveal" id="notify-form" novalidate>
+      <input type="email" class="notify-input" id="notify-email" placeholder="you@example.com" required autocomplete="email">
+      <button class="notify-btn" id="notify-btn" type="submit">Notify me</button>
+    </form>
+    <div id="notify-msg"></div>
   </div>
 </div>
 
@@ -976,9 +1005,13 @@ function frame() {
     if(pT>=1) pkMat.opacity=Math.max(0,pkMat.opacity-dt*1.6);
   }
 
-  // camera parallax
+  // camera parallax — mouse XY + scroll Z
+  const scrollFrac=Math.max(0,Math.min(1,scrollY/Math.max(1,heroEl.clientHeight)));
+  const targetZ=20-scrollFrac*8;   // drift from z=20 into the network
+  const baseY=2+scrollFrac*3;      // drift camera down slightly
   camera.position.x+=(mx*2.5-camera.position.x)*.018;
-  camera.position.y+=(-my*1.8-camera.position.y)*.018;
+  camera.position.y+=((-my*1.8+baseY)-camera.position.y)*.018;
+  camera.position.z+=(targetZ-camera.position.z)*.04;
   camera.lookAt(0,0,0);
 
   renderer.render(scene,camera);
@@ -1074,12 +1107,72 @@ function type(){
   }
 }
 
-// ── Notify form ───────────────────────────────
-document.getElementById('notify-btn').addEventListener('click',()=>{
-  const v=document.getElementById('notify-email').value;
-  if(!v||!v.includes('@')) return;
-  document.getElementById('notify-msg').style.display='block';
-  document.getElementById('notify-email').value='';
+// ── Hero parallax layers on scroll ───────────
+const hEyebrow=document.querySelector('.hero-eyebrow');
+const hH1=document.querySelector('#hero h1');
+const hSub=document.querySelector('.hero-sub');
+const hCtas=document.querySelector('.hero-ctas');
+const hFloats=document.querySelectorAll('.hero-float');
+addEventListener('scroll',()=>{
+  const sy=scrollY,hh=heroEl.clientHeight;
+  if(sy>hh) return;
+  if(hEyebrow) hEyebrow.style.transform=`translateY(${sy*.38}px)`;
+  if(hH1) hH1.style.transform=`translateY(${sy*.22}px)`;
+  if(hSub) hSub.style.transform=`translateY(${sy*.13}px)`;
+  if(hCtas) hCtas.style.transform=`translateY(${sy*.07}px)`;
+  hFloats.forEach((f,i)=>{ f.style.transform=`translateY(${sy*(.05+i*.04)}px)`; });
+},{passive:true});
+
+// ── 3D card tilt ─────────────────────────────
+function addTilt(selector,maxDeg=7,perspective=700){
+  document.querySelectorAll(selector).forEach(el=>{
+    el.addEventListener('mousemove',e=>{
+      const r=el.getBoundingClientRect();
+      const rx=((e.clientY-r.top)/r.height-.5)*-maxDeg*2;
+      const ry=((e.clientX-r.left)/r.width-.5)*maxDeg*2;
+      el.style.transform=`perspective(${perspective}px) rotateX(${rx}deg) rotateY(${ry}deg) translateZ(6px)`;
+    });
+    el.addEventListener('mouseleave',()=>{
+      el.style.transform='';
+    });
+  });
+}
+addTilt('.mode-card',6,700);
+addTilt('.feat',4,900);
+addTilt('.roadmap-card',5,800);
+
+// ── Notify form (Formspree) ───────────────────
+// To activate: sign up free at formspree.io, create a form, paste the ID below.
+const FORMSPREE_ID='xzzbbqkb'; // replace with your form ID
+const notifyForm=document.getElementById('notify-form');
+const notifyMsg=document.getElementById('notify-msg');
+const notifyBtn=document.getElementById('notify-btn');
+notifyForm.addEventListener('submit',async e=>{
+  e.preventDefault();
+  const email=document.getElementById('notify-email').value.trim();
+  if(!email||!email.includes('@')) return;
+  notifyBtn.textContent='...';
+  notifyBtn.disabled=true;
+  try{
+    const r=await fetch(`https://formspree.io/f/${FORMSPREE_ID}`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify({email,_subject:'OmniHarness launch notify'}),
+    });
+    if(r.ok){
+      notifyForm.style.display='none';
+      notifyMsg.textContent="you're on the list — we'll ping you when web/desktop lands.";
+      notifyMsg.style.display='block';
+    } else {
+      throw new Error('server');
+    }
+  } catch{
+    notifyMsg.textContent='something went wrong — try again or open a GitHub issue.';
+    notifyMsg.style.color='var(--error)';
+    notifyMsg.style.display='block';
+    notifyBtn.textContent='Notify me';
+    notifyBtn.disabled=false;
+  }
 });
 </script>
 </body>
