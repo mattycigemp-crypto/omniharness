@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"omniharness/internal/agent"
+	"omniharness/internal/budget"
 	composer "omniharness/internal/context"
 	"omniharness/internal/evaluate"
 	"omniharness/internal/event"
@@ -464,5 +465,71 @@ drain:
 	}
 	if seen == 0 {
 		t.Fatal("no agent lifecycle event observed")
+	}
+}
+
+// Budgets were advertised in the config and on the run command, and the
+// tracker that measures them was fully written and tested — but nothing ever
+// called it, so a cost or token ceiling bounded nothing at all.
+func TestBudgetStopsTheRun(t *testing.T) {
+	dir := t.TempDir()
+	// Several steps' worth of work, so an unbudgeted run would keep going.
+	fake := testutil.NewFakeOmniRoute(t,
+		testutil.FakeStep{Content: "one"},
+		testutil.FakeStep{Content: "two"},
+		testutil.FakeStep{Content: "three"},
+	)
+	o, _, bus := newOrchestrator(t, fake, dir)
+
+	ch, cancel := bus.Subscribe(256)
+	defer cancel()
+
+	ctx, c2 := context.WithTimeout(context.Background(), 30*time.Second)
+	defer c2()
+
+	// One token is a ceiling any real call exceeds immediately.
+	spec := task.Spec{
+		Prompt: "Add a feature to the codebase.",
+		CWD:    dir,
+		Budget: budget.Budget{MaxTokens: 1},
+	}
+	tsk, err := o.Run(ctx, "s1", spec, "")
+	if err == nil && tsk.Status == task.StatusCompleted {
+		t.Fatal("a task over its token budget must not complete")
+	}
+
+	var announced bool
+	deadline := time.After(2 * time.Second)
+drain:
+	for {
+		select {
+		case e := <-ch:
+			if e.Type == event.BudgetExceeded {
+				announced = true
+				break drain
+			}
+		case <-deadline:
+			break drain
+		}
+	}
+	if !announced {
+		t.Error("exceeding a budget must publish BudgetExceeded so the UI can say why")
+	}
+}
+
+// A task with no budget configured is unlimited, as it always was.
+func TestNoBudgetRunsFreely(t *testing.T) {
+	dir := t.TempDir()
+	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "done"})
+	o, _, _ := newOrchestrator(t, fake, dir)
+
+	ctx, c2 := context.WithTimeout(context.Background(), 30*time.Second)
+	defer c2()
+	tsk, err := o.Run(ctx, "s1", task.Spec{Prompt: "Fix the typo in README.md.", CWD: dir}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tsk.Status != task.StatusCompleted {
+		t.Fatalf("status = %s (%s)", tsk.Status, tsk.Error)
 	}
 }

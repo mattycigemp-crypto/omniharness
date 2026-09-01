@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"omniharness/internal/budget"
 	composer "omniharness/internal/context"
 	"omniharness/internal/event"
 	"omniharness/internal/gateway"
@@ -139,6 +140,10 @@ type Deps struct {
 	Roles         map[Role]RoleConfig
 	Workspace     string
 	MaxIterations int // tool-call loop iterations per agent (0 = 100)
+	// Budget bounds the task's total consumption. It is shared by every agent
+	// working on the task, because the limits are task-wide: "total tokens
+	// across all agents" is not a per-agent allowance. Nil means unlimited.
+	Budget *budget.Tracker
 	// OnApprovalRequest is invoked when a tool needs human approval. When nil,
 	// policy-engine approvals run through its own approver.
 	OnApprovalRequest func(a *Agent, r policy.Request, reason string)
@@ -218,6 +223,21 @@ func (a *Agent) ResolveModel() error {
 	a.Model = m
 	a.ModelReason = reason
 	return nil
+}
+
+// overBudget reports the exceeded dimension, announcing it once so the CLI and
+// TUI can show why a run stopped. Returns "" when there is no budget or the
+// task is still inside it.
+func (a *Agent) overBudget() string {
+	if a.deps.Budget == nil {
+		return ""
+	}
+	reason := a.deps.Budget.Exceeded()
+	if reason == "" {
+		return ""
+	}
+	a.publish(&event.BudgetExceededData{Dimension: reason, TaskID: a.TaskID})
+	return reason
 }
 
 func (a *Agent) publish(p event.Payload) {
@@ -353,6 +373,14 @@ func (a *Agent) Run(ctx context.Context) error {
 		default:
 		}
 
+		// Stop before spending anything more. Checked at the top of each
+		// iteration so the ceiling bounds what is spent, rather than being
+		// noticed after the fact.
+		if reason := a.overBudget(); reason != "" {
+			a.setLifecycle(LifecycleFailed, task.StatusFailed, reason)
+			return fmt.Errorf("%s", reason)
+		}
+
 		// Checkpoint the transcript each iteration for resumability.
 		if err := a.Persist(); err != nil {
 			return fmt.Errorf("persist agent: %w", err)
@@ -370,6 +398,13 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 		if resp == nil {
 			continue
+		}
+		// Check again now the call has been paid for. Checking only before the
+		// next iteration would let a single-turn agent blow any ceiling and
+		// still report success, because it never comes round again.
+		if reason := a.overBudget(); reason != "" {
+			a.setLifecycle(LifecycleFailed, task.StatusFailed, reason)
+			return fmt.Errorf("%s", reason)
 		}
 
 		msg := resp.Choices[0].Message
@@ -399,7 +434,14 @@ func (a *Agent) Run(ctx context.Context) error {
 		// Execute tool calls.
 		a.setLifecycle(LifecycleActing, task.StatusRunning, "acting")
 		for _, tc := range msg.ToolCalls {
+			if reason := a.overBudget(); reason != "" {
+				a.setLifecycle(LifecycleFailed, task.StatusFailed, reason)
+				return fmt.Errorf("%s", reason)
+			}
 			a.ToolCalls++
+			if a.deps.Budget != nil {
+				a.deps.Budget.AddToolCall()
+			}
 			obs := a.executeToolCall(runCtx, tc, roleCfg)
 			if runCtx.Err() != nil {
 				a.setLifecycle(LifecycleCancelled, task.StatusCancelled, "cancelled")
@@ -461,6 +503,9 @@ func (a *Agent) callModel(ctx context.Context, toolSpecs []gateway.ToolSpec, rol
 	a.CostUSD += cost
 	a.Latency += latency
 	a.mu.Unlock()
+	if a.deps.Budget != nil {
+		a.deps.Budget.AddTokens(usage.PromptTokens+usage.CompletionTokens, cost)
+	}
 	a.publish(&event.ModelRespondedData{
 		Model: a.Model, TaskID: a.TaskID, AgentID: a.ID,
 		TokensIn: usage.PromptTokens, TokensOut: usage.CompletionTokens, CostUSD: cost, Latency: latency,

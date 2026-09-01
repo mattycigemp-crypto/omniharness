@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"omniharness/internal/budget"
 	"omniharness/internal/config"
 	"omniharness/internal/event"
 	"omniharness/internal/gateway"
@@ -193,4 +194,30 @@ func TestRuntimeBudgetsRespected(t *testing.T) {
 		t.Fatalf("status %s: %s", tsk.Status, tsk.Error)
 	}
 	_ = strings.TrimSpace
+}
+
+// The [budgets] config section reached the orchestrator's concurrency and
+// repair caps, but max_tokens, max_cost_usd, max_duration and max_tool_calls
+// were read from the file and then never consulted. A per-run flag still wins.
+func TestConfigBudgetsReachTheTaskSpec(t *testing.T) {
+	cfg := config.Default()
+	cfg.Budgets.MaxTokens = 1234
+	cfg.Budgets.MaxCostUSD = 5.5
+	cfg.Budgets.MaxToolCalls = 7
+	rt := &Runtime{Cfg: cfg}
+
+	// Nothing set per run: the file's ceilings apply.
+	got := rt.budgetFor(budget.Budget{})
+	if got.MaxTokens != 1234 || got.MaxCostUSD != 5.5 || got.MaxToolCalls != 7 {
+		t.Fatalf("config budgets did not reach the spec: %+v", got)
+	}
+
+	// An explicit per-run value wins, and the rest still fall back.
+	got = rt.budgetFor(budget.Budget{MaxCostUSD: 0.25})
+	if got.MaxCostUSD != 0.25 {
+		t.Errorf("per-run cost = %v, want the override 0.25", got.MaxCostUSD)
+	}
+	if got.MaxTokens != 1234 {
+		t.Errorf("unset dimensions must still fall back: %+v", got)
+	}
 }

@@ -268,12 +268,34 @@ type RunOptions struct {
 }
 
 // RunTask analyzes, plans and executes a task, returning the durable task.
+// budgetFor resolves the ceilings for a run: an explicit per-run value wins,
+// and each dimension the caller left at zero falls back to the config file.
+// Without this the [budgets] section only reached the orchestrator concurrency
+// and repair caps — max_tokens, max_cost_usd, max_duration and max_tool_calls
+// were read from the file, stored, and never consulted again.
+func (r *Runtime) budgetFor(override budget.Budget) budget.Budget {
+	b := override
+	if b.MaxTokens == 0 {
+		b.MaxTokens = r.Cfg.Budgets.MaxTokens
+	}
+	if b.MaxCostUSD == 0 {
+		b.MaxCostUSD = r.Cfg.Budgets.MaxCostUSD
+	}
+	if b.MaxDuration == 0 {
+		b.MaxDuration = r.Cfg.Budgets.MaxDuration
+	}
+	if b.MaxToolCalls == 0 {
+		b.MaxToolCalls = r.Cfg.Budgets.MaxToolCalls
+	}
+	return b
+}
+
 func (r *Runtime) RunTask(ctx context.Context, sessionID, prompt string, opts RunOptions) (*task.Task, error) {
 	spec := task.Spec{
 		Prompt:    prompt,
 		CWD:       r.Workspace,
 		SessionID: sessionID,
-		Budget:    opts.Budget,
+		Budget:    r.budgetFor(opts.Budget),
 		Deadline:  time.Now().Add(opts.Deadline).UTC(),
 	}
 	if opts.ApproveAll {
