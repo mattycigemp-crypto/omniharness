@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"text/tabwriter"
 	"time"
 
@@ -115,12 +114,9 @@ func newDoctorCmd() *cobra.Command {
 				}
 			}
 
-			// Go is only needed to rebuild from source. For binaries installed
-			// from the npm package it is not a requirement, so don't fail the
-			// report over it.
-			if fromNpm, _ := os.Executable(); installedFromNpm(filepath.Clean(fromNpm)) {
-				check("go toolchain", true, "not needed (npm install)")
-			} else if _, err := exec.LookPath("go"); err == nil {
+			// This binary is always built from source, so Go is a real
+			// requirement for updating it.
+			if _, err := exec.LookPath("go"); err == nil {
 				check("go toolchain", true, "found")
 			} else {
 				check("go toolchain", false, "not on PATH (needed to rebuild from source)")

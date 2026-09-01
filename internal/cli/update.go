@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,25 +14,15 @@ import (
 	"omniharness/internal/version"
 )
 
-// updateCheckCacheTTL bounds how often the launch-time update check hits the
-// npm registry; the result is cached in the persistence dir.
-const updateCheckCacheTTL = 24 * time.Hour
-
-// launchCheckTimeout caps the launch-time registry check so it never delays
-// starting the harness.
-const launchCheckTimeout = 3 * time.Second
-
-// npmPackage is the published wrapper package this binary ships inside.
+// npmPackage is the published TypeScript CLI. It is a *different program*
+// from this binary: the tarball ships cli.cjs and dist/ only, never a compiled
+// Go binary, so `npm install -g omniharness-cli` cannot update this executable.
+// It is named here only so `update` can point at the right thing.
 const npmPackage = "omniharness-cli"
 
-// npmVendorMarker marks a binary installed from the npm package: the package
-// ships the platform binary at node_modules/<pkg>/vendor/<os>-<arch>/.
-const npmVendorMarker = "node_modules/omniharness-cli/vendor/"
-
-// newUpdateCmd builds the `omniharness update` command. It checks the npm
-// registry for a newer omniharness-cli release and self-updates (npm install
-// -g) when the binary runs from the npm package; for source/dev builds it
-// prints the rebuild command instead.
+// newUpdateCmd builds the `omniharness update` command. This binary is always
+// built from source, so the command reports what is installed and how to
+// rebuild; it never tries to update itself.
 func newUpdateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "update",
@@ -43,15 +32,6 @@ func newUpdateCmd() *cobra.Command {
 			return runUpdate(cmd.Context())
 		},
 	}
-}
-
-// installedFromNpm reports whether an executable path lives inside the npm
-// package's vendor directory (true) or is a source/dev build (false).
-// Backslashes are normalized explicitly because filepath.ToSlash only converts
-// the host OS separator — a Windows path would slip through on Linux CI.
-func installedFromNpm(exePath string) bool {
-	norm := strings.ReplaceAll(exePath, "\\", "/")
-	return strings.Contains(norm, npmVendorMarker)
 }
 
 // compareVersions compares dotted numeric versions ("1.2.3" vs "1.10.0");
@@ -110,64 +90,20 @@ func npmLatestVersion(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// updateCheckCache is the persisted result of a launch-time update check.
-type updateCheckCache struct {
-	CheckedAt time.Time `json:"checked_at"`
-	Latest    string    `json:"latest"`
-}
-
-// updateNoticeFor renders the launch notice, or "" when nothing should be
-// shown (source build, unknown latest, or already up to date).
-func updateNoticeFor(current, latest string, fromNpm bool) string {
-	if !fromNpm || latest == "" {
-		return ""
+// repoRootOf returns the checkout a binary was built into, when it can be
+// identified. The convention is <repo>/bin/omniharness, so the grandparent is
+// the repo — but only if it actually holds a go.mod. Guessing from the path
+// alone printed a `cd` to whatever happened to sit two levels up, which for a
+// binary run from a temp directory was a plainly wrong instruction.
+func repoRootOf(exe string) (string, bool) {
+	if filepath.Base(filepath.Dir(exe)) != "bin" {
+		return "", false
 	}
-	if compareVersions(current, latest) >= 0 {
-		return ""
+	root := filepath.Dir(filepath.Dir(exe))
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		return "", false
 	}
-	return fmt.Sprintf("update available: omniharness-cli %s (you have %s) — run `omniharness update`", latest, current)
-}
-
-// launchUpdateNotice is the best-effort check shown when the harness starts.
-// It only applies to npm-installed binaries, never blocks (3s cap), and caches
-// the registry result for a day so launches stay fast and quiet.
-func launchUpdateNotice(ctx context.Context, cacheDir string) string {
-	exe, err := os.Executable()
-	if err != nil || !installedFromNpm(filepath.Clean(exe)) {
-		return ""
-	}
-	latest, err := cachedLatestVersion(ctx, cacheDir)
-	if err != nil {
-		return ""
-	}
-	return updateNoticeFor(version.Version, latest, true)
-}
-
-// cachedLatestVersion returns the latest published version, reading a fresh
-// cache file when available and refreshing (best-effort) otherwise.
-func cachedLatestVersion(ctx context.Context, cacheDir string) (string, error) {
-	cachePath := ""
-	if cacheDir != "" {
-		cachePath = filepath.Join(cacheDir, "update-check.json")
-		if data, err := os.ReadFile(cachePath); err == nil {
-			var c updateCheckCache
-			if json.Unmarshal(data, &c) == nil && c.Latest != "" && time.Since(c.CheckedAt) < updateCheckCacheTTL {
-				return c.Latest, nil
-			}
-		}
-	}
-	cctx, cancel := context.WithTimeout(ctx, launchCheckTimeout)
-	defer cancel()
-	latest, err := npmLatestVersion(cctx)
-	if err != nil || latest == "" {
-		return "", err
-	}
-	if cachePath != "" {
-		if data, err := json.Marshal(updateCheckCache{CheckedAt: time.Now(), Latest: latest}); err == nil {
-			_ = os.WriteFile(cachePath, data, 0o600) // best-effort; never fail the launch
-		}
-	}
-	return latest, nil
+	return root, true
 }
 
 func runUpdate(ctx context.Context) error {
@@ -176,53 +112,28 @@ func runUpdate(ctx context.Context) error {
 		return fmt.Errorf("locate executable: %w", err)
 	}
 	exe = filepath.Clean(exe)
-	fromNpm := installedFromNpm(exe)
 
 	fmt.Println("OmniHarness update check")
 	fmt.Printf("  current:  %s\n", version.String())
 	fmt.Printf("  install:  %s\n", exe)
 
-	latest, err := npmLatestVersion(ctx)
-	switch {
+	// Reported for orientation only. The npm package is the TypeScript CLI, a
+	// separate program on its own version line, so its version is never
+	// compared against this binary's.
+	switch latest, err := npmLatestVersion(ctx); {
 	case err != nil:
-		fmt.Printf("  registry: %v\n", err)
+		fmt.Printf("  npm CLI:  unavailable (%v)\n", err)
 	case latest == "":
-		fmt.Printf("  registry: %s not published yet — nothing to update from npm\n", npmPackage)
+		fmt.Printf("  npm CLI:  %s is not published yet\n", npmPackage)
 	default:
-		fmt.Printf("  registry: latest published %s\n", latest)
+		fmt.Printf("  npm CLI:  %s %s (a separate program)\n", npmPackage, latest)
 	}
 
-	// Only compare when the registry actually reported a version.
-	if err == nil && latest != "" {
-		switch cmp := compareVersions(version.Version, latest); {
-		case cmp == 0:
-			fmt.Println("\nup to date")
-			return nil
-		case cmp > 0:
-			fmt.Printf("\nnote: running %s is ahead of the published %s\n", version.Version, latest)
-			return nil
-		}
+	fmt.Println("\nThis binary is built from source. To update it:")
+	if root, ok := repoRootOf(exe); ok {
+		fmt.Printf("  cd %s\n", root)
 	}
-
-	if !fromNpm {
-		repoRoot := filepath.Dir(filepath.Dir(exe))
-		fmt.Println("\nThis is a source/dev build — update it by rebuilding:")
-		fmt.Printf("  cd %s && source scripts/env.sh && go build -o bin/omniharness.exe ./cmd/omniharness\n", repoRoot)
-		fmt.Println("(For npm-installed binaries, `omniharness update` self-updates automatically.)")
-		return nil
-	}
-
-	if err != nil || latest == "" {
-		fmt.Printf("\nNothing to update (npm package %s is not published yet).\n", npmPackage)
-		return nil
-	}
-
-	fmt.Printf("\nUpdating: npm install -g %s@latest\n", npmPackage)
-	out, err := exec.CommandContext(ctx, "npm", "install", "-g", npmPackage+"@latest").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("npm install -g %s: %w\n%s", npmPackage, err, string(out))
-	}
-	fmt.Print(string(out))
-	fmt.Println("updated. open a new terminal, or re-run `omniharness --version`")
+	fmt.Println("  source scripts/env.sh && go build -o bin/omniharness.exe ./cmd/omniharness")
+	fmt.Printf("\nThe npm package installs the TypeScript CLI, not this binary:\n  npm install -g %s@latest\n", npmPackage)
 	return nil
 }
