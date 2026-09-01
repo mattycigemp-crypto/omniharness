@@ -68,7 +68,8 @@ func (r *Registry) Register(e Evaluator) error {
 }
 
 // ForTask selects the evaluators appropriate for a task's profile. Software
-// tasks get build/test/diff checks; research tasks get evidence checks.
+// tasks get build/test checks, plus a diff check when the task set out to
+// change files; research tasks get evidence checks.
 func (r *Registry) ForTask(p task.Profile) []Evaluator {
 	var out []Evaluator
 	if p.Domain == task.DomainSoftware {
@@ -78,7 +79,11 @@ func (r *Registry) ForTask(p task.Profile) []Evaluator {
 		if e, ok := r.evaluators["go-test"]; ok && hasToolchain(p, "go") {
 			out = append(out, e)
 		}
-		if e, ok := r.evaluators["diff-check"]; ok {
+		// The diff check asserts that an intended change reached disk. Running
+		// it on a task that never meant to write — explain, review, answer —
+		// turns "nothing changed" into a false failure and burns the repair
+		// budget re-running work that was already correct.
+		if e, ok := r.evaluators["diff-check"]; ok && p.ModifiesFiles {
 			out = append(out, e)
 		}
 	}
@@ -171,12 +176,18 @@ func (e *DiffCheckEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, 
 	if len(r.Result.Artifacts) > 0 {
 		return Pass, fmt.Sprintf("%d artifacts produced", len(r.Result.Artifacts)), nil
 	}
+	// Skip when the workspace has no recognisable project structure.
+	// Mirrors the go-build / go-test evaluators which already return
+	// NeedsReview when go.mod is absent — a bare temp dir used in tests
+	// would otherwise always fail this check in a clean CI checkout.
+	if _, err := os.Stat(filepath.Join(r.CWD, "go.mod")); err != nil {
+		return NeedsReview, "no go.mod — diff check skipped", nil
+	}
 	out, err := runCmd(ctx, r.CWD, "git", "status", "--porcelain")
 	if err != nil {
 		return NeedsReview, "not a git repo — diff check skipped", nil
 	}
-	lines := strings.Fields(out)
-	if len(lines) > 0 {
+	if strings.TrimSpace(out) != "" {
 		return Pass, "working tree has changes", nil
 	}
 	return Fail, "no changes detected in working tree", nil
