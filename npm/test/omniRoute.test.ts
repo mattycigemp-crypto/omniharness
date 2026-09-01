@@ -163,6 +163,47 @@ test('chat() surfaces per-response compression from x-omniroute headers', async 
   finally { bare.close(); }
 });
 
+test('reads routing outcome from X-OmniRoute-Decision, with the discrete provider header winning', async () => {
+  const withDecision = server(() => {
+    const response = Response.json({ model: 'test/model', choices: [{ message: { role: 'assistant', content: 'ok' } }] });
+    response.headers.set('x-omniroute-decision', 'strategy=best-coding; provider=openrouter; latency_ms=1240');
+    return response;
+  });
+  try {
+    const client = new OmniRouteClient({ endpoint: withDecision.url });
+    await client.chat('auto/best-coding', [{ role: 'user', content: 'hi' }]);
+    const fb = client.snapshotMetrics().fallback;
+    assert.equal(fb.activeProvider, 'openrouter');
+    assert.equal(fb.strategy, 'best-coding');
+    assert.equal(fb.latencyMs, 1240);
+  } finally { withDecision.close(); }
+
+  // When both headers are present the discrete X-OmniRoute-Provider is authoritative.
+  const both = server(() => {
+    const response = Response.json({ model: 'test/model', choices: [{ message: { role: 'assistant', content: 'ok' } }] });
+    response.headers.set('x-omniroute-decision', 'strategy=auto; provider=stale; latency_ms=10');
+    response.headers.set('x-omniroute-provider', 'anthropic');
+    return response;
+  });
+  try {
+    const client = new OmniRouteClient({ endpoint: both.url });
+    await client.chat('combo', [{ role: 'user', content: 'hi' }]);
+    const fb = client.snapshotMetrics().fallback;
+    assert.equal(fb.activeProvider, 'anthropic');
+    assert.equal(fb.strategy, 'auto');
+  } finally { both.close(); }
+
+  // A malformed or absent header leaves the tracker untouched.
+  const bare = server(() => Response.json({ model: 'm', choices: [{ message: { role: 'assistant', content: 'ok' } }] }));
+  try {
+    const client = new OmniRouteClient({ endpoint: bare.url });
+    await client.chat('m', []);
+    const fb = client.snapshotMetrics().fallback;
+    assert.equal(fb.strategy, undefined);
+    assert.equal(fb.latencyMs, undefined);
+  } finally { bare.close(); }
+});
+
 // Fake MCP streamable-HTTP transport: initialize establishes a session, then
 // tools/list and tools/call answer JSON-RPC calls carrying that session header.
 function mcpServer(config: { tools: unknown[]; callResult: { content: { type: string; text: string }[]; isError?: boolean } }): { url: string; close: () => void } {

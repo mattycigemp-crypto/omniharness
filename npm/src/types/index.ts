@@ -65,6 +65,10 @@ export interface CompressionTracker {
 
 export interface FallbackTracker {
   activeProvider?: string;
+  /** Routing strategy the gateway applied, from the `X-OmniRoute-Decision` header. */
+  strategy?: string;
+  /** Gateway-reported routing/response latency in ms, from `X-OmniRoute-Decision`. */
+  latencyMs?: number;
   attempts: number;
   lastFailure?: string;
   cooldownUntil?: string;

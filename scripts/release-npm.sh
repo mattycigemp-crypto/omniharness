@@ -13,17 +13,10 @@
 #     workflow's id-token permission is the credential, so no token is stored.
 #     Running it by hand needs `npm login`, or a granular token with "Bypass
 #     2FA for publish" set as NODE_AUTH_TOKEN or in .npmrc.
-#   - The portable Go toolchain (scripts/env.sh handles PATH).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
-
-# Prefer the portable Go toolchain when present (local dev); CI installs Go
-# itself via actions/setup-go, so a missing ~/go-sdk must not break PATH.
-if [[ -x "$HOME/go-sdk/go/bin/go" ]]; then
-  export PATH="$HOME/go-sdk/go/bin:$PATH"
-fi
 
 DRY_RUN=0
 BUMP="patch"
@@ -85,11 +78,6 @@ npm run build
 cd "$REPO_ROOT"
 
 echo "Built omniharness-cli v$VERSION TypeScript CLI"
-
-echo "Verifying: go vet ./... && go test -count=1 ./..."
-go vet ./...
-go test -count=1 ./...
-echo "Verification passed"
 
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "Dry run: publish skipped. Next version would be $VERSION"

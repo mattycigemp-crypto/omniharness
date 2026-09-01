@@ -393,7 +393,17 @@ export class OmniRouteClient {
       compression.updatedAt = new Date().toISOString();
     }
     const fallback = this.metrics.fallback;
-    fallback.activeProvider = headers.get('x-omniroute-provider') ?? fallback.activeProvider;
+    // `X-OmniRoute-Decision` is a composite of the routing outcome —
+    // `strategy=<name>; provider=<alias>; latency_ms=<n>` — present whenever the
+    // gateway knows either field, so it is a single read in place of assembling
+    // the same picture from three headers. The discrete `X-OmniRoute-Provider`
+    // header still wins for the active provider when both are present.
+    // Contract: docs/reference/API_REFERENCE.md in the OmniRoute repo.
+    const decision = this.parseDecision(headers.get('x-omniroute-decision'));
+    const provider = headers.get('x-omniroute-provider') ?? decision.provider;
+    if (provider) fallback.activeProvider = provider;
+    if (decision.strategy) fallback.strategy = decision.strategy;
+    if (decision.latencyMs !== undefined) fallback.latencyMs = decision.latencyMs;
     fallback.lastFailure = headers.get('x-omniroute-fallback-reason') ?? fallback.lastFailure;
     const attempts = this.headerNumber(headers, 'x-omniroute-fallback-attempts');
     if (attempts !== undefined) fallback.attempts = attempts;
@@ -406,6 +416,26 @@ export class OmniRouteClient {
   private async safeBody(response: Response): Promise<string> {
     const body = await response.text();
     return body.slice(0, 500).replace(this.apiKey, '[REDACTED]');
+  }
+
+  /** Parse `X-OmniRoute-Decision: strategy=auto; provider=openai; latency_ms=812`. */
+  private parseDecision(value: string | null): { strategy?: string; provider?: string; latencyMs?: number } {
+    if (!value) return {};
+    const out: { strategy?: string; provider?: string; latencyMs?: number } = {};
+    for (const part of value.split(';')) {
+      const eq = part.indexOf('=');
+      if (eq === -1) continue;
+      const key = part.slice(0, eq).trim().toLowerCase();
+      const raw = part.slice(eq + 1).trim();
+      if (raw === '') continue;
+      if (key === 'strategy') out.strategy = raw;
+      else if (key === 'provider') out.provider = raw;
+      else if (key === 'latency_ms') {
+        const parsed = Number(raw);
+        if (Number.isFinite(parsed)) out.latencyMs = parsed;
+      }
+    }
+    return out;
   }
 
   private headerNumber(headers: Headers, name: string): number | undefined {
