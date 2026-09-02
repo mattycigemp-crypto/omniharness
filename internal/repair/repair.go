@@ -5,11 +5,11 @@
 package repair
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"omniharness/internal/gateway"
-	"omniharness/internal/task"
 )
 
 // Stage identifies where a failure occurred.
@@ -37,7 +37,7 @@ type Failure struct {
 func Classify(stage Stage, err error) Failure {
 	f := Failure{Stage: stage, Error: err.Error()}
 	var gwErr *gateway.Error
-	if asErr(err, &gwErr) {
+	if errors.As(err, &gwErr) {
 		f.Kind = string(gwErr.Kind)
 		return f
 	}
@@ -59,21 +59,6 @@ func Classify(stage Stage, err error) Failure {
 		f.Kind = "unknown"
 	}
 	return f
-}
-
-func asErr(err error, target **gateway.Error) bool {
-	for err != nil {
-		if e, ok := err.(*gateway.Error); ok {
-			*target = e
-			return true
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
-	}
-	return false
 }
 
 // Plan describes what the next attempt should change.
@@ -198,17 +183,5 @@ func (e *Engine) Plan(f Failure, attempt, maxAttempts int) (Plan, error) {
 				Changed:           []string{"role → reviewer", "model → reasoning"},
 			}, nil
 		}
-	}
-}
-
-// TaskOutcomeOfOutcome maps evaluator outcomes to task statuses.
-func TaskOutcomeOfOutcome(o string) task.Status {
-	switch o {
-	case "PASS", "PASS_WITH_WARNINGS":
-		return task.StatusCompleted
-	case "NEEDS_REVIEW":
-		return task.StatusCompleted
-	default:
-		return task.StatusFailed
 	}
 }
