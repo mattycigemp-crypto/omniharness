@@ -1,0 +1,16 @@
+{
+  // The build config compiles src into dist, so it cannot also cover the
+  // tests: they are not part of the published output and rootDir forbids
+  // reaching outside src. This one typechecks everything and emits nothing.
+  //
+  // Without it the tests were never typechecked at all. A call passing `true`
+  // where an options object was expected ran happily, silently took the
+  // default, and asserted against the wrong screen.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx"]
+}

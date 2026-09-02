@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { test } from 'node:test';
+import { asStdin, asStdout } from './streams.js';
 import { PassThrough, Writable } from 'node:stream';
 import React from 'react';
 import { render } from 'ink';
@@ -193,7 +194,7 @@ for (const mode of ['plan', 'build', 'research'] as AgentMode[]) {
     const engine = fakeEngine(mode, () => { swarmed += 1; });
     const stdin = new FakeStdin();
     const stdout = new FakeStdout();
-    const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+    const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
     await sleep(40);
     stdin.write('do the work');
     await sleep(40); stdin.write('\r');
@@ -208,7 +209,7 @@ test('crazy mode: a multi-todo plan triggers the swarm from the UI', async () =>
   const engine = fakeEngine('crazy', () => { swarmed += 1; });
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(40);
   stdin.write('do the work');
   await sleep(40); stdin.write('\r');
@@ -221,10 +222,10 @@ test('crazy mode: a multi-todo plan triggers the swarm from the UI', async () =>
 
 test('Ctrl+E cycles the visible mode plan → build → research → crazy → plan', async () => {
   const engine = fakeEngine('plan', () => {});
-  (engine.state as { taskQueue: unknown[] }).taskQueue = [];
+  (engine.state as unknown as { taskQueue: readonly unknown[] }).taskQueue = [];
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(40);
   const seen: string[] = [];
   for (const expected of ['build', 'research', 'crazy', 'plan']) {
@@ -240,10 +241,10 @@ test('Ctrl+E cycles the visible mode plan → build → research → crazy → p
 
 test('Shift+Tab cycles the permission mode manual → accept edits → bypass → manual', async () => {
   const engine = fakeEngine('build', () => {});
-  (engine.state as { taskQueue: unknown[] }).taskQueue = [];
+  (engine.state as unknown as { taskQueue: readonly unknown[] }).taskQueue = [];
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(40);
   for (const expected of ['accept edits', 'bypass', 'manual']) {
     stdin.write('\x1b[Z'); // back-tab (Shift+Tab)

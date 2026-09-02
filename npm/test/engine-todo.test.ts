@@ -76,7 +76,7 @@ test('crazy mode: risky tools auto-approve, memory persists, and the prompt says
   try {
     const engine = await createMastraEngine({ workspaceRoot: workspace, endpoint: live.url, mode: 'crazy' });
     // A denial handler would block write_file in other modes; crazy mode must skip it.
-    engine.setApprovalHandler(async () => false);
+    engine.setApprovalHandler(async () => ({ approved: false }));
     engine.subscribe((event) => emitted.push(event));
     const result = await engine.run('write a file');
     assert.equal(result.content, 'shipped');
