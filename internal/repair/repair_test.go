@@ -140,3 +140,36 @@ func TestEveryPlanChangesSomething(t *testing.T) {
 		}
 	}
 }
+
+// Classification decides whether the next attempt backs off, switches model,
+// or gives up, so a gateway error hidden inside a wrapper must still be found.
+// The previous hand-rolled unwrapper followed Unwrap() error only; errors.Join
+// produces Unwrap() []error, and a joined gateway error was classified as
+// "unknown" — the kind that escalates instead of backing off.
+func TestClassifyFindsAGatewayErrorInsideAJoin(t *testing.T) {
+	gwErr := &gateway.Error{Kind: gateway.KindRateLimit, Status: 429, Message: "slow down"}
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"bare", gwErr},
+		{"wrapped once", fmt.Errorf("model call: %w", gwErr)},
+		{"wrapped twice", fmt.Errorf("step: %w", fmt.Errorf("model call: %w", gwErr))},
+		{"joined", errors.Join(errors.New("context cancelled"), gwErr)},
+		{"joined then wrapped", fmt.Errorf("step: %w", errors.Join(errors.New("other"), gwErr))},
+	} {
+		if got := Classify(StageModel, tc.err).Kind; got != string(gateway.KindRateLimit) {
+			t.Errorf("%s: kind = %q, want %q", tc.name, got, gateway.KindRateLimit)
+		}
+	}
+}
+
+// Budget exhaustion is terminal, so it must win over substrings that would
+// otherwise route it somewhere retryable.
+func TestBudgetClassificationWinsOverOtherSignals(t *testing.T) {
+	f := Classify(StageModel, errors.New("budget exceeded while running the tool that timed out"))
+	if f.Kind != "budget" {
+		t.Errorf("kind = %q, want budget; a terminal failure must not be retried", f.Kind)
+	}
+}
