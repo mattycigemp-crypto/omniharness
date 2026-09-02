@@ -36,7 +36,8 @@ export type KeyAction =
   | { kind: 'ctrlC' }
   | { kind: 'ctrlM' }
   | { kind: 'ctrlO' }
-  | { kind: 'ctrlE' };
+  | { kind: 'ctrlE' }
+  | { kind: 'ctrlB' };
 
 /** Enable the kitty keyboard protocol (disambiguate escape codes). */
 export const KITTY_PUSH = '\x1b[>1u';
