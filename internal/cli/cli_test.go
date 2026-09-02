@@ -240,3 +240,30 @@ func TestConfigCommandWritesDefault(t *testing.T) {
 var _ = context.Background
 var _ = time.Second
 var _ = cobra.Command{}
+
+// A mistyped case id used to select nothing, print an empty results table and
+// exit 0 — a benchmark that ran no cases reported success, so a script gating
+// on it carried straight on.
+func TestBenchmarkRejectsUnknownCase(t *testing.T) {
+	if got := unknownCases([]string{"write-fib"}); len(got) != 0 {
+		t.Errorf("a real case id was reported unknown: %v", got)
+	}
+	got := unknownCases([]string{"write-fib", "totally-bogus", "also-wrong"})
+	if len(got) != 2 || got[0] != "totally-bogus" || got[1] != "also-wrong" {
+		t.Errorf("unknownCases = %v, want the two bogus ids", got)
+	}
+	// An empty id comes from a bare --cases='' and is not a typo to report.
+	if got := unknownCases([]string{""}); len(got) != 0 {
+		t.Errorf("empty id reported as unknown: %v", got)
+	}
+	// The error message has to tell the user what they could have typed.
+	ids := caseIDs()
+	if len(ids) == 0 {
+		t.Fatal("caseIDs must list the built-in cases for the error message")
+	}
+	for _, id := range ids {
+		if len(unknownCases([]string{id})) != 0 {
+			t.Errorf("built-in case %q reported unknown", id)
+		}
+	}
+}
