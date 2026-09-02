@@ -64,6 +64,9 @@ git_push_requires_approval = true
 # secret_env names more variables to strip; wildcards allowed, case-insensitive.
 # secret_env = ["GITHUB_TOKEN", "AWS_*", "*_TOKEN"]
 
+# allow runs it, ask prompts for approval, block refuses.
+# critical is the exception: it refuses either way. Setting it to "ask"
+# does not make critical tools promptable.
 [policy.risk_action]
 low = "allow"
 medium = "allow"
