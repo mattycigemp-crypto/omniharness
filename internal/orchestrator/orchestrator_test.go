@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -237,14 +238,25 @@ func TestVerificationFailureEscalatesToStrategyLevelRepair(t *testing.T) {
 	o, _, bus := newOrchestrator(t, fake, workspace)
 	o.deps.MaxTaskRepairs = 3
 
+	// The collector runs on its own goroutine, so the assertions below cannot
+	// simply read what it wrote: the read needs both mutual exclusion and a
+	// happens-before edge, or it is a data race and there is no guarantee the
+	// last event was even consumed yet. Unsubscribing closes the channel, which
+	// ends the loop; waiting on done is the edge.
+	var mu sync.Mutex
 	var lastStrategy string
-	ch, cancel := bus.SubscribeTo(128, event.StrategySelected)
+	ch, rawCancel := bus.SubscribeTo(128, event.StrategySelected)
+	cancel := sync.OnceFunc(rawCancel)
 	defer cancel()
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		for e := range ch {
 			var d event.StrategySelectedData
 			if err := json.Unmarshal(e.Data, &d); err == nil && d.Strategy != "" {
+				mu.Lock()
 				lastStrategy = d.Strategy
+				mu.Unlock()
 			}
 		}
 	}()
@@ -262,17 +274,26 @@ func TestVerificationFailureEscalatesToStrategyLevelRepair(t *testing.T) {
 	if tsk.Repairs < 1 {
 		t.Fatalf("expected at least one repair cycle, got %d", tsk.Repairs)
 	}
+
+	// Stop the subscription and wait for the collector to drain, so every
+	// event published during the run has been seen before anything is read.
+	cancel()
+	<-done
+	mu.Lock()
+	observed := lastStrategy
+	mu.Unlock()
+
 	// Strategy-level repair: the final execution strategy must differ from
 	// the original profile choice (a pure retry would keep it identical).
 	// "direct" is the profile choice for a low-complexity prompt; the
 	// structural repair escalates it to "sequential".
-	if lastStrategy == "direct" {
+	if observed == "direct" {
 		t.Fatalf("strategy never changed during repair (stayed direct); repair was not structural")
 	}
-	if lastStrategy == "" {
+	if observed == "" {
 		t.Fatal("no strategy observed")
 	}
-	t.Logf("strategy escalated to %q over %d repairs", lastStrategy, tsk.Repairs)
+	t.Logf("strategy escalated to %q over %d repairs", observed, tsk.Repairs)
 }
 
 func TestModelFailureTriggersStepRepair(t *testing.T) {
