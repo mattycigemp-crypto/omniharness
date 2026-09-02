@@ -42,6 +42,7 @@ function makeEngine(): MastraEngine {
     },
     tools: {},
     skills: [],
+    mcpTools: [],
     state: {
       taskStatus: 'idle',
       prompt: '',
