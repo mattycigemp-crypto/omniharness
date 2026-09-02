@@ -89,13 +89,26 @@ func newDoctorCmd() *cobra.Command {
 				return err
 			}
 			results := []diagResult{}
+			record := func(name, level, detail string) {
+				results = append(results, diagResult{Name: name, OK: level != "FAIL", Level: level, Detail: detail})
+				fmt.Printf("%-5s %-28s %s\n", level, name, detail)
+			}
 			check := func(name string, ok bool, detail string) {
-				results = append(results, diagResult{Name: name, OK: ok, Detail: detail})
-				mark := "ok"
+				level := "ok"
 				if !ok {
-					mark = "FAIL"
+					level = "FAIL"
 				}
-				fmt.Printf("%-5s %-28s %s\n", mark, name, detail)
+				record(name, level, detail)
+			}
+			// warn reports something worth knowing that is not a fault. It
+			// does not count against the exit code, so a clean install of a
+			// prebuilt binary still exits 0.
+			warn := func(name string, ok bool, okDetail, warnDetail string) {
+				if ok {
+					record(name, "ok", okDetail)
+					return
+				}
+				record(name, "warn", warnDetail)
 			}
 
 			check("config", err == nil, "default config valid")
@@ -114,18 +127,19 @@ func newDoctorCmd() *cobra.Command {
 				}
 			}
 
-			// This binary is always built from source, so Go is a real
-			// requirement for updating it.
-			if _, err := exec.LookPath("go"); err == nil {
-				check("go toolchain", true, "found")
-			} else {
-				check("go toolchain", false, "not on PATH (needed to rebuild from source)")
-			}
-			if _, err := exec.LookPath("git"); err == nil {
-				check("git", true, "found")
-			} else {
-				check("git", false, "not on PATH")
-			}
+			// Releases ship prebuilt binaries, so Go is not a requirement for
+			// running or updating one — only for building from a checkout.
+			// Reporting its absence as a failure told everyone who installed
+			// the normal way that their install was broken.
+			_, goErr := exec.LookPath("go")
+			warn("go toolchain", goErr == nil, "found",
+				"not on PATH (only needed to build from a checkout)")
+
+			// git is different: the git tool and the diff-check evaluator
+			// shell out to it, so without it real work fails.
+			_, gitErr := exec.LookPath("git")
+			warn("git", gitErr == nil, "found",
+				"not on PATH (the git tool and diff verification need it)")
 
 			rt, err := newRuntime(cmd.Context())
 			if err != nil {
@@ -169,13 +183,23 @@ func newDoctorCmd() *cobra.Command {
 
 			check("version", true, version.String())
 
-			failures := 0
+			failures, warnings := 0, 0
 			for _, r := range results {
-				if !r.OK {
+				switch r.Level {
+				case "FAIL":
 					failures++
+				case "warn":
+					warnings++
 				}
 			}
-			fmt.Printf("\n%d of %d checks passed\n", len(results)-failures, len(results))
+			// Warnings are named in the summary rather than folded into the
+			// pass count, so making them non-fatal does not make them
+			// invisible.
+			fmt.Printf("\n%d of %d checks passed", len(results)-failures-warnings, len(results))
+			if warnings > 0 {
+				fmt.Printf(", %s", count(warnings, "warning"))
+			}
+			fmt.Println()
 			if jsonOut {
 				b, _ := jsonMarshalIndent(results)
 				fmt.Println(string(b))
@@ -191,8 +215,11 @@ func newDoctorCmd() *cobra.Command {
 }
 
 type diagResult struct {
-	Name   string `json:"name"`
+	Name string `json:"name"`
+	// OK stays false only for a real fault, so existing consumers keep
+	// working; Level distinguishes a warning from a pass.
 	OK     bool   `json:"ok"`
+	Level  string `json:"level"` // ok | warn | FAIL
 	Detail string `json:"detail"`
 }
 
