@@ -24,6 +24,10 @@ on:
       - "landing/**"
       - ".github/**"
       - "npm/test/**"
+      # Go test files are excluded from the build the same way npm/test is:
+      # nothing in a _test.go file reaches a shipped binary. Without this a
+      # test-only commit cut a version that installed identical code.
+      - "**_test.go"
       - ".gitignore"
       - ".gitattributes"
       - "LICENSE"
