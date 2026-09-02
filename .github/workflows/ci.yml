@@ -71,3 +71,45 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+
+  # macOS and Windows. The two jobs above run on ubuntu only, so until this
+  # existed the darwin binaries shipped in every release had never been
+  # executed by anyone, and Windows was covered only by whatever a developer
+  # happened to run locally. The platform-specific surface here is real:
+  # path handling, symlink resolution, process termination and file locking
+  # all differ, and this harness touches all four.
+  #
+  # Deliberately a separate job rather than a matrix over the `go` job above:
+  # that job's name is a required status check on main, and turning it into a
+  # matrix would rename it to "go (ubuntu-latest)" and silently drop the gate.
+  #
+  # No -race here — the ubuntu job already runs the detector, and repeating it
+  # on a 10x-priced macOS runner buys nothing.
+  platforms:
+    name: platforms
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.27"
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: npm/package-lock.json
+      - run: go build ./...
+      - run: go test ./...
+      - run: npm ci
+        working-directory: npm
+      - run: npm test
+        working-directory: npm
