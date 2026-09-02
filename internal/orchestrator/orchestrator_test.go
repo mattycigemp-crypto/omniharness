@@ -554,3 +554,64 @@ func TestNoBudgetRunsFreely(t *testing.T) {
 		t.Fatalf("status = %s (%s)", tsk.Status, tsk.Error)
 	}
 }
+
+// A prompt containing "verify" or "make sure it works" sets
+// verification=REQUIRED. If no evaluator matches the profile, nothing runs and
+// the task still completes — a missing evaluator is not evidence of a broken
+// result. The risk is that "completed" then reads as "verified", so the run
+// has to say plainly that nothing checked it.
+func TestRequiredVerificationWithNoEvaluatorIsRecorded(t *testing.T) {
+	dir := t.TempDir()
+	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "looked it over"})
+	o, store, bus := newOrchestrator(t, fake, dir)
+
+	ch, cancel := bus.Subscribe(256)
+	defer cancel()
+
+	// A writing task: no evaluator covers the domain, and "check" is what
+	// makes verification REQUIRED.
+	spec := task.Spec{Prompt: "Draft a short welcome note for new starters and check the tone is right.", CWD: dir}
+	ctx, c2 := context.WithTimeout(context.Background(), 30*time.Second)
+	defer c2()
+	tsk, err := o.Run(ctx, "s1", spec, "")
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if tsk.Profile.Verification != task.VerificationRequired {
+		t.Fatalf("verification = %q, want REQUIRED; the prompt says verify", tsk.Profile.Verification)
+	}
+	if len(o.deps.Evaluators.ForTask(tsk.Profile)) != 0 {
+		t.Fatalf("this case needs a profile no evaluator matches, got domain %q", tsk.Profile.Domain)
+	}
+	// The task completes: a missing evaluator is not evidence of a broken
+	// result. The point is that it must not complete silently.
+	if tsk.Status != task.StatusCompleted {
+		t.Fatalf("status = %q, want completed", tsk.Status)
+	}
+
+	rows, err := store.EvaluationsForTask(tsk.ID)
+	if err != nil {
+		t.Fatalf("read evaluations: %v", err)
+	}
+	var recorded bool
+	for _, row := range rows {
+		if row.Outcome == string(evaluate.NeedsReview) && strings.Contains(row.Detail, "no evaluator matched") {
+			recorded = true
+		}
+	}
+	if !recorded {
+		t.Errorf("a required verification that never ran left no row to audit: %+v", rows)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case e := <-ch:
+			if e.Type == event.EvaluationComplete && strings.Contains(string(e.Data), "no evaluator matched") {
+				return
+			}
+		case <-deadline:
+			t.Fatal("no event said the required verification never ran")
+		}
+	}
+}
