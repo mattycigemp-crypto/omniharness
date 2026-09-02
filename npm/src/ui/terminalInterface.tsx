@@ -9,6 +9,7 @@ import { deleteAt, deleteBefore, insertAt, layoutEditor, lineEndAt, lineStartAt,
 import { renderMarkdown, type MarkdownSegment } from './markdown.js';
 import { looksLikeDiff, diffSegments } from './diff.js';
 import { palette, type Palette } from './palette.js';
+import { capabilityLine, recentRows, shortenPath, twoColumn, type RecentSession } from './home.js';
 import { contextMeter, meterBar } from './modelWindows.js';
 import { BEL, SYNC_QUERY, isSyncOutputReply, osc9Notify, osc52Copy, shouldNudgeOnFinish, wrapSynchronizedOutput } from './termcaps.js';
 import { KITTY_POP, KITTY_PUSH, KITTY_QUERY, isEncodedKey, isKittyQueryResponse, parseRawKey, type KeyAction } from './keys.js';
@@ -202,17 +203,94 @@ function TranscriptEntry({ line, width, fallbackModel }: { line: Line; width: nu
 }
 
 /** Shown until the first prompt: what the harness is pointed at, and how to drive it. */
-function Hero({ width, endpoint, model, mode, perm }: { width: number; endpoint: string; model: string; mode: AgentMode; perm: PermissionMode }): React.ReactElement {
-  return <Box flexDirection="column" marginBottom={1} width={Math.min(width, 76)}>
+export interface HeroProps {
+  width: number;
+  endpoint: string;
+  model: string;
+  mode: AgentMode;
+  perm: PermissionMode;
+  workspace: string;
+  sessions: readonly RecentSession[];
+  skills: number;
+  plugins: number;
+  mcpTools: number;
+}
+
+/**
+ * Width of the dim label column on the home screen. The value gets whatever is
+ * left, and every caller has to subtract this: a value sized to the whole box
+ * wraps onto a second line and the block stops being a fixed height.
+ */
+const LABEL_WIDTH = 10;
+
+/** One labelled line: a dim fixed-width label, then the value. */
+function Field({ label, children }: { label: string; children: React.ReactNode }): React.ReactElement {
+  return <Text><Text dimColor>{label.padEnd(LABEL_WIDTH)}</Text>{children}</Text>;
+}
+
+/**
+ * The home screen, shown while the transcript is empty.
+ *
+ * Two columns when the terminal is wide enough — what this session is on the
+ * left, what you can pick up and what you can press on the right — stacking
+ * below that rather than squeezing. Everything on it is read from the running
+ * session: there is no placeholder copy and no invented "what's new" feed,
+ * because a home screen that shows things which are not true is worse than a
+ * plain one.
+ */
+export function Hero(props: HeroProps): React.ReactElement {
+  const { width, endpoint, model, mode, perm, workspace, sessions, skills, plugins, mcpTools } = props;
+  const wide = twoColumn(width);
+  const outer = Math.min(width - 2, 84);
+  const column = wide ? Math.floor((outer - 3) / 2) : outer;
+  const inner = Math.max(12, column - 4);
+
+  // Values sit to the right of the label, so that is the room they actually get.
+  const value = Math.max(8, inner - LABEL_WIDTH);
+  const capability = capabilityLine(skills, plugins, mcpTools);
+  const recent = recentRows(sessions, 4, Math.max(8, inner - 9));
+
+  const session = <Box flexDirection="column" borderStyle="round" borderColor={PALETTE.accent} paddingX={1} width={column}>
     <Text bold color={PALETTE.accent}>omniharness {ownVersion()}</Text>
-    <Text dimColor>the OmniRoute-native agent harness</Text>
     <Box marginTop={1} flexDirection="column">
-      <Text><Text dimColor>gateway  </Text>{endpoint}</Text>
-      <Text><Text dimColor>model    </Text>{model}</Text>
-      <Text><Text dimColor>mode     </Text><Text color={MODE_ACCENT[mode]}>{mode}</Text><Text dimColor>  ·  Ctrl+E cycles plan · build · research · crazy</Text></Text>
-      <Text><Text dimColor>perms    </Text><Text color={mode === 'crazy' ? PALETTE.error : PERM_COLOR(perm)}>{mode === 'crazy' ? 'bypass' : PERM_LABEL[perm]}</Text><Text dimColor>  ·  Shift+Tab cycles manual · accept edits · bypass</Text></Text>
+      <Field label="workspace">{shortenPath(workspace, value)}</Field>
+      <Field label="gateway">{shortenPath(endpoint, value)}</Field>
+      <Field label="model">{clip(model, value)}</Field>
+      <Field label="mode"><Text color={MODE_ACCENT[mode]}>{mode}</Text></Field>
+      <Field label="perms">
+        <Text color={mode === 'crazy' ? PALETTE.error : PERM_COLOR(perm)}>{mode === 'crazy' ? 'bypass' : PERM_LABEL[perm]}</Text>
+      </Field>
+      {capability !== '' && <Field label="loaded">{clip(capability, value)}</Field>}
     </Box>
-    <Box marginTop={1}><Text dimColor>describe the work and press enter · /help for commands</Text></Box>
+  </Box>;
+
+  const aside = <Box flexDirection="column" width={column} marginLeft={wide ? 1 : 0} marginTop={wide ? 0 : 1}>
+    {recent.length > 0 && <Box flexDirection="column" borderStyle="round" borderColor={PALETTE.muted} paddingX={1} marginBottom={1}>
+      <Text bold dimColor>recent</Text>
+      {recent.map((row) => <Text key={row.name}>
+        <Text dimColor>{row.age.padEnd(8)}</Text>{row.name}
+      </Text>)}
+      <Text dimColor>/sessions for all</Text>
+    </Box>}
+    <Box flexDirection="column" borderStyle="round" borderColor={PALETTE.muted} paddingX={1}>
+      <Text bold dimColor>keys</Text>
+      {/* Kept short enough to sit on one line in the narrow column: a wrapped
+          key hint is harder to scan than no hint. */}
+      <Text><Text color={PALETTE.accent}>{'Ctrl+E'.padEnd(LABEL_WIDTH)}</Text><Text dimColor>cycle mode</Text></Text>
+      <Text><Text color={PALETTE.accent}>{'Shift+Tab'.padEnd(LABEL_WIDTH)}</Text><Text dimColor>cycle perms</Text></Text>
+      <Text><Text color={PALETTE.accent}>{'Ctrl+O'.padEnd(LABEL_WIDTH)}</Text><Text dimColor>pick a model</Text></Text>
+      <Text dimColor>/help for the rest</Text>
+    </Box>
+  </Box>;
+
+  return <Box flexDirection="column" marginBottom={1} width={outer}>
+    {/* flex-start so the shorter column does not stretch to the taller one
+        and leave a tall empty frame. */}
+    <Box flexDirection={wide ? 'row' : 'column'} alignItems="flex-start">
+      {session}
+      {aside}
+    </Box>
+    <Box marginTop={1}><Text dimColor>describe the work and press enter</Text></Box>
   </Box>;
 }
 
@@ -256,6 +334,9 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const [now, setNow] = useState(() => Date.now());
   const queuedRef = useRef<{ prompt: string; attachSpec?: string } | null>(null);
   const [queued, setQueued] = useState<string>();
+  // Recent snapshots for the home screen. Read once on mount and left
+  // alone: the home screen is only on screen before the first turn.
+  const [recentSessions, setRecentSessions] = useState<readonly RecentSession[]>([]);
   const [layoutDebug, setLayoutDebug] = useState(false);
   const syncRestoreRef = useRef<(() => void) | null>(null);
 
@@ -267,6 +348,9 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     void loadPromptHistory().then((history) => {
       if (alive && promptHistoryRef.current.length === 0) syncPromptHistory(history);
     }).catch(() => { /* history is best-effort */ });
+    void listSessions(engine.state.workspace.root).then((found) => {
+      if (alive) setRecentSessions(found);
+    }).catch(() => { /* no snapshots is the common case, not a failure */ });
     return () => { alive = false; };
   }, []);
 
@@ -773,7 +857,18 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     </Static>
 
     <Box flexDirection="column">
-      {lines.length === 0 && !busy && <Hero width={width} endpoint={engine.client.endpoint ?? 'omniroute'} model={engine.state.activeModel} mode={mode} perm={permMode} />}
+      {lines.length === 0 && !busy && <Hero
+        width={width}
+        endpoint={engine.client.endpoint ?? 'omniroute'}
+        model={engine.state.activeModel}
+        mode={mode}
+        perm={permMode}
+        workspace={engine.state.workspace.root}
+        sessions={recentSessions}
+        skills={engine.skills.length}
+        plugins={new Set(engine.skills.map((skill) => skill.source).filter((source) => source !== undefined)).size}
+        mcpTools={engine.mcpTools.length}
+      />}
 
       {liveThink !== '' && <Box flexDirection="column" marginTop={1}>
         <Text bold color={PALETTE.warn}>· thinking</Text>

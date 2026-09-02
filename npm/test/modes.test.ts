@@ -165,7 +165,7 @@ const strip = (s: string): string => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').re
 function fakeEngine(mode: AgentMode, onRunSwarm: () => void): MastraEngine {
   return {
     client: { listCombos: async () => [], endpoint: 'omniroute', snapshotMetrics: () => ({ compression: { inputTokens: 0, compressedTokens: 0, ratio: 1, strategy: 'none', updatedAt: '' }, fallback: { attempts: 0 }, requestCount: 0 }) },
-    skills: [], tools: {},
+    skills: [], mcpTools: [], tools: {},
     state: {
       taskStatus: 'idle', prompt: '', mode, permissionMode: 'ask', activeModel: 'test-model',
       workspace: { root: '', indexedAt: null, files: [], contextLocked: false },
