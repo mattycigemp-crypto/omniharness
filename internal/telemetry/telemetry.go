@@ -3,7 +3,6 @@
 package telemetry
 
 import (
-	"database/sql"
 	"time"
 
 	"omniharness/internal/session"
@@ -124,7 +123,10 @@ func ByModel(store *session.Store) ([]ModelStats, error) {
 	rows, err := store.DB().Query(`
 		SELECT model, COUNT(*), COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0),
 		       COALESCE(SUM(tokens_in),0), COALESCE(SUM(tokens_out),0),
-		       COALESCE(SUM(cost_usd),0), COALESCE(AVG(latency_ms),0)
+		       COALESCE(SUM(cost_usd),0),
+		       -- AVG yields a float, and scanning that into AvgMS fails outright
+		       -- unless it happens to be whole. Truncate in SQL instead.
+		       CAST(COALESCE(AVG(latency_ms),0) AS INTEGER)
 		FROM model_calls GROUP BY model ORDER BY 6 DESC`)
 	if err != nil {
 		return nil, err
@@ -170,5 +172,3 @@ func ByTool(store *session.Store) ([]ToolStats, error) {
 	}
 	return out, rows.Err()
 }
-
-var _ = sql.ErrNoRows
