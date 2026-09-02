@@ -46,7 +46,12 @@ jobs:
             exit 1
           fi
       - run: go vet ./...
-      - run: go test ./...
+      # -race, not a plain run. This harness is concurrent by design — parallel
+      # agents, a fan-out event bus, a shared budget tracker, a serialised
+      # SQLite writer — and the detector is the only thing that finds a data
+      # race reliably. It needs cgo, which rules it out on a Windows dev box
+      # without gcc, so CI is where it has to run.
+      - run: go test -race ./...
 
   npm:
     name: npm
