@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -1068,17 +1069,34 @@ type approvalApprover struct {
 	model *Model
 }
 
-func (a *approvalApprover) RequestApproval(_ context.Context, r policy.Request, reason string) (bool, error) {
+// approvalTimeout bounds how long a prompt waits for an answer. Reaching it
+// is a denial, not a grant.
+const approvalTimeout = 5 * time.Minute
+
+func (a *approvalApprover) RequestApproval(ctx context.Context, r policy.Request, reason string) (bool, error) {
 	req := &approvalReq{Tool: r.Tool, Risk: string(r.Risk), Reason: reason, Reply: make(chan bool, 1)}
 	prog := a.model.program
 	if prog == nil {
+		// Nobody to ask — headless, or before the program starts. The answer
+		// is no.
 		return false, nil
 	}
 	prog.Send(approvalMsg{Req: req})
+	return awaitApproval(ctx, req.Reply, approvalTimeout)
+}
+
+// awaitApproval blocks until the human answers, the run is cancelled, or the
+// wait times out. Only an explicit grant is a grant.
+//
+// The cancellation case matters: this used to ignore the context, so ctrl-c
+// with a prompt open appeared to hang for the full five minutes.
+func awaitApproval(ctx context.Context, reply <-chan bool, timeout time.Duration) (bool, error) {
 	select {
-	case grant := <-req.Reply:
+	case grant := <-reply:
 		return grant, nil
-	case <-time.After(5 * time.Minute):
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-time.After(timeout):
 		return false, nil
 	}
 }
@@ -1090,10 +1108,15 @@ func shortID(id string) string {
 	return id
 }
 
+// truncate shortens s to n characters for a single-line row. It counts runes,
+// not bytes: these strings are user prompts, model errors and the session
+// title that gets persisted, so slicing on a byte boundary would both cut a
+// non-ASCII title to a third the length of an English one and leave a mangled
+// rune behind.
 func truncate(s string, n int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) <= n {
+	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	return string([]rune(s)[:n]) + "…"
 }
