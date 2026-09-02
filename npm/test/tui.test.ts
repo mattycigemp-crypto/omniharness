@@ -4,6 +4,7 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { test } from 'node:test';
 import { asStdin, asStdout } from './streams.js';
+import { STATUS_WIDTH } from '../src/ui/toolrow.js';
 import { PassThrough, Writable } from 'node:stream';
 import React from 'react';
 import { render } from 'ink';
@@ -261,7 +262,11 @@ test('current tool shows in the busy line during a run', async () => {
     await sleep(20);
   }
   assert.match(text, /reading files/); // statusline phase label follows the active tool
-  assert.match(text, /\.\. read/); // live tool card
+  // The status marker is padded to a fixed column so descriptions line up
+  // down the page. Derive the padding from the constant rather than writing
+  // the spaces out: hard-coding them broke this twice while the column width
+  // was being settled, which says nothing about whether the UI is right.
+  assert.match(text, new RegExp(`${'\.\.'}${' '.repeat(STATUS_WIDTH - 2)}read`)); // live tool card
   instance.unmount();
 });
 
