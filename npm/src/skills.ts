@@ -9,8 +9,26 @@ export interface SkillParam {
 export interface Skill {
   name: string;
   description: string;
+  /** The shell command to run. Empty for a prompt skill. */
   command: string;
   parameters: readonly SkillParam[];
+  /**
+   * How invoking the skill does its work. A `shell` skill runs `command`; a
+   * `prompt` skill puts `prompt` in front of the model as instructions.
+   * Absent means `shell`, so every OMNIHARNESS.md skill is unaffected.
+   */
+  kind?: 'shell' | 'prompt';
+  /** The instruction body, for a prompt skill. */
+  prompt?: string;
+  /** The plugin it came from, if any. Display only. */
+  source?: string;
+  /** Tool restrictions declared by a plugin command, recorded but not yet enforced. */
+  allowedTools?: readonly string[];
+}
+
+/** Whether a skill runs a command or supplies instructions. */
+export function skillKind(skill: Skill): 'shell' | 'prompt' {
+  return skill.kind ?? 'shell';
 }
 
 /**
