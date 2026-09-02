@@ -5,6 +5,8 @@ package benchmark
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -55,7 +57,7 @@ func BuiltinCases() []Case {
 
 // RunOptions configure a benchmark run.
 type RunOptions struct {
-	Models     []string // provider/model refs to run (empty = config default)
+	Models     []string // provider/model refs to run; at least one is required
 	Cases      []string // case IDs (empty = all)
 	Iterations int
 	Workspace  string // scratch dir for file-producing cases
@@ -134,25 +136,64 @@ type Runner struct {
 	SessionID string
 }
 
+// selectCases narrows cases to the requested ids and reports any id that
+// matched nothing. An empty ids list selects everything. The result follows
+// the declared order rather than the order of ids, so the same set of cases
+// always produces a comparable report.
+func selectCases(cases []Case, ids []string) (selected []Case, unknown []string) {
+	if len(ids) == 0 {
+		return cases, nil
+	}
+	known := map[string]bool{}
+	for _, c := range cases {
+		known[c.ID] = true
+	}
+	want := map[string]bool{}
+	for _, id := range ids {
+		if !known[id] {
+			unknown = append(unknown, id)
+			continue
+		}
+		want[id] = true
+	}
+	for _, c := range cases {
+		if want[c.ID] {
+			selected = append(selected, c)
+		}
+	}
+	return selected, unknown
+}
+
+func caseIDs(cases []Case) []string {
+	out := make([]string, len(cases))
+	for i, c := range cases {
+		out[i] = c.ID
+	}
+	return out
+}
+
 // Run executes all selected cases and models.
+//
+// An empty matrix is an error rather than an empty report: a benchmark that
+// measured nothing is not a benchmark that passed, and a script gating on the
+// exit code has no other way to tell the difference.
 func (r *Runner) Run(ctx context.Context, opts RunOptions, cases []Case) (*Report, error) {
 	if opts.Iterations <= 0 {
 		opts.Iterations = 1
 	}
-	selected := cases
-	if len(opts.Cases) > 0 {
-		want := map[string]bool{}
-		for _, id := range opts.Cases {
-			want[id] = true
-		}
-		selected = nil
-		for _, c := range cases {
-			if want[c.ID] {
-				selected = append(selected, c)
-			}
-		}
+	selected, unknown := selectCases(cases, opts.Cases)
+	if len(unknown) > 0 {
+		return nil, fmt.Errorf("unknown benchmark case(s) %s; available: %s",
+			strings.Join(unknown, ", "), strings.Join(caseIDs(cases), ", "))
+	}
+	if len(selected) == 0 {
+		return nil, fmt.Errorf("no benchmark cases selected; available: %s",
+			strings.Join(caseIDs(cases), ", "))
 	}
 	models := opts.Models
+	if len(models) == 0 {
+		return nil, errors.New("no models to benchmark: set RunOptions.Models")
+	}
 
 	report := &Report{StartedAt: time.Now().UTC()}
 	for _, c := range selected {
