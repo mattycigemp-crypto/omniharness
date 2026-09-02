@@ -142,8 +142,13 @@ func (e *Engine) Evaluate(ctx context.Context, r Request) (Decision, string, err
 	case "block":
 		return Block, fmt.Sprintf("risk class %q is blocked by policy", r.Risk), nil
 	case "ask":
+		// Critical is the one class that cannot be talked down to a prompt.
+		// Configuring it as "ask" does not make it promptable; it still
+		// blocks, whether or not an approver is connected. The old wording
+		// here blamed a missing approver, which read as a setup problem when
+		// it is a deliberate refusal.
 		if r.Risk == tools.RiskCritical {
-			return Block, "critical-risk tools always require explicit approval; none configured", nil
+			return Block, "critical-risk tools cannot be approved interactively; set an explicit policy for them", nil
 		}
 		return Ask, fmt.Sprintf("risk class %q requires approval", r.Risk), nil
 	default:

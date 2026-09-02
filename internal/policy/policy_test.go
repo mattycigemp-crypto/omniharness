@@ -2,6 +2,8 @@ package policy
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"omniharness/internal/tools"
@@ -194,5 +196,162 @@ func TestUnknownRiskClassRequiresApproval(t *testing.T) {
 	}
 	if d, _, _ := e.Evaluate(context.Background(), Request{Tool: "write_file", Risk: tools.RiskHigh}); d != Ask {
 		t.Errorf("high risk = %v, want Ask", d)
+	}
+}
+
+// Setting critical = "ask" does not make critical tools promptable: they are
+// refused whether or not an approver is connected. This is deliberate and it
+// fails safe, but it means a config option reads as if it does something it
+// does not, so pin it rather than leave it to be rediscovered.
+func TestCriticalCannotBeDowngradedToAPrompt(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.RiskAction["critical"] = "ask"
+	cfg.ShellAllowed = true
+
+	asked := false
+	e := NewEngine(cfg, &fakeApprover{fn: func() bool { asked = true; return true }})
+
+	d, reason, err := e.Evaluate(context.Background(), Request{Tool: "shell", Risk: tools.RiskCritical})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d != Block {
+		t.Fatalf("critical with ask = %s, want block", d)
+	}
+	if strings.Contains(reason, "none configured") {
+		t.Errorf("reason %q blames a missing approver, but one is connected", reason)
+	}
+
+	got, err := e.EvaluateAndExecute(context.Background(), Request{Tool: "shell", Risk: tools.RiskCritical})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != Block {
+		t.Fatalf("EvaluateAndExecute = %s, want block", got)
+	}
+	if asked {
+		t.Error("the approver must never be consulted for a critical tool")
+	}
+}
+
+// An approver that fails — a closed TUI, a cancelled context — must block.
+// Treating the error as anything else would run the tool nobody approved.
+func TestApproverErrorBlocks(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.ShellAllowed = true
+	e := NewEngine(cfg, ApproverFunc(func(context.Context, Request, string) (bool, error) {
+		return true, errors.New("prompt surface is gone")
+	}))
+
+	d, err := e.EvaluateAndExecute(context.Background(), Request{Tool: "shell", Risk: tools.RiskHigh})
+	if err == nil {
+		t.Fatal("an approver error must be reported")
+	}
+	if d != Block {
+		t.Fatalf("decision = %s, want block; a granted-but-errored approval is not a grant", d)
+	}
+}
+
+// The agent loop calls EvaluateAndExecute for every tool, so a decision that
+// never needed a human must not reach the approver at all.
+func TestAllowAndBlockNeverConsultTheApprover(t *testing.T) {
+	cfg := defaultCfg()
+	consulted := 0
+	e := NewEngine(cfg, ApproverFunc(func(context.Context, Request, string) (bool, error) {
+		consulted++
+		return true, nil
+	}))
+
+	for _, tc := range []struct {
+		name string
+		req  Request
+		want Decision
+	}{
+		{"low risk", Request{Tool: "read_file", Risk: tools.RiskLow}, Allow},
+		{"shell off", Request{Tool: "shell", Risk: tools.RiskHigh}, Block},
+		{"no tool name", Request{Risk: tools.RiskLow}, Block},
+	} {
+		got, err := e.EvaluateAndExecute(context.Background(), tc.req)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s: decision = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+	if consulted != 0 {
+		t.Errorf("the approver was consulted %d times for decisions that needed no human", consulted)
+	}
+}
+
+func TestSetApproverReplacesTheGate(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.ShellAllowed = true
+	e := NewEngine(cfg, nil)
+
+	// Before an approver exists, an Ask is a block with an explanation
+	// rather than a silent pass.
+	if _, err := e.EvaluateAndExecute(context.Background(), Request{Tool: "shell", Risk: tools.RiskHigh}); err == nil {
+		t.Fatal("no approver must be an error, not an allow")
+	}
+
+	e.SetApprover(ApproverFunc(func(context.Context, Request, string) (bool, error) { return true, nil }))
+	d, err := e.EvaluateAndExecute(context.Background(), Request{Tool: "shell", Risk: tools.RiskHigh})
+	if err != nil || d != Allow {
+		t.Fatalf("after SetApprover: %s, %v; want allow", d, err)
+	}
+
+	// Replacing it again takes effect immediately: a TUI that closes must not
+	// leave its old approver answering.
+	e.SetApprover(ApproverFunc(func(context.Context, Request, string) (bool, error) { return false, nil }))
+	if d, err := e.EvaluateAndExecute(context.Background(), Request{Tool: "shell", Risk: tools.RiskHigh}); err != nil || d != Block {
+		t.Fatalf("after replacing the approver: %s, %v; want block", d, err)
+	}
+}
+
+func TestDecisionString(t *testing.T) {
+	// These strings are written to the session store and printed in the TUI.
+	for _, tc := range []struct {
+		d    Decision
+		want string
+	}{{Allow, "allow"}, {Ask, "ask"}, {Block, "block"}, {Decision(99), "unknown"}} {
+		if got := tc.d.String(); got != tc.want {
+			t.Errorf("Decision(%d).String() = %q, want %q", tc.d, got, tc.want)
+		}
+	}
+}
+
+// The reason is not decoration: it is what the human reads in the approval
+// prompt and what lands in the audit trail, so every refusal must say which
+// rule refused.
+func TestEveryRefusalExplainsItself(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.BlockedTools = []string{"delete_everything"}
+	cfg.WorkspaceRoot = "/work"
+	cfg.GitPushRequiresApproval = true
+	e := NewEngine(cfg, nil)
+
+	for _, tc := range []struct {
+		name string
+		req  Request
+		want string
+	}{
+		{"blocked tool", Request{Tool: "delete_everything", Risk: tools.RiskLow}, "blocked by policy"},
+		{"shell off", Request{Tool: "shell", Risk: tools.RiskHigh}, "shell_allowed"},
+		{"outside workspace", Request{Tool: "write_file", Risk: tools.RiskHigh, Input: map[string]any{"path": "/etc/passwd"}}, "outside the workspace root"},
+		{"git push", Request{Tool: "git", Risk: tools.RiskLow, Input: map[string]any{"args": []any{"push"}}}, "requires explicit approval"},
+		{"unknown risk", Request{Tool: "read_file", Risk: tools.Risk("spicy")}, "unrecognised risk class"},
+		{"no tool name", Request{Risk: tools.RiskLow}, "missing tool name"},
+	} {
+		d, reason, err := e.Evaluate(context.Background(), tc.req)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if d == Allow {
+			t.Errorf("%s: decision = allow, want a refusal or a prompt", tc.name)
+		}
+		if !strings.Contains(reason, tc.want) {
+			t.Errorf("%s: reason = %q, want it to mention %q", tc.name, reason, tc.want)
+		}
 	}
 }
