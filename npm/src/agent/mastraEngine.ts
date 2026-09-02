@@ -7,7 +7,8 @@ import { OmniRouteClient, type ChatTool, type CompressionInfo, type McpToolDescr
 import { saveActiveCombo } from '../config/settings.js';
 import type { AgentMode, ChatContentPart, ChatWireMessage, HarnessMessage, HarnessState, PermissionMode, PreviewServer, TodoAction, TodoItem, TodoSnapshot, ToolCallRequest, ToolCallResult } from '../types/index.js';
 import { createSystemTools, type SystemTools } from '../tools/systemTools.js';
-import { loadSkills, renderSkillCommand, skillSchema, type Skill } from '../skills.js';
+import { loadSkills, renderSkillCommand, skillKind, skillSchema, type Skill } from '../skills.js';
+import { loadPluginSkills, renderCommandBody } from '../plugins.js';
 import { chunkText, cosineSimilarity, type IndexedChunk } from '../search.js';
 import { loadSemanticIndex, saveSemanticIndex, type SemanticCacheEntry } from '../semanticStore.js';
 import { loadSession, saveSession, clearSession, type StoredSession } from '../sessionStore.js';
@@ -211,7 +212,14 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
   };
 
   const emit = (event: HarnessEvent): void => { for (const listener of listeners) listener(event); };
-  const skills = await loadSkills(config.workspaceRoot);
+  // OMNIHARNESS.md skills first: a workspace's own definition wins a name
+  // collision with a plugin's.
+  const ownSkills = await loadSkills(config.workspaceRoot);
+  const taken = new Set(ownSkills.map((skill) => skill.name));
+  const skills: Skill[] = [
+    ...ownSkills,
+    ...(await loadPluginSkills(config.workspaceRoot)).filter((skill) => !taken.has(skill.name)),
+  ];
 
   const systemTools: Record<string, RegisteredTool> = {
     read_file: {
@@ -314,9 +322,19 @@ export async function createMastraEngine(config: MastraEngineConfig): Promise<Ma
     }
   };
   for (const skill of skills) {
+    const prompt = skillKind(skill) === 'prompt';
     systemTools[skill.name] = {
-      name: skill.name, description: skill.description, highRisk: true, parameters: (skillSchema(skill) as { parameters: unknown }).parameters ?? { type: 'object', properties: {} },
+      name: skill.name,
+      description: skill.description,
+      // A prompt skill returns instructions. It runs nothing itself, so it
+      // does not need the shell and does not carry the shell's risk — the
+      // tools it then asks for are gated on their own terms.
+      highRisk: !prompt,
+      parameters: (skillSchema(skill) as { parameters: unknown }).parameters ?? { type: 'object', properties: {} },
       execute: async (input) => {
+        if (prompt) {
+          return renderCommandBody(skill.prompt ?? '', String(input.arguments ?? ''));
+        }
         if (!config.shellAllowed) throw new Error('shell execution is disabled; custom skills need shell access');
         const script = renderSkillCommand(skill.command, skill.parameters, input);
         return execSkill(script);

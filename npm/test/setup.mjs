@@ -21,3 +21,10 @@
 //
 // Reproduce the original failure with: CI=true npm test  (before this file).
 process.env.CI = 'false';
+
+// Plugin discovery reaches into ~/.claude/plugins by default, so on a machine
+// with plugins installed the engine loaded 61 extra skills and two suites that
+// count the agent's tools failed — on that machine only. Tests must not read
+// whatever happens to be installed on the box running them, so discovery is
+// off unless a test asks for it by passing explicit roots.
+process.env.OMNIHARNESS_PLUGIN_PATH = '';
