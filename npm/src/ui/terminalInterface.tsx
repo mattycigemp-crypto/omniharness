@@ -11,6 +11,8 @@ import { looksLikeDiff, diffSegments } from './diff.js';
 import { palette, type Palette } from './palette.js';
 import { capabilityLine, recentRows, shortenPath, twoColumn, type RecentSession } from './home.js';
 import { conversationWidth, overflowCount, sidebarMode, SIDEBAR_WIDTH, todoRows, usageRows, clip as clipRow, type UsageSummary } from './sidebar.js';
+import { planViewport } from './viewport.js';
+import { statusMarker, toolHead, type ToolStatus } from './toolrow.js';
 import { contextMeter, meterBar } from './modelWindows.js';
 import { BEL, SYNC_QUERY, isSyncOutputReply, osc9Notify, osc52Copy, shouldNudgeOnFinish, wrapSynchronizedOutput } from './termcaps.js';
 import { KITTY_POP, KITTY_PUSH, KITTY_QUERY, isEncodedKey, isKittyQueryResponse, parseRawKey, type KeyAction } from './keys.js';
@@ -117,8 +119,13 @@ const PERM_COLOR = (p: PermissionMode): string => (p === 'bypass' ? PALETTE.erro
  */
 const MAX_MEASURE = 100;
 
+/** Shown after an expanded tool head; the head reserves room for it. */
+const COLLAPSE_HINT = '   Ctrl+T collapse';
+
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 const widthOf = (stdout: NodeJS.WriteStream): number => Math.max(48, stdout.columns ?? 80);
+/** Terminal height, floored so the layout maths never goes negative. */
+const rowsOf = (stdout: NodeJS.WriteStream): number => Math.max(8, stdout.rows ?? 24);
 const clip = (text: string, width: number): string => text.length <= width ? text : `${text.slice(0, Math.max(0, width - 1))}…`;
 
 /** Word-wrap text to width, honoring existing newlines and hard-breaking long words. */
@@ -379,6 +386,12 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const { stdout } = useStdout();
   const { stdin } = useStdin();
   const [width, setWidth] = useState(() => widthOf(stdout));
+  // Height has to be state for the same reason width is. Maximising and
+  // then floating a window changes rows without necessarily changing
+  // columns, and setting width to the value it already had re-renders
+  // nothing — so the live region kept the height budget of the old
+  // terminal and overran the viewport.
+  const [rows, setRows] = useState(() => rowsOf(stdout));
   const [edit, setEdit] = useState({ value: '', cursor: 0 });
   const inputWidth = Math.max(16, Math.min(width, MAX_MEASURE) - 12);  // recomputed below once the split is known
   // Settled transcript. Rendered once each into <Static> — the terminal's own
@@ -438,7 +451,10 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   }, []);
 
   useEffect(() => {
-    const onResize = (): void => setWidth(widthOf(stdout));
+    const onResize = (): void => {
+      setWidth(widthOf(stdout));
+      setRows(rowsOf(stdout));
+    };
     stdout.on('resize', onResize);
     stdout.write(KITTY_PUSH);
     let kittyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -919,7 +935,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const gutter = Math.max(2, Math.floor((width - measure) / 2));
   const convoWidth = conversationWidth(measure, sideMode);
   const contentWidth = Math.max(20, convoWidth - 6);
-  const terminalRows = stdout.rows ?? 24;
+  const terminalRows = rows;
 
   const metrics = engine.client.snapshotMetrics();
   const meter = contextMeter(metrics.compression.inputTokens, engine.state.activeModel, metrics.fallback.activeProvider);
@@ -939,7 +955,17 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
 
   // Cap the streaming region so a long think/answer can't crowd out the chrome;
   // the complete text lands in <Static> once the event fires.
-  const liveBudget = Math.max(3, terminalRows - 14 - Math.min(6, taskQueue.length) - Math.min(4, agents.length) - editorLayout.lines.length);
+  // What fits. The old budget subtracted a fixed 14 rows of guesswork and
+  // never bounded the sections it was competing with, so a short terminal
+  // still produced a frame taller than itself.
+  const view = planViewport({
+    rows: terminalRows,
+    editorLines: editorLayout.lines.length,
+    toolCards: toolCards.length,
+    todos: taskQueue.length,
+    wantHero: lines.length === 0 && !busy,
+  });
+  const liveBudget = view.liveLines;
   const liveThinkView = liveThinkLines.slice(-Math.max(2, Math.floor(liveBudget / 2)));
   const liveAnswerView = liveAnswerLines.slice(-liveBudget);
 
@@ -975,7 +1001,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
 
     <Box flexDirection="row" alignItems="flex-start">
     <Box flexDirection="column" width={sideMode === 'split' ? convoWidth : undefined} flexGrow={sideMode === 'split' ? 0 : 1}>
-      {lines.length === 0 && !busy && <Hero
+      {view.showHero && <Hero
         width={contentWidth + 2}
         endpoint={engine.client.endpoint ?? 'omniroute'}
         model={engine.state.activeModel}
@@ -997,15 +1023,39 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
         {liveAnswerView.map((segments, index) => <SegmentText key={index} segments={segments} role="assistant" />)}
       </Box>}
 
-      {toolCards.slice(-5).map((card) => {
+      {(view.toolCards > 0 ? toolCards.slice(-view.toolCards) : []).map((card) => {
         const expanded = expandedTool === card.id;
-        const dot = card.status === 'running' ? <Text color={PALETTE.warn}>..</Text> : card.status === 'error' ? <Text color={PALETTE.error}>FAIL</Text> : <Text color={PALETTE.success}>ok</Text>;
-        const head = card.name === 'run_command'
-          ? `$ ${clip(card.target || '…', Math.max(10, contentWidth - 20))}`
-          : `${toolVerb(card.name)}${card.target ? ` ${clip(card.target, Math.max(10, contentWidth - 24))}` : ''}`;
+        const status: ToolStatus = card.status === 'running' ? 'running' : card.status === 'error' ? 'error' : 'done';
+        const statusColor = status === 'running' ? PALETTE.warn : status === 'error' ? PALETTE.error : PALETTE.success;
+        const head = toolHead(
+          card.name === 'run_command' ? '$' : toolVerb(card.name),
+          card.name === 'run_command' ? (card.target || '…') : card.target,
+          contentWidth,
+          expanded ? COLLAPSE_HINT.length : 0,
+        );
         return <Box key={card.id} flexDirection="column">
-          <Text dimColor>{dot} {head}{expanded ? '   Ctrl+T collapse' : ''}</Text>
-          {expanded && renderToolBody(card, contentWidth, PALETTE)}
+          {/* Fixed-width status column, so the descriptions line up down the
+              page however the calls turned out. */}
+          <Text>
+            <Text color={statusColor}>{statusMarker(status)}</Text>
+            <Text dimColor>{head}</Text>
+            {expanded ? <Text dimColor>{COLLAPSE_HINT}</Text> : null}
+          </Text>
+          {/* Output hangs off a rule down its left edge rather than sitting in
+              a box of its own: a full border around every result turns the
+              transcript into a stack of crates. */}
+          {expanded && <Box
+            borderStyle="round"
+            borderColor={statusColor}
+            borderTop={false}
+            borderBottom={false}
+            borderRight={false}
+            paddingLeft={1}
+            marginLeft={1}
+            flexDirection="column"
+          >
+            {renderToolBody(card, Math.max(10, contentWidth - 4), PALETTE)}
+          </Box>}
         </Box>;
       })}
 
