@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -48,13 +49,25 @@ machine-readable results. Use --models to pin specific provider/model refs.`,
 				models = []string{cfg.Models.Default}
 			}
 
+			// A mistyped case id used to select nothing, print an empty table
+			// and exit 0 — a benchmark that ran no cases reported success, and
+			// a script gating on it carried on regardless.
+			selected := pickCases(cases)
+			if unknown := unknownCases(cases); len(unknown) > 0 {
+				return fmt.Errorf("unknown benchmark case(s) %s\navailable: %s",
+					strings.Join(unknown, ", "), strings.Join(caseIDs(), ", "))
+			}
+			if len(selected) == 0 {
+				return fmt.Errorf("no benchmark cases selected\navailable: %s", strings.Join(caseIDs(), ", "))
+			}
+
 			runner := &benchmark.Runner{RT: rt, SessionID: sessionID}
 			ctx, cancel := context.WithCancel(cmd.Context())
 			defer cancel()
 			installInterrupt(cancel)
 
 			fmt.Fprintf(os.Stderr, "benchmark: %d case(s) × %d model(s) × %d iteration(s)\n",
-				len(pickCases(cases)), len(models), iterationsOrDefault(iterations))
+				len(selected), len(models), iterationsOrDefault(iterations))
 
 			report, err := runner.Run(ctx, benchmark.RunOptions{
 				Models:     models,
@@ -89,6 +102,32 @@ func iterationsOrDefault(n int) int {
 		return 1
 	}
 	return n
+}
+
+// caseIDs lists every built-in case id, for error messages that tell the user
+// what they could have typed instead.
+func caseIDs() []string {
+	cases := benchmark.BuiltinCases()
+	ids := make([]string, 0, len(cases))
+	for _, c := range cases {
+		ids = append(ids, c.ID)
+	}
+	return ids
+}
+
+// unknownCases returns the requested ids that match no built-in case.
+func unknownCases(ids []string) []string {
+	known := map[string]bool{}
+	for _, c := range benchmark.BuiltinCases() {
+		known[c.ID] = true
+	}
+	var unknown []string
+	for _, id := range ids {
+		if id != "" && !known[id] {
+			unknown = append(unknown, id)
+		}
+	}
+	return unknown
 }
 
 func pickCases(ids []string) []benchmark.Case {
