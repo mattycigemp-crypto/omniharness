@@ -60,3 +60,38 @@ test('a symlink inside the workspace does not let the tools read or write outsid
   assert.equal((read as { content: string }).content, 'inside');
   await tools.writeFile.execute({ path: path.join('sub', 'new.txt'), content: 'y' } as never);
 });
+
+// The mirror of a bug that reached the Go side: resolving the target through
+// symlinks but not the root compares two spellings of the same directory, and
+// every path in the workspace looks like an escape. On macOS this is the
+// normal case, not an edge one — /var is a symlink to /private/var, so every
+// temp-dir workspace is named through a symlink.
+test('a workspace root behind a symlink still allows work inside it', async (t) => {
+  const base = await mkdtemp(path.join(os.tmpdir(), 'omniharness-rootlink-'));
+  try {
+    const real = path.join(base, 'real');
+    await mkdir(path.join(real, 'sub'), { recursive: true });
+    try {
+      await symlink(real, path.join(base, 'link'), 'dir');
+    } catch (reason) {
+      t.skip(`symlinks unavailable: ${String(reason)}`);
+      return;
+    }
+    await writeFile(path.join(base, 'outside.txt'), 'secret');
+
+    // Name the workspace through the symlink, which is what a shell or a
+    // temp directory hands you.
+    const tools = createSystemTools(path.join(base, 'link'));
+
+    await tools.writeFile.execute({ path: 'sub/new.txt', content: 'hello' });
+    const read = await tools.readFile.execute({ path: 'sub/new.txt' });
+    assert.equal(read.content, 'hello', 'a file inside the workspace must be readable');
+
+    // Confinement still holds — the root being a symlink is not a way out.
+    await assert.rejects(() => tools.readFile.execute({ path: '../outside.txt' }));
+    await assert.rejects(() => tools.writeFile.execute({ path: '../escaped.txt', content: 'x' }));
+    await assert.rejects(() => stat(path.join(base, 'escaped.txt')));
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});

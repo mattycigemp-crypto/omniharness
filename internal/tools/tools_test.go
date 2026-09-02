@@ -335,3 +335,50 @@ func TestWriteThroughSymlinkedDirIsConfined(t *testing.T) {
 		t.Fatalf("a normal nested write must still work: %v", err)
 	}
 }
+
+// A workspace root that itself sits behind a symlink is the normal case on
+// macOS — /var is a symlink to /private/var, so every os.MkdirTemp workspace
+// is one — and it appears on Windows whenever a path holds an 8.3 short name.
+// Resolving the path but not the root compared two spellings of the same
+// directory and rejected every file operation in the workspace.
+func TestWorkspaceRootBehindASymlinkStillWorks(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(filepath.Join(real, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	// The workspace is named through the symlink, which is what a shell or a
+	// temp dir hands you.
+	n := NewNative(link)
+
+	if _, err := n.resolvePath(map[string]any{"path": "sub/new.txt"}); err != nil {
+		t.Errorf("a new file inside the workspace was rejected: %v", err)
+	}
+	if _, err := n.resolvePath(map[string]any{"path": "."}); err != nil {
+		t.Errorf("the workspace root itself was rejected: %v", err)
+	}
+	existing := filepath.Join(real, "sub", "here.txt")
+	if err := os.WriteFile(existing, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.resolvePath(map[string]any{"path": "sub/here.txt"}); err != nil {
+		t.Errorf("an existing file inside the workspace was rejected: %v", err)
+	}
+
+	// Confinement still holds: the fix must not have turned the check off.
+	outside := filepath.Join(base, "outside.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.resolvePath(map[string]any{"path": outside}); err == nil {
+		t.Error("a path outside the workspace must still be refused")
+	}
+	if _, err := n.resolvePath(map[string]any{"path": "../outside.txt"}); err == nil {
+		t.Error("traversal out of the workspace must still be refused")
+	}
+}
