@@ -248,7 +248,11 @@ endpoint that misbehaves.
   process (shell, git, process tools, evaluators, MCP servers) inherits the
   environment minus `OMNIROUTE_API_KEY` / `OMNIHARNESS_API_KEY` /
   `ROUTER_API_KEY`. MCP servers now also inherit PATH (previously they got an
-  empty environment).
+  empty environment). Third-party credentials (`GITHUB_TOKEN`,
+  `AWS_SECRET_ACCESS_KEY`, `NPM_TOKEN`) are inherited by default, because an
+  agent asked to open a PR or publish a package needs them; a deployment that
+  does not want that names them in `policy.secret_env` and they are stripped
+  too. The built-in list cannot be turned off from config.
 - **Tool confinement**: `resolvePath` now follows symlinks (`EvalSymlinks`)
   so a symlink inside the workspace cannot escape it; the git tool rejects
   `-C` / `--git-dir`.
