@@ -10,6 +10,7 @@ import { renderMarkdown, type MarkdownSegment } from './markdown.js';
 import { looksLikeDiff, diffSegments } from './diff.js';
 import { palette, type Palette } from './palette.js';
 import { capabilityLine, recentRows, shortenPath, twoColumn, type RecentSession } from './home.js';
+import { conversationWidth, overflowCount, sidebarMode, SIDEBAR_WIDTH, todoRows, usageRows, clip as clipRow, type UsageSummary } from './sidebar.js';
 import { contextMeter, meterBar } from './modelWindows.js';
 import { BEL, SYNC_QUERY, isSyncOutputReply, osc9Notify, osc52Copy, shouldNudgeOnFinish, wrapSynchronizedOutput } from './termcaps.js';
 import { KITTY_POP, KITTY_PUSH, KITTY_QUERY, isEncodedKey, isKittyQueryResponse, parseRawKey, type KeyAction } from './keys.js';
@@ -210,7 +211,79 @@ function TranscriptEntry({ line, width, fallbackModel }: { line: Line; width: nu
 }
 
 /** Shown until the first prompt: what the harness is pointed at, and how to drive it. */
-export interface HeroProps {
+export interface SidebarProps {
+  width: number;
+  model: string;
+  mode: AgentMode;
+  perm: PermissionMode;
+  workspace: string;
+  usage: UsageSummary;
+  agents: readonly AgentLane[];
+  todos: readonly TodoItem[];
+  skills: number;
+  plugins: number;
+}
+
+/**
+ * The session panel, shown beside the live region on Ctrl+B.
+ *
+ * It carries what the conversation column should not have to: what is
+ * running, what is queued, and what the turn has cost. The shape follows
+ * OpenCode's session sidebar (MIT); the implementation is ours, because Ink
+ * has neither a scrollbox nor absolute positioning, so it cannot scroll
+ * independently or overlay the conversation.
+ *
+ * Sections are absent rather than empty. A heading with nothing under it
+ * reads as something failing to load.
+ */
+function SidebarPanel(props: SidebarProps): React.ReactElement {
+  const { width, model, mode, perm, workspace, usage, agents, todos, skills, plugins } = props;
+  const inner = Math.max(10, width - 4);
+  // Two columns of slack, not one. At an exact fit Ink still wraps, and a
+  // wrapped value in a 34-column panel shows as a stray blank line under a
+  // bare label — measured, not reasoned about.
+  const value = Math.max(6, inner - LABEL_WIDTH - 2);
+  const usageLines = usageRows(usage);
+  const shownTodos = todoRows(todos, 6, inner - 2);
+  const moreTodos = overflowCount(todos.length, shownTodos.length);
+
+  return <Box flexDirection="column" width={width} borderStyle="round" borderColor={PALETTE.muted} paddingX={1}>
+    <Text bold dimColor>session</Text>
+    <Field label="model">{clip(model, value)}</Field>
+    <Field label="mode"><Text color={MODE_ACCENT[mode]}>{mode}</Text></Field>
+    <Field label="perms">
+      <Text color={mode === 'crazy' ? PALETTE.error : PERM_COLOR(perm)}>{mode === 'crazy' ? 'bypass' : PERM_LABEL[perm]}</Text>
+    </Field>
+    <Field label="cwd">{shortenPath(workspace, value)}</Field>
+    {skills > 0 && <Field label="skills">{clip(plugins > 0 ? `${skills} · ${plugins} plugins` : String(skills), value)}</Field>}
+
+    {usageLines.length > 0 && <Box flexDirection="column" marginTop={1}>
+      <Text bold dimColor>usage</Text>
+      {usageLines.map((row) => <Field key={row.label} label={row.label}>{clip(row.value, value)}</Field>)}
+    </Box>}
+
+    {agents.length > 0 && <Box flexDirection="column" marginTop={1}>
+      <Text bold dimColor>agents</Text>
+      {agents.slice(-6).map((lane, index) => <Text key={lane.id}>
+        <Text color={AGENT_COLORS[index % AGENT_COLORS.length]}>{lane.status === 'error' ? 'FAIL' : lane.status === 'done' ? 'ok  ' : '..  '}</Text>
+        <Text dimColor>{clipRow(lane.label, inner - 5)}</Text>
+      </Text>)}
+    </Box>}
+
+    {shownTodos.length > 0 && <Box flexDirection="column" marginTop={1}>
+      <Text bold dimColor>plan</Text>
+      {shownTodos.map((row) => <Text key={row.title}>
+        <Text color={row.active ? PALETTE.accent : PALETTE.muted}>{row.marker} </Text>
+        <Text dimColor={!row.active}>{row.title}</Text>
+      </Text>)}
+      {moreTodos > 0 && <Text dimColor>+{moreTodos} more</Text>}
+    </Box>}
+
+    <Box marginTop={1}><Text dimColor>Ctrl+B hides this</Text></Box>
+  </Box>;
+}
+
+interface HeroProps {
   width: number;
   endpoint: string;
   model: string;
@@ -307,7 +380,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const { stdin } = useStdin();
   const [width, setWidth] = useState(() => widthOf(stdout));
   const [edit, setEdit] = useState({ value: '', cursor: 0 });
-  const inputWidth = Math.max(16, Math.min(width, MAX_MEASURE) - 12);
+  const inputWidth = Math.max(16, Math.min(width, MAX_MEASURE) - 12);  // recomputed below once the split is known
   // Settled transcript. Rendered once each into <Static> — the terminal's own
   // scrollback is the history; there is no in-app viewport to scroll.
   const [lines, setLines] = useState<Line[]>(() => engine.state.messages.map(lineFromMessage));
@@ -344,6 +417,9 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   // Recent snapshots for the home screen. Read once on mount and left
   // alone: the home screen is only on screen before the first turn.
   const [recentSessions, setRecentSessions] = useState<readonly RecentSession[]>([]);
+  // Off by default: it is a second thing to read, and the conversation is
+  // the first. Ctrl+B brings it in.
+  const [sidebarWanted, setSidebarWanted] = useState(false);
   const [layoutDebug, setLayoutDebug] = useState(false);
   const syncRestoreRef = useRef<(() => void) | null>(null);
 
@@ -729,6 +805,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
       case 'shiftTab': cyclePerm(); return;
       case 'ctrlO': setPickerOpen(true); void loadPicker(); return;
       case 'ctrlE': cycleMode(); return;
+      case 'ctrlB': setSidebarWanted((on) => !on); return;
       case 'up':
         if (sessionsOpen) { setSessionsIndex((current) => clamp(current - 1, 0, Math.max(0, sessionsList.length - 1))); return; }
         if (pickerOpen) { setPickerIndex((current) => clamp(current - 1, 0, Math.max(0, pickerItems.length - 1))); return; }
@@ -765,6 +842,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     if (key.ctrl && value.toLowerCase() === 'm') { applyAction({ kind: 'ctrlM' }); return; }
     if (key.ctrl && value.toLowerCase() === 'o') { applyAction({ kind: 'ctrlO' }); return; }
     if (key.ctrl && value.toLowerCase() === 'e') { applyAction({ kind: 'ctrlE' }); return; }
+    if (key.ctrl && value.toLowerCase() === 'b') { applyAction({ kind: 'ctrlB' }); return; }
     if (pickerOpen) {
       if (key.escape) { applyAction({ kind: 'escape' }); return; }
       if (key.upArrow || value === 'k') { applyAction({ kind: 'up' }); return; }
@@ -834,9 +912,13 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   // input box and the text you are reading at opposite ends of the screen.
   // Hold the content to a readable measure and centre it instead; below that
   // measure the gutter collapses and nothing changes.
-  const measure = Math.min(width, MAX_MEASURE);
+  const sideMode = sidebarMode(width, sidebarWanted);
+  // With the panel beside it the conversation gets what is left, so the
+  // centred measure applies to the pair rather than to the text alone.
+  const measure = Math.min(width, sideMode === 'split' ? MAX_MEASURE + SIDEBAR_WIDTH + 1 : MAX_MEASURE);
   const gutter = Math.max(2, Math.floor((width - measure) / 2));
-  const contentWidth = Math.max(20, measure - 6);
+  const convoWidth = conversationWidth(measure, sideMode);
+  const contentWidth = Math.max(20, convoWidth - 6);
   const terminalRows = stdout.rows ?? 24;
 
   const metrics = engine.client.snapshotMetrics();
@@ -863,13 +945,36 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
 
   const doneAgents = agents.filter((lane) => lane.status === 'done').length;
 
+  const panel = <SidebarPanel
+    width={SIDEBAR_WIDTH}
+    model={engine.state.activeModel}
+    mode={mode}
+    perm={permMode}
+    workspace={engine.state.workspace.root}
+    usage={{ tokensIn: metrics.compression.inputTokens, requests: metrics.requestCount }}
+    agents={agents}
+    todos={taskQueue}
+    skills={engine.skills.length}
+    plugins={new Set(engine.skills.map((skill) => skill.source).filter((source) => source !== undefined)).size}
+  />;
+
   return <Box flexDirection="column" width={width} paddingLeft={gutter} paddingRight={gutter}>
-    {/* Settled transcript → native scrollback. */}
+    {/* Settled transcript → native scrollback.
+
+        The panel cannot sit beside this. Ink writes Static output straight to
+        the terminal, outside the layout, which is exactly what puts settled
+        turns in real scrollback — so it is full width by construction. The
+        panel sits beside the live region instead. OpenCode splits the whole
+        view because its transcript is an in-layout scrollbox; the trade there
+        is that its history is not in the terminal's own scrollback. */}
     <Static key={staticKey} items={lines}>
       {(line, index) => <TranscriptEntry key={index} line={line} width={contentWidth} fallbackModel={engine.state.activeModel} />}
     </Static>
 
-    <Box flexDirection="column">
+    {sideMode === 'replace' && <Box marginBottom={1}>{panel}</Box>}
+
+    <Box flexDirection="row" alignItems="flex-start">
+    <Box flexDirection="column" width={sideMode === 'split' ? convoWidth : undefined} flexGrow={sideMode === 'split' ? 0 : 1}>
       {lines.length === 0 && !busy && <Hero
         width={contentWidth + 2}
         endpoint={engine.client.endpoint ?? 'omniroute'}
@@ -904,7 +1009,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
         </Box>;
       })}
 
-      {agents.length > 0 && <Box flexDirection="column" borderStyle="round" borderColor={PALETTE.error} paddingX={2} marginTop={1}>
+      {sideMode === 'hidden' && agents.length > 0 && <Box flexDirection="column" borderStyle="round" borderColor={PALETTE.error} paddingX={2} marginTop={1}>
         <Box justifyContent="space-between">
           <Text bold color={PALETTE.error}>swarm</Text>
           <Text dimColor>{doneAgents}/{agents.length} lanes done</Text>
@@ -917,7 +1022,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
         })}
       </Box>}
 
-      {taskQueue.length > 0 && <Box flexDirection="column" borderStyle="round" borderColor={PALETTE.accent} paddingX={2} marginTop={1}>
+      {sideMode === 'hidden' && taskQueue.length > 0 && <Box flexDirection="column" borderStyle="round" borderColor={PALETTE.accent} paddingX={2} marginTop={1}>
         <Box justifyContent="space-between">
           <Text bold color={PALETTE.accent}>plan</Text>
           <Text dimColor>{taskQueue.filter((item) => item.status === 'done').length}/{taskQueue.length} done</Text>
@@ -991,11 +1096,19 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
             {contextLabel ? <Text color={meterColor}> · {contextLabel}</Text> : null}
           </Text>
         </Box>
+        {/* The full hint wraps once the panel takes its share of the width,
+            and a wrapped hint collides with the compression note beside it —
+            "Shift+Ta" then "saved 28%" on the same row. Drop to the keys that
+            are hardest to guess rather than letting it break. */}
         <Box justifyContent="space-between">
-          <Text dimColor>Enter send · Ctrl+J newline · Ctrl+O models · Ctrl+{modeKey} mode · Shift+Tab perms · Ctrl+T tool · Ctrl+Y copy · Ctrl+C {busy ? 'cancel' : 'quit'} · /help</Text>
+          <Text dimColor>{sideMode === 'split'
+            ? `Ctrl+B panel · Ctrl+${modeKey} mode · Ctrl+C ${busy ? 'cancel' : 'quit'} · /help`
+            : `Enter send · Ctrl+J newline · Ctrl+O models · Ctrl+${modeKey} mode · Shift+Tab perms · Ctrl+B panel · Ctrl+T tool · Ctrl+Y copy · Ctrl+C ${busy ? 'cancel' : 'quit'} · /help`}</Text>
           {compression ? <Text dimColor>saved {compression}{metrics.remainingQuota !== undefined ? ` · quota ${metrics.remainingQuota}` : ''}</Text> : null}
         </Box>
       </Box>
+    </Box>
+    {sideMode === 'split' && <Box marginLeft={1}>{panel}</Box>}
     </Box>
   </Box>;
 }
