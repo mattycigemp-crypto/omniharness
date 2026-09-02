@@ -109,6 +109,13 @@ const PERM_SEQ: PermissionMode[] = ['ask', 'acceptEdits', 'bypass'];
 const PERM_LABEL: Record<PermissionMode, string> = { ask: 'manual', acceptEdits: 'accept edits', bypass: 'bypass' };
 const PERM_COLOR = (p: PermissionMode): string => (p === 'bypass' ? PALETTE.error : p === 'acceptEdits' ? PALETTE.warn : PALETTE.muted);
 
+/**
+ * The widest the content is allowed to get, however wide the terminal is.
+ * Past roughly this the eye loses the start of a line on the way back from
+ * the end of it, and the chrome ends up further from what it describes.
+ */
+const MAX_MEASURE = 100;
+
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 const widthOf = (stdout: NodeJS.WriteStream): number => Math.max(48, stdout.columns ?? 80);
 const clip = (text: string, width: number): string => text.length <= width ? text : `${text.slice(0, Math.max(0, width - 1))}…`;
@@ -241,7 +248,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 export function Hero(props: HeroProps): React.ReactElement {
   const { width, endpoint, model, mode, perm, workspace, sessions, skills, plugins, mcpTools } = props;
   const wide = twoColumn(width);
-  const outer = Math.min(width - 2, 84);
+  const outer = width;
   const column = wide ? Math.floor((outer - 3) / 2) : outer;
   const inner = Math.max(12, column - 4);
 
@@ -300,7 +307,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const { stdin } = useStdin();
   const [width, setWidth] = useState(() => widthOf(stdout));
   const [edit, setEdit] = useState({ value: '', cursor: 0 });
-  const inputWidth = Math.max(16, width - 12);
+  const inputWidth = Math.max(16, Math.min(width, MAX_MEASURE) - 12);
   // Settled transcript. Rendered once each into <Static> — the terminal's own
   // scrollback is the history; there is no in-app viewport to scroll.
   const [lines, setLines] = useState<Line[]>(() => engine.state.messages.map(lineFromMessage));
@@ -823,7 +830,13 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
 
   const modeKey = kitty === true ? 'M' : 'E';
   const modeAccent = MODE_ACCENT[mode];
-  const contentWidth = Math.max(20, width - 6);
+  // On a wide terminal the UI used to stretch edge to edge, which puts the
+  // input box and the text you are reading at opposite ends of the screen.
+  // Hold the content to a readable measure and centre it instead; below that
+  // measure the gutter collapses and nothing changes.
+  const measure = Math.min(width, MAX_MEASURE);
+  const gutter = Math.max(2, Math.floor((width - measure) / 2));
+  const contentWidth = Math.max(20, measure - 6);
   const terminalRows = stdout.rows ?? 24;
 
   const metrics = engine.client.snapshotMetrics();
@@ -850,7 +863,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
 
   const doneAgents = agents.filter((lane) => lane.status === 'done').length;
 
-  return <Box flexDirection="column" width={width} paddingX={2}>
+  return <Box flexDirection="column" width={width} paddingLeft={gutter} paddingRight={gutter}>
     {/* Settled transcript → native scrollback. */}
     <Static key={staticKey} items={lines}>
       {(line, index) => <TranscriptEntry key={index} line={line} width={contentWidth} fallbackModel={engine.state.activeModel} />}
@@ -858,7 +871,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
 
     <Box flexDirection="column">
       {lines.length === 0 && !busy && <Hero
-        width={width}
+        width={contentWidth + 2}
         endpoint={engine.client.endpoint ?? 'omniroute'}
         model={engine.state.activeModel}
         mode={mode}

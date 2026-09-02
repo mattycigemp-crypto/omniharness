@@ -7,25 +7,6 @@ import { ownVersion, runUpdate } from './update.js';
 import { readActiveCombo } from './config/settings.js';
 import { OmniRouteClient } from './config/omniRoute.js';
 import { doctor, helpText, models } from './doctor.js';
-import type { HarnessMessage } from './types/index.js';
-
-const ALT_ENTER = '\x1b[?1049h\x1b[H';
-const ALT_LEAVE = '\x1b[?1049l';
-
-/** Plain-text transcript flushed to the primary buffer on exit — the audit trail. */
-function dumpTranscript(messages: readonly HarnessMessage[]): void {
-  if (messages.length === 0) return;
-  const label: Record<HarnessMessage['role'], string> = {
-    user: 'you', assistant: 'assistant', thought: 'think', action: 'action',
-    tool: 'tool', command: 'command', error: 'error',
-  };
-  process.stdout.write('\n');
-  for (const message of messages) {
-    const who = message.model ?? label[message.role] ?? message.role;
-    process.stdout.write(`\n─ ${who} ─────\n${message.content.trim()}\n`);
-  }
-  process.stdout.write('\n');
-}
 
 // A crash anywhere below would otherwise surface as a raw Node stack trace, or
 // as an unhandled rejection that terminates the process without saying why.
@@ -79,20 +60,25 @@ if (command === 'update') {
   void (async () => {
     const saved = await readActiveCombo();
     const engine = await createMastraEngine({ workspaceRoot: process.cwd(), model: saved });
-    // Render the structured UI in the alternate screen buffer so that, on exit,
-    // the primary buffer's scrollback is left holding the plain-text transcript —
-    // the raw audit trail, without maintaining a parallel log.
-    const alt = process.stdout.isTTY === true;
-    if (alt) process.stdout.write(ALT_ENTER);
+    // Render in the primary buffer, not the alternate screen.
+    //
+    // The alternate screen has no scrollback — that is what it is for — so
+    // while the harness was running you could not scroll back to anything: not
+    // a file the agent read three steps ago, not the reasoning behind an edit.
+    // The transcript only appeared once you quit, dumped into the primary
+    // buffer on exit, which is the wrong time to want it.
+    //
+    // Staying in the primary buffer means the TUI's <Static> region writes
+    // settled turns straight into real scrollback, where the terminal scrolls
+    // them like any other output and they are still there afterwards. The exit
+    // dump goes with it: scrollback already holds the transcript, and printing
+    // it again would duplicate every line.
+    //
+    // The cost is that quitting no longer restores the pre-launch screen. For
+    // a tool whose output you are meant to read back, that is the right trade.
+    //
     // The app owns Ctrl+C so idle quits but an in-flight run is cancelled first.
     const { waitUntilExit } = render(<TerminalInterface engine={engine} />, { exitOnCtrlC: false });
-    try {
-      await waitUntilExit();
-    } finally {
-      if (alt) {
-        process.stdout.write(ALT_LEAVE);
-        dumpTranscript(engine.state.messages);
-      }
-    }
+    await waitUntilExit();
   })();
 }
