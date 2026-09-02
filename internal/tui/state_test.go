@@ -15,16 +15,21 @@ import (
 func TestTruncateKeepsValidUTF8(t *testing.T) {
 	// truncate is applied to user prompts, model errors and the session
 	// title, which is persisted. Cutting on a byte boundary produces a
-	// mangled rune in the TUI and a corrupt title in the store.
+	// mangled character in the TUI and a corrupt title in the store.
+	//
+	// The inputs below are not decoration: in UTF-8 a character is one to
+	// four bytes, and this bug is invisible in ASCII because every ASCII
+	// character is exactly one byte. Each case covers one width, so a cut
+	// landing mid-character is caught wherever the boundary falls.
 	for _, tc := range []struct {
 		name string
 		in   string
 		n    int
 	}{
-		{"accents", strings.Repeat("é", 40), 20},
-		{"emoji", strings.Repeat("🙂", 20), 15},
-		{"cjk", strings.Repeat("日本語", 20), 10},
-		{"mixed", "résumé " + strings.Repeat("🙂", 10) + " done", 12},
+		{"2-byte (Latin accents)", strings.Repeat("é", 40), 20},
+		{"3-byte (CJK)", strings.Repeat("日本語", 20), 10},
+		{"4-byte (emoji)", strings.Repeat("🙂", 20), 15},
+		{"mixed widths", "résumé " + strings.Repeat("🙂", 10) + " done", 12},
 	} {
 		got := truncate(tc.in, tc.n)
 		if !utf8.ValidString(got) {
@@ -35,8 +40,8 @@ func TestTruncateKeepsValidUTF8(t *testing.T) {
 
 func TestTruncateCountsCharactersNotBytes(t *testing.T) {
 	// A limit of 10 should mean ten visible characters whether the text is
-	// ASCII or not, otherwise a Japanese title is cut to a third the length
-	// of an English one.
+	// ASCII or not. Counting bytes instead cut this input — 3 bytes per
+	// character — after 3 characters where an English title got 10.
 	got := truncate("日本語日本語日本語日本語", 10)
 	if runes := utf8.RuneCountInString(strings.TrimSuffix(got, "…")); runes != 10 {
 		t.Errorf("truncate(...) kept %d runes, want 10: %q", runes, got)
