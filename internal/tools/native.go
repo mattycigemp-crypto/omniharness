@@ -146,8 +146,19 @@ func (n *Native) resolvePath(input map[string]any) (string, error) {
 	// EvalSymlinks fails outright on a path that does not exist yet, so
 	// resolving only the full path skipped this check for every file the agent
 	// was about to create — a new file under a symlinked directory escaped.
+	//
+	// The root has to be resolved the same way, or the comparison is between
+	// two different spellings of the same directory and every path looks like
+	// an escape. That is not hypothetical: on macOS /var is a symlink to
+	// /private/var, so a workspace anywhere under it failed every read and
+	// write, and on Windows a root holding an 8.3 short name (RUNNER~1)
+	// never matched its resolved long form.
+	realRoot, err := resolveDeepest(root)
+	if err != nil {
+		realRoot = root
+	}
 	if real, err := resolveDeepest(abs); err == nil {
-		if err := n.confine(root, real); err != nil {
+		if err := n.confine(realRoot, real); err != nil {
 			return "", err
 		}
 	}
