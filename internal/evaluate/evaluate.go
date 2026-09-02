@@ -73,11 +73,15 @@ func (r *Registry) Register(e Evaluator) error {
 // to change files. Research tasks get evidence checks.
 func (r *Registry) ForTask(p task.Profile) []Evaluator {
 	var out []Evaluator
+	// The Go evaluators are offered to every software task rather than
+	// gated on a detected toolchain: each one checks for a module itself
+	// and skips when there is none. An earlier hasToolchain helper looked
+	// like that gate but returned true unconditionally.
 	if p.Domain == task.DomainSoftware {
-		if e, ok := r.evaluators["go-build"]; ok && hasToolchain(p, "go") {
+		if e, ok := r.evaluators["go-build"]; ok {
 			out = append(out, e)
 		}
-		if e, ok := r.evaluators["go-test"]; ok && hasToolchain(p, "go") {
+		if e, ok := r.evaluators["go-test"]; ok {
 			out = append(out, e)
 		}
 		if e, ok := r.evaluators["diff-check"]; ok && p.ModifiesFiles {
@@ -93,16 +97,6 @@ func (r *Registry) ForTask(p task.Profile) []Evaluator {
 }
 
 // hasToolchain is a permissive probe: the profile's tools mention the runtime.
-func hasToolchain(p task.Profile, name string) bool {
-	for _, t := range p.Tools {
-		if strings.Contains(t, name) {
-			return true
-		}
-	}
-	// Software tasks default to go-toolchain checks when the workspace is a Go
-	// module; the evaluator itself verifies presence and skips gracefully.
-	return true
-}
 
 // RegisterDefaults adds the built-in evaluators.
 func (r *Registry) RegisterDefaults() error {

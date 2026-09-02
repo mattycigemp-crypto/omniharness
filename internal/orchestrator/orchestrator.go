@@ -514,7 +514,20 @@ func (o *Orchestrator) evaluate(ctx context.Context, t *task.Task) (evaluate.Out
 	evs := o.deps.Evaluators.ForTask(t.Profile)
 	if len(evs) == 0 {
 		if t.Profile.Verification == task.VerificationRequired {
-			return evaluate.NeedsReview, "verification required but no evaluator matched"
+			// NEEDS_REVIEW completes the task, which is the right call — a
+			// missing evaluator is not evidence of a broken result. But the
+			// task asked to be verified and nothing verified it, and with no
+			// evaluator there is no row and no event, so "completed" would
+			// read as "verified". Leave a trace instead.
+			const detail = "verification required but no evaluator matched"
+			_ = o.deps.Store.RecordEvaluation(&session.Evaluation{
+				SessionID: t.SessionID, TaskID: t.ID, Evaluator: "none",
+				Outcome: string(evaluate.NeedsReview), Detail: detail,
+			})
+			o.taskEvent(t, &event.EvaluationCompletedData{
+				Evaluator: "none", Outcome: string(evaluate.NeedsReview), Detail: detail,
+			})
+			return evaluate.NeedsReview, detail
 		}
 		return evaluate.Pass, "no evaluator applicable"
 	}
