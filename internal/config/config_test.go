@@ -247,3 +247,41 @@ func TestWriteDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A harness that spends money between turns without asking must not ship with
+// an unlimited default. Someone who never opens the config still gets a
+// ceiling, and finds a runaway loop in the terminal rather than on the bill.
+func TestDefaultCarriesACostCeiling(t *testing.T) {
+	if got := Default().Budgets.MaxCostUSD; got <= 0 {
+		t.Fatalf("default max_cost_usd = %v, want a real ceiling", got)
+	}
+}
+
+// The example is what people copy, so a 0 there would hand the unlimited
+// default straight back to every user who follows the docs.
+func TestExampleConfigDoesNotRemoveTheCeiling(t *testing.T) {
+	cfg, err := Load("../../config/omniharness.example.toml")
+	if err != nil {
+		t.Fatalf("example config must parse: %v", err)
+	}
+	if cfg.Budgets.MaxCostUSD <= 0 {
+		t.Errorf("example sets max_cost_usd = %v, which is unlimited", cfg.Budgets.MaxCostUSD)
+	}
+}
+
+// An explicit 0 still means unlimited: the ceiling is a default, not a policy
+// nobody can turn off.
+func TestAnExplicitZeroStillMeansUnlimited(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/c.toml"
+	if err := os.WriteFile(path, []byte("[budgets]\nmax_cost_usd = 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Budgets.MaxCostUSD != 0 {
+		t.Errorf("max_cost_usd = %v, want the explicit 0 to be honoured", cfg.Budgets.MaxCostUSD)
+	}
+}
