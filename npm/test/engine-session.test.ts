@@ -6,7 +6,7 @@ import { promises as fs } from 'node:fs';
 import { test } from 'node:test';
 import { createMastraEngine } from '../src/agent/mastraEngine.js';
 
-function toSSE(payload: { message?: { content?: string; tool_calls?: unknown }; finish_reason?: string }): string {
+function toSSE(payload: { message?: { role?: string; content?: string; tool_calls?: unknown }; finish_reason?: string }): string {
   const toolCalls = Array.isArray(payload.message?.tool_calls) ? payload.message.tool_calls : undefined;
   const chunks: string[] = [];
   const content = typeof payload.message?.content === 'string' && payload.message.content !== '' ? payload.message.content : undefined;

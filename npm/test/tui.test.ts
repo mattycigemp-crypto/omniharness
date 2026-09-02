@@ -3,11 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { test } from 'node:test';
+import { asStdin, asStdout } from './streams.js';
 import { PassThrough, Writable } from 'node:stream';
 import React from 'react';
 import { render } from 'ink';
 import { TerminalInterface } from '../src/ui/terminalInterface.js';
-import type { MastraEngine } from '../src/agent/mastraEngine.js';
+import type { HarnessEvent, MastraEngine } from '../src/agent/mastraEngine.js';
 
 class FakeStdin extends PassThrough {
   isTTY = true;
@@ -72,7 +73,7 @@ function makeEngine(): MastraEngine {
 test('status line tells the user to use Ctrl+J when the kitty query is unanswered', async () => {
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  const instance = render(React.createElement(TerminalInterface, { engine: makeEngine() }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine: makeEngine() }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(450); // kitty detection timeout is 300ms; no answer arrives
   const text = stripAnsi(stdout.output);
   assert.match(text, /can't distinguish Shift\+Enter from Enter/);
@@ -86,7 +87,7 @@ test('status line tells the user to use Ctrl+J when the kitty query is unanswere
 test('status line confirms kitty protocol when the terminal answers the query', async () => {
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  const instance = render(React.createElement(TerminalInterface, { engine: makeEngine() }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine: makeEngine() }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(30);
   stdin.write('\x1b[?1u'); // kitty query answer: ESC[? flags u
   await sleep(50);
@@ -102,7 +103,7 @@ test('status line confirms kitty protocol when the terminal answers the query', 
 test('Ctrl+J inserts a newline and the input box renders two rows', async () => {
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  const instance = render(React.createElement(TerminalInterface, { engine: makeEngine() }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine: makeEngine() }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(30);
   stdin.write('ab');
   stdin.write('\x0a'); // Ctrl+J = LF: must insert a newline, not submit
@@ -117,10 +118,10 @@ test('Ctrl+J inserts a newline and the input box renders two rows', async () => 
 test('todos events render the visible plan panel with markers and progress', async () => {
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  let listener: ((event: HarnessEvent) => void) | undefined;
   const engine = makeEngine();
   engine.subscribe = (handler) => { listener = handler; return () => {}; };
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(30);
   listener!({ type: 'todos', todos: [
     { id: 't1', title: 'read the file', status: 'done' },
@@ -140,11 +141,11 @@ test('todos events render the visible plan panel with markers and progress', asy
 test('settled replies flow into the static transcript', async () => {
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  let listener: ((event: HarnessEvent) => void) | undefined;
   const engine = makeEngine();
   engine.subscribe = (handler) => { listener = handler; return () => {}; };
   stdout.rows = 16;
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(30);
   for (let index = 0; index < 6; index += 1) listener!({ type: 'text', content: `answer-${index}`, model: 'test-model' });
   await sleep(80);
@@ -159,12 +160,12 @@ test('settled replies flow into the static transcript', async () => {
 test('/clear resets the plan and history and calls the engine', async () => {
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  let listener: ((event: HarnessEvent) => void) | undefined;
   let clearCalls = 0;
   const engine = makeEngine();
   engine.subscribe = (handler) => { listener = handler; return () => {}; };
   engine.clearHistory = async () => { clearCalls += 1; };
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(120);
   listener!({ type: 'todos', todos: [{ id: 'stale', title: 'stale-plan', status: 'pending' }] });
   await sleep(60);
@@ -189,7 +190,7 @@ test('empty submit does not start a run', async () => {
   let runs = 0;
   const engine = makeEngine();
   engine.run = async () => { runs += 1; return { content: '', model: 'test-model' }; };
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(40);
   stdin.write('\r');
   await sleep(80);
@@ -205,7 +206,7 @@ test('unmount denies a pending approval instead of leaving the run hanging', asy
   const engine = makeEngine();
   engine.stop = () => { stopCalls += 1; };
   engine.setApprovalHandler = (handler) => { approvalHandler = handler; };
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(40);
   const pending = approvalHandler!({ tool: 'write_file', input: { path: 'a.txt' }, scopes: [] });
   await sleep(40);
@@ -219,11 +220,11 @@ test('unmount denies a pending approval instead of leaving the run hanging', asy
 test('long live responses keep their newest streamed rows visible', async () => {
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  let listener: ((event: HarnessEvent) => void) | undefined;
   const engine = makeEngine();
   engine.subscribe = (handler) => { listener = handler; return () => {}; };
   stdout.rows = 16;
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(350);
   listener!({ type: 'text', content: 'previous answer', model: 'test-model' });
   await sleep(40);
@@ -240,12 +241,12 @@ test('long live responses keep their newest streamed rows visible', async () => 
 test('current tool shows in the busy line during a run', async () => {
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  let listener: ((event: HarnessEvent) => void) | undefined;
   const engine = makeEngine();
   engine.subscribe = (handler) => { listener = handler; return () => {}; };
   // Keep the run in flight so the busy line stays visible.
   engine.run = () => new Promise(() => {});
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(30);
   stdin.write('do it');
   await sleep(30); // separate chunk so Ink parses '\r' as a return key, not paste
@@ -274,7 +275,7 @@ test('up arrow on an empty prompt recalls and the recalled prompt is re-submitte
   const configDir = path.join(os.tmpdir(), `oh-tui-hist-${Date.now()}`);
   const previous = process.env.OMNIHARNESS_CONFIG_DIR;
   process.env.OMNIHARNESS_CONFIG_DIR = configDir;
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   try {
     await sleep(120);
     stdin.write('alpha');
@@ -297,11 +298,11 @@ test('up arrow on an empty prompt recalls and the recalled prompt is re-submitte
 test('tool calls render as cards and Ctrl+T expands a file-edit trail', async () => {
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  let listener: ((event: HarnessEvent) => void) | undefined;
   const engine = makeEngine();
   engine.subscribe = (handler) => { listener = handler; return () => {}; };
   stdout.rows = 24;
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(40);
   listener!({ type: 'tool_start', tool: 'write_file', input: { path: 'src/a.ts', content: '+line-added\n-line-removed' } });
   await sleep(80);
@@ -334,7 +335,7 @@ test('a prompt typed during a run is queued and fires when the run ends', async 
     calls.push(prompt);
     return new Promise((resolve) => { release = () => resolve({ content: '', model: 'test-model' }); });
   };
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(40);
   stdin.write('first');
   await sleep(50); stdin.write('\r');
@@ -355,10 +356,10 @@ test('a prompt typed during a run is queued and fires when the run ends', async 
 test('/find reports a match count and route events show the provider on the reply label', async () => {
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  let listener: ((event: HarnessEvent) => void) | undefined;
   const engine = makeEngine();
   engine.subscribe = (handler) => { listener = handler; return () => {}; };
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(40);
   listener!({ type: 'text', content: 'the widget is wired', model: 'sonnet', provider: 'openrouter', fallback: true });
   await sleep(60);
@@ -374,10 +375,10 @@ test('/find reports a match count and route events show the provider on the repl
 test('the swarm rail renders one lane per agent event with progress', async () => {
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  let listener: ((event: Parameters<MastraEngine['subscribe']>[0]) => void) | undefined;
+  let listener: ((event: HarnessEvent) => void) | undefined;
   const engine = makeEngine();
   engine.subscribe = (handler) => { listener = handler; return () => {}; };
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   await sleep(40);
   listener!({ type: 'agent', id: 'A1', label: 'wire retry', status: 'working', note: 'wire retry backoff' });
   listener!({ type: 'agent', id: 'A2', label: 'add tests', status: 'working', note: 'add coverage' });

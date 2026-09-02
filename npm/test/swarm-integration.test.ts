@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { test } from 'node:test';
+import { asStdin, asStdout } from './streams.js';
 import { PassThrough, Writable } from 'node:stream';
 import React from 'react';
 import { render } from 'ink';
@@ -101,7 +102,7 @@ test('CRAZY mode: a planned run fans out and the swarm rail shows every worker l
   const engine = await createMastraEngine({ workspaceRoot: workspace, endpoint: gw.url, mode: 'crazy' });
   const stdin = new FakeStdin();
   const stdout = new FakeStdout();
-  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin, stdout, stderr: new FakeStdout() });
+  const instance = render(React.createElement(TerminalInterface, { engine }), { stdin: asStdin(stdin), stdout: asStdout(stdout), stderr: asStdout(new FakeStdout()) });
   try {
     await sleep(120);
     stdin.write('build the retry work');
