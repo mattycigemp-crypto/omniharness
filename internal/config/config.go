@@ -154,8 +154,14 @@ func Default() Config {
 			},
 		},
 		Budgets: Budgets{
-			MaxTokens:     0,
-			MaxCostUSD:    0,
+			MaxTokens: 0,
+			// A ceiling by default. This harness spends real money without
+			// asking between turns, and an unlimited default means the first
+			// runaway loop is discovered on the bill rather than in the
+			// terminal. $5 is far above a normal task and far below a bill
+			// worth arguing about; hitting it stops the run and says so, and
+			// raising it is one line of config.
+			MaxCostUSD:    5.00,
 			MaxDuration:   0,
 			MaxAgents:     4,
 			MaxToolCalls:  0,

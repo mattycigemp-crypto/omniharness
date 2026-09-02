@@ -42,9 +42,13 @@ vision = ""
 research = ""
 review = ""
 
+# 0 means no limit. max_cost_usd ships with a real ceiling rather than 0
+# because this harness spends money without asking between turns: hitting the
+# limit stops the run and says so, which is a better way to find a runaway
+# loop than the bill. Raise it for long tasks, or per run with --max-cost.
 [budgets]
 max_tokens = 0
-max_cost_usd = 0
+max_cost_usd = 5.00
 max_duration = "0s"
 max_agents = 4
 max_tool_calls = 0
