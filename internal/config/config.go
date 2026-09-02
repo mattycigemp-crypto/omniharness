@@ -87,6 +87,12 @@ type Policy struct {
 	// GitPushRequiresApproval forces approval for git push even when risk
 	// action says allow.
 	GitPushRequiresApproval bool `toml:"git_push_requires_approval"`
+	// SecretEnv names environment variables to strip from every subprocess,
+	// on top of the harness credentials that are always stripped. Shell-style
+	// wildcards are allowed and matching is case-insensitive, so "*_TOKEN"
+	// and "AWS_*" both work. Nothing extra is stripped by default: an agent
+	// running `gh` or `npm publish` needs those tools' own tokens.
+	SecretEnv []string `toml:"secret_env,omitempty"`
 }
 
 // Persistence configures durable state.

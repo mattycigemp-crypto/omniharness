@@ -58,6 +58,12 @@ git_push_requires_approval = true
 # Override per run with --workspace or OMNIHARNESS_WORKSPACE.
 # workspace_root = "/path/to/project"
 
+# Every subprocess is spawned without the harness's own credentials
+# (OMNIROUTE_API_KEY and friends). Everything else is inherited, because an
+# agent running `gh pr create` or `npm publish` needs those tools' tokens.
+# secret_env names more variables to strip; wildcards allowed, case-insensitive.
+# secret_env = ["GITHUB_TOKEN", "AWS_*", "*_TOKEN"]
+
 [policy.risk_action]
 low = "allow"
 medium = "allow"

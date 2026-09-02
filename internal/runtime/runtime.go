@@ -16,6 +16,7 @@ import (
 	"omniharness/internal/budget"
 	"omniharness/internal/config"
 	composer "omniharness/internal/context"
+	"omniharness/internal/envguard"
 	"omniharness/internal/evaluate"
 	"omniharness/internal/event"
 	"omniharness/internal/gateway"
@@ -101,6 +102,9 @@ func New(cfg config.Config, opts Options) (*Runtime, error) {
 	if cfg.Policy.WorkspaceRoot != "" {
 		workspace = cfg.Policy.WorkspaceRoot
 	}
+
+	// Applies before any tool can spawn a subprocess.
+	envguard.Configure(cfg.Policy.SecretEnv)
 
 	reg := tools.NewRegistry()
 	if err := tools.NewNative(workspace).Register(reg); err != nil {
