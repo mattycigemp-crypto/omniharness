@@ -4,6 +4,7 @@
 package context
 
 import (
+	"strconv"
 	"strings"
 
 	"omniharness/internal/task"
@@ -87,23 +88,46 @@ func (c *Composer) Compose(in Input) (Output, error) {
 		}
 	}
 
+	// The system prompt and the task prompt are not discretionary — the run is
+	// meaningless without them — so if those alone exceed the limit the system
+	// prompt is trimmed rather than the request being silently mis-sent.
+	prompt := in.Spec.Prompt
+	if reserved := Estimate(sys) + Estimate(prompt); reserved > limit {
+		if room := limit - Estimate(prompt); room > 0 {
+			sys = truncateToTokens(sys, room)
+		} else {
+			sys = truncateToTokens(sys, limit/4)
+		}
+		out.Condensed = true
+	}
 	out.Messages = append(out.Messages, Message{Role: "system", Content: sys})
 	out.Tokens += Estimate(sys)
 
-	user := in.Spec.Prompt
+	user := prompt
 	if len(in.Files) > 0 {
 		var b strings.Builder
 		b.WriteString(user)
 		b.WriteString("\n\nRelevant files:\n")
-		for _, f := range in.Files {
-			// Cap per-file content to keep one file from blowing the budget.
+		// Attachments are bounded by what is left, not only per file. Capping
+		// each file at 30k and never counting the total is how a 1000-token
+		// limit produced a 300,000-token context: sixty files each under the
+		// per-file cap, none of them checked against the budget.
+		used := out.Tokens + Estimate(user)
+		for i, f := range in.Files {
 			content := f.Content
 			if len(content) > 30_000 {
 				content = content[:30_000] + "\n...[truncated]"
 			}
-			b.WriteString("\n===== " + f.Path + " =====\n")
-			b.WriteString(content)
-			b.WriteString("\n===== end " + f.Path + " =====\n")
+			block := "\n===== " + f.Path + " =====\n" + content + "\n===== end " + f.Path + " =====\n"
+			t := Estimate(block)
+			if used+t > limit {
+				out.Condensed = true
+				out.Dropped += len(in.Files) - i
+				b.WriteString("\n...[" + itoa(len(in.Files)-i) + " more files omitted to stay within the context limit]\n")
+				break
+			}
+			b.WriteString(block)
+			used += t
 		}
 		user = b.String()
 	}
@@ -129,6 +153,32 @@ func (c *Composer) Compose(in Input) (Output, error) {
 	return out, nil
 }
 
+// truncateToTokens trims text to approximately the given token budget. The
+// estimate is characters-per-token, so this is proportional rather than exact —
+// enough to keep an oversized prompt from blowing the window.
+func truncateToTokens(sTxt string, tokens int64) string {
+	if tokens <= 0 {
+		return ""
+	}
+	max := int(tokens * charsPerToken)
+	if len(sTxt) <= max {
+		return sTxt
+	}
+	if max <= len(truncationNote) {
+		return sTxt[:max]
+	}
+	return sTxt[:max-len(truncationNote)] + truncationNote
+}
+
+// charsPerToken mirrors the ratio Estimate uses.
+const charsPerToken = 4
+
+const truncationNote = "\n...[truncated to fit the context limit]"
+
+func itoa(n int) string {
+	return strconv.Itoa(n)
+}
+
 func condensedMarker() string {
 	return "[Earlier conversation condensed. Rely on the SUMMARY OF PRIOR WORK and continue from the most recent state.]"
 }
@@ -139,7 +189,7 @@ func Estimate(s string) int64 {
 	if s == "" {
 		return 0
 	}
-	n := int64(len([]rune(s)) / 4)
+	n := int64(len([]rune(s)) / charsPerToken)
 	if n == 0 {
 		return 1
 	}

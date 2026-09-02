@@ -106,3 +106,56 @@ func TestSummarize(t *testing.T) {
 		t.Fatalf("summary too long: %d", len(s))
 	}
 }
+
+// "MaxTokens caps the total composed context" was only true of the history.
+// The system prompt and the file attachments were added without ever being
+// checked, so a 1000-token limit composed 300,627 tokens — sixty files each
+// under the 30k per-file cap, none of them counted against the budget — and
+// Condensed stayed false, so nothing said the context had overflowed.
+func TestComposeStaysWithinMaxTokens(t *testing.T) {
+	c := NewComposer(Limits{MaxTokens: 1000})
+
+	var files []FileRef
+	for i := 0; i < 60; i++ {
+		files = append(files, FileRef{Path: "big.go", Content: strings.Repeat("x", 20_000)})
+	}
+	out, err := c.Compose(Input{Spec: task.Spec{Prompt: "do the thing"}, Files: files})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Tokens > 1000 {
+		t.Errorf("composed %d tokens against a 1000-token cap", out.Tokens)
+	}
+	if !out.Condensed {
+		t.Error("dropping attachments must be reported, not silent")
+	}
+	if out.Dropped == 0 {
+		t.Error("dropped attachments must be counted")
+	}
+
+	// An oversized system prompt is trimmed rather than sent whole: the task
+	// prompt is not discretionary, so it is the system text that gives way.
+	out, err = c.Compose(Input{
+		Spec:         task.Spec{Prompt: "keep me"},
+		SystemPrompt: strings.Repeat("y", 500_000),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Tokens > 1000 {
+		t.Errorf("oversized system prompt composed %d tokens against a 1000-token cap", out.Tokens)
+	}
+	if !strings.Contains(out.Messages[len(out.Messages)-1].Content, "keep me") {
+		t.Error("the task prompt must survive trimming")
+	}
+
+	// No cap configured still means no cap.
+	unlimited := NewComposer(Limits{})
+	out, err = unlimited.Compose(Input{Spec: task.Spec{Prompt: "x"}, Files: files})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Dropped != 0 {
+		t.Errorf("an unlimited composer dropped %d attachments", out.Dropped)
+	}
+}
