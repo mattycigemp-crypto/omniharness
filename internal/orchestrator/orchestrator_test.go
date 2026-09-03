@@ -640,9 +640,11 @@ func TestNoDeepAnalyzerConfiguredLeavesTheProfileAlone(t *testing.T) {
 // task's final Profile.
 func TestDeepAnalyzerAddsAcceptanceCriteriaAndAccountsItsCost(t *testing.T) {
 	dir := t.TempDir()
+	// First scripted response answers the deepening call; the rest answer the
+	// implementer's own turn(s).
 	fake := testutil.NewFakeOmniRoute(t,
-		testutil.FakeStep{Content: `["the change compiles", "existing tests still pass"]`}, // the deepening call
-		testutil.FakeStep{Content: "done"},                                                  // the implementer's turn
+		testutil.FakeStep{Content: `["the change compiles", "existing tests still pass"]`},
+		testutil.FakeStep{Content: "done"},
 	)
 	o, store, _ := newOrchestrator(t, fake, dir)
 	o.deps.DeepAnalyzer = &task.DeepAnalyzer{Gateway: fake.Client(), ModelSel: o.deps.ModelSel}
@@ -683,8 +685,10 @@ func TestDeepAnalyzerAddsAcceptanceCriteriaAndAccountsItsCost(t *testing.T) {
 // before the implementer's own turn — proven by that turn never happening.
 func TestDeepAnalyzerCostCountsAgainstTheTaskBudget(t *testing.T) {
 	dir := t.TempDir()
+	// The first (and only affordable) response spends the whole budget; the
+	// second must never actually be requested.
 	fake := testutil.NewFakeOmniRoute(t,
-		testutil.FakeStep{Content: `["a criterion"]`}, // the deepening call — spends the whole budget
+		testutil.FakeStep{Content: `["a criterion"]`},
 		testutil.FakeStep{Content: "should never be reached"},
 	)
 	o, _, bus := newOrchestrator(t, fake, dir)
