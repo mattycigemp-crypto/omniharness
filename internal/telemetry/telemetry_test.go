@@ -280,4 +280,79 @@ func TestMetricsReportStoreFailures(t *testing.T) {
 	if _, err := ByTool(store); err == nil {
 		t.Error("ByTool on a closed store returned no error")
 	}
+	if _, err := ByStrategy(store); err == nil {
+		t.Error("ByStrategy on a closed store returned no error")
+	}
+}
+
+// strategyFixture builds a store with tasks actually linked to their model
+// calls by task id and carrying a Strategy — the shape ByStrategy needs,
+// which the shared fixture above does not set up (its tasks and model calls
+// are unlinked and Strategy-less, so they would all be filtered out).
+func strategyFixture(t *testing.T) *session.Store {
+	t.Helper()
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.CreateSession(&session.Session{ID: "sess", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	seed := func(id, strategy, status string, repairs int, callCosts ...float64) {
+		if err := store.CreateTask(&task.Task{ID: id, SessionID: "sess", Strategy: strategy, Status: task.Status(status), Repairs: repairs}); err != nil {
+			t.Fatalf("create task %s: %v", id, err)
+		}
+		for i, cost := range callCosts {
+			if err := store.RecordModelCall(&session.ModelCall{
+				ID: id + "-c" + string(rune('0'+i)), SessionID: "sess", TaskID: id, Model: "m", CostUSD: cost, Status: "ok",
+			}); err != nil {
+				t.Fatalf("record call for %s: %v", id, err)
+			}
+		}
+	}
+	// direct: two tasks, one with three calls — must not outweigh the other.
+	seed("d1", "direct", statusCompleted, 1, 0.01)
+	seed("d2", "direct", statusCompleted, 3, 0.01, 0.01, 0.01)
+	// sequential: one failed task.
+	seed("s1", "sequential", statusFailed, 0, 0.05)
+	// No strategy recorded: must not appear at all.
+	seed("g1", "", statusCompleted, 0, 0.02)
+	return store
+}
+
+func TestByStrategyDoesNotDoubleCountAMultiCallTask(t *testing.T) {
+	store := strategyFixture(t)
+
+	stats, err := ByStrategy(store)
+	if err != nil {
+		t.Fatalf("ByStrategy: %v", err)
+	}
+	byName := map[string]StrategyStats{}
+	for _, s := range stats {
+		byName[s.Strategy] = s
+	}
+	if _, ok := byName[""]; ok {
+		t.Fatal("a task with no recorded strategy must not appear in the breakdown")
+	}
+
+	direct := byName["direct"]
+	if direct.Runs != 2 {
+		t.Fatalf("direct Runs = %d, want 2 (one task's 3 calls must count as one run)", direct.Runs)
+	}
+	if direct.Completed != 2 {
+		t.Fatalf("direct Completed = %d, want 2", direct.Completed)
+	}
+	if direct.Repairs != 4 {
+		t.Fatalf("direct Repairs = %d, want 4 (1 + 3, once per task)", direct.Repairs)
+	}
+	if direct.CostUSD < 0.0399 || direct.CostUSD > 0.0401 {
+		t.Fatalf("direct CostUSD = %v, want ~0.04 (0.01 + 0.03)", direct.CostUSD)
+	}
+
+	seq := byName["sequential"]
+	if seq.Runs != 1 || seq.Failed != 1 {
+		t.Fatalf("sequential = %+v, want 1 run, 1 failed", seq)
+	}
 }

@@ -172,3 +172,57 @@ func ByTool(store *session.Store) ([]ToolStats, error) {
 	}
 	return out, rows.Err()
 }
+
+// StrategyStats breaks down usage by execution strategy.
+type StrategyStats struct {
+	Strategy  string  `json:"strategy"`
+	Runs      int     `json:"runs"`
+	Completed int     `json:"completed"`
+	Failed    int     `json:"failed"`
+	Repairs   int     `json:"repairs"`
+	CostUSD   float64 `json:"costUsd"`
+}
+
+// ByStrategy aggregates outcomes by the execution strategy each task ran
+// under — the same signal memory.Advisor uses internally to decide whether
+// to override a strategy choice, surfaced here so that choice is auditable
+// rather than only implicit.
+//
+// Costed and repair-counted from a derived table that groups by task id
+// first (a CTE), deliberately, rather than joining tasks straight to
+// model_calls and grouping by strategy: a task that calls a model several
+// times (multiple agent turns, a multi-step strategy, a repair cycle) would
+// otherwise be counted once per call instead of once per task, letting a
+// strategy whose tasks average several calls each look artificially busier
+// or more failure-prone than one whose tasks average few.
+func ByStrategy(store *session.Store) ([]StrategyStats, error) {
+	rows, err := store.DB().Query(`
+		WITH task_costs AS (
+			SELECT t.id AS task_id, t.strategy, t.status, t.repairs,
+			       COALESCE(SUM(mc.cost_usd), 0) AS cost
+			FROM tasks t
+			LEFT JOIN model_calls mc ON mc.task_id = t.id
+			WHERE t.strategy != '' AND t.status IN ('completed', 'failed')
+			GROUP BY t.id
+		)
+		SELECT strategy, COUNT(*),
+		       COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(repairs), 0),
+		       COALESCE(SUM(cost), 0)
+		FROM task_costs
+		GROUP BY strategy ORDER BY 2 DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []StrategyStats
+	for rows.Next() {
+		var ss StrategyStats
+		if err := rows.Scan(&ss.Strategy, &ss.Runs, &ss.Completed, &ss.Failed, &ss.Repairs, &ss.CostUSD); err != nil {
+			return nil, err
+		}
+		out = append(out, ss)
+	}
+	return out, rows.Err()
+}
