@@ -228,3 +228,55 @@ func TestBudgetMaxAgentsDowngradesMultiAgent(t *testing.T) {
 		t.Fatal("multi-agent must be downgraded when budget caps agents at 2")
 	}
 }
+
+// The case detectAmbiguity's own vague-phrase list names directly: a short
+// request is not the same thing as a well-specified one. Before this rule,
+// "clean up the code" — two words, low complexity by the word-count
+// heuristic — went straight to Direct with nothing checking what "clean up"
+// was taken to mean. This has to fire ahead of the low-complexity shortcut,
+// or the requests that need it most never reach it.
+func TestHighAmbiguityGetsAPlanEvenAtLowComplexity(t *testing.T) {
+	p := task.Profile{Complexity: task.ComplexityLow, Domain: task.DomainSoftware, Ambiguity: task.LevelHigh}
+	pl := selectFor(p)
+	if pl.Strategy != PlanImplementVerify {
+		t.Fatalf("strategy = %s, want plan-implement-verify for a short but ambiguous request", pl.Strategy)
+	}
+	if !strings.Contains(pl.Reason, "ambiguity") {
+		t.Fatalf("reason must explain the ambiguity trigger, got: %s", pl.Reason)
+	}
+}
+
+func TestHighAmbiguityAtHighComplexityAlsoGetsAPlan(t *testing.T) {
+	p := task.Profile{Complexity: task.ComplexityHigh, Domain: task.DomainSoftware, Ambiguity: task.LevelHigh}
+	pl := selectFor(p)
+	if pl.Strategy != PlanImplementVerify {
+		t.Fatalf("strategy = %s, want plan-implement-verify", pl.Strategy)
+	}
+}
+
+// Explicit REQUIRED verification is a stronger, separate signal (the request
+// itself demands checking) and must still win outright — this rule must not
+// swallow that case just because both land on the same strategy.
+func TestVerificationRequiredStillWinsOverAmbiguity(t *testing.T) {
+	p := task.Profile{
+		Complexity: task.ComplexityHigh, Domain: task.DomainSoftware,
+		Ambiguity: task.LevelHigh, Verification: task.VerificationRequired,
+	}
+	pl := selectFor(p)
+	if pl.Strategy != PlanImplementVerify {
+		t.Fatalf("strategy = %s, want plan-implement-verify", pl.Strategy)
+	}
+	if !strings.Contains(pl.Reason, "REQUIRED") {
+		t.Fatalf("the REQUIRED-verification reason must still be the one that fires: %s", pl.Reason)
+	}
+}
+
+// Low or medium ambiguity must not be swept into the same treatment as high —
+// only a genuinely unclear request pays the extra planning step.
+func TestModerateAmbiguityDoesNotForceAPlan(t *testing.T) {
+	p := task.Profile{Complexity: task.ComplexityLow, Domain: task.DomainSoftware, Ambiguity: task.LevelMedium}
+	pl := selectFor(p)
+	if pl.Strategy != Direct {
+		t.Fatalf("strategy = %s, want direct — only HIGH ambiguity should escalate", pl.Strategy)
+	}
+}
