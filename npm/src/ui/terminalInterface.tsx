@@ -13,7 +13,7 @@ import { capabilityLine, recentRows, shortenPath, twoColumn, type RecentSession 
 import { conversationWidth, overflowCount, sidebarMode, SIDEBAR_WIDTH, todoRows, usageRows, clip as clipRow, type UsageSummary } from './sidebar.js';
 import { planViewport } from './viewport.js';
 import { statusMarker, toolHead, type ToolStatus } from './toolrow.js';
-import { contextMeter, meterBar } from './modelWindows.js';
+import { contextMeter, meterBar, windowIndex, type WindowIndex } from './modelWindows.js';
 import { BEL, SYNC_QUERY, isSyncOutputReply, osc9Notify, osc52Copy, shouldNudgeOnFinish, wrapSynchronizedOutput } from './termcaps.js';
 import { KITTY_POP, KITTY_PUSH, KITTY_QUERY, isEncodedKey, isKittyQueryResponse, parseRawKey, type KeyAction } from './keys.js';
 import { ownVersion } from '../update.js';
@@ -407,6 +407,9 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const [pickerItems, setPickerItems] = useState<readonly PickerItem[]>([]);
   const [pickerIndex, setPickerIndex] = useState(0);
   const [pickerError, setPickerError] = useState<string>();
+  // Context windows the catalog states, keyed by model id. Empty until the
+  // catalog has been read; the meter falls back to its own table meanwhile.
+  const [windows, setWindows] = useState<WindowIndex>(() => new Map());
   const [mode, setMode] = useState<AgentMode>(engine.state.mode);
   const [permMode, setPermMode] = useState<PermissionMode>(engine.state.permissionMode ?? 'ask');
   const [approval, setApproval] = useState<ApprovalAction | null>(null);
@@ -447,6 +450,9 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     void listSessions(engine.state.workspace.root).then((found) => {
       if (alive) setRecentSessions(found);
     }).catch(() => { /* no snapshots is the common case, not a failure */ });
+    void Promise.resolve().then(() => engine.client.listCatalog()).then((catalog) => {
+      if (alive) setWindows(windowIndex(catalog));
+    }).catch(() => { /* an unreadable catalog leaves the meter on its built-in table */ });
     return () => { alive = false; };
   }, []);
 
@@ -564,7 +570,9 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const loadPicker = async (): Promise<void> => {
     setPickerError(undefined);
     try {
-      const [accountCombos, modelIds] = await Promise.all([engine.client.listCombos(), engine.client.listModels()]);
+      const [accountCombos, catalog] = await Promise.all([engine.client.listCombos(), engine.client.listCatalog()]);
+      setWindows(windowIndex(catalog));
+      const modelIds = catalog.map((entry) => entry.id);
       const items: PickerItem[] = [];
       for (const combo of accountCombos) {
         if (combo.name.trim() !== '' && !items.some((item) => item.id === combo.name)) {
@@ -941,7 +949,9 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   // The prompt tokens of the last completion, as the gateway counted them,
   // are the size of the context the next turn will carry.
   const contextTokens = metrics.usage?.contextTokens ?? 0;
-  const meter = contextMeter(contextTokens, engine.state.activeModel, metrics.fallback.activeProvider);
+  // Sized to the model that answered, when the gateway named one: an `auto/*`
+  // engine or a combo can land anywhere, and the window is that model's.
+  const meter = contextMeter(contextTokens, metrics.fallback.model ?? engine.state.activeModel, metrics.fallback.activeProvider, windows);
   const meterColor = meter.zone === 'danger' ? PALETTE.error : meter.zone === 'warn' ? PALETTE.warn : PALETTE.muted;
   const contextLabel = contextTokens > 0 ? `ctx ${meterBar(meter.fraction, 8)} ${Math.round(meter.fraction * 100)}%` : '';
   const compression = metrics.compression.inputTokens > 0 ? `${Math.round((1 - metrics.compression.ratio) * 100)}% ${metrics.compression.strategy.toUpperCase()}` : '';

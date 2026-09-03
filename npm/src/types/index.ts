@@ -65,6 +65,8 @@ export interface CompressionTracker {
 
 export interface FallbackTracker {
   activeProvider?: string;
+  /** The model that actually answered, from the `X-OmniRoute-Model` header. */
+  model?: string;
   /** Routing strategy the gateway applied, from the `X-OmniRoute-Decision` header. */
   strategy?: string;
   /** Gateway-reported routing/response latency in ms, from `X-OmniRoute-Decision`. */
