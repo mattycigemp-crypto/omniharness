@@ -267,3 +267,49 @@ func TestBenchmarkRejectsUnknownCase(t *testing.T) {
 		}
 	}
 }
+
+func TestDoctorReportsRoutingQuality(t *testing.T) {
+	fake := testutil.NewFakeOmniRoute(t)
+	fake.RoutingQuality = []string{"cursor/opus:healthy", "openai/gpt-5:degraded", "grok/x:cold"}
+	t.Setenv("OMNIHARNESS_DATA_DIR", t.TempDir())
+	t.Setenv("OMNIROUTE_URL", fake.URL())
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"doctor"})
+	out := captureStdout(t, func() {
+		// A degraded provider is a warning, not a failure — doctor must not
+		// return an error just because one of many tracked models is having
+		// a bad day upstream.
+		if err := root.Execute(); err != nil {
+			t.Fatalf("doctor failed on a degraded-but-not-broken gateway: %v", err)
+		}
+	})
+	if !strings.Contains(out, "routing quality") {
+		t.Fatalf("doctor did not report routing quality at all:\n%s", out)
+	}
+	if !strings.Contains(out, "3 models tracked") {
+		t.Fatalf("doctor did not report the tracked count:\n%s", out)
+	}
+	if !strings.Contains(out, "1 model degraded") {
+		t.Fatalf("doctor did not report the degraded count:\n%s", out)
+	}
+}
+
+// The endpoint is recent. A gateway that predates it must not make doctor
+// look broken, or report a check that was never actually run.
+func TestDoctorSkipsRoutingQualityOnAnOlderGateway(t *testing.T) {
+	fake := testutil.NewFakeOmniRoute(t) // RoutingQuality unset: route 404s
+	t.Setenv("OMNIHARNESS_DATA_DIR", t.TempDir())
+	t.Setenv("OMNIROUTE_URL", fake.URL())
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"doctor"})
+	out := captureStdout(t, func() {
+		if err := root.Execute(); err != nil {
+			t.Fatalf("doctor failed against a gateway with no routing-explain endpoint: %v", err)
+		}
+	})
+	if strings.Contains(out, "routing quality") {
+		t.Fatalf("doctor reported a check it never actually ran:\n%s", out)
+	}
+}

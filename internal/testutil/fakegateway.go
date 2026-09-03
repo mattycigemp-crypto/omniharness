@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -58,6 +59,13 @@ type FakeOmniRoute struct {
 	// CatalogIDs, when set, is returned by /v1/models instead of the default
 	// single fake/m1 entry.
 	CatalogIDs []string
+	// RoutingQuality, when non-nil, is served from GET /v1/explain/routing —
+	// each entry a "provider/model:classification" pair (e.g.
+	// "cursor/opus:degraded"). Nil means the route is not registered at all,
+	// which is how an OmniRoute instance that predates this endpoint behaves
+	// (a plain 404, not an empty success) — the default, so most tests are
+	// unaffected by this field existing.
+	RoutingQuality []string
 }
 
 // NewFakeOmniRoute starts the fake server.
@@ -90,6 +98,49 @@ func NewFakeOmniRoute(t *testing.T, steps ...FakeStep) *FakeOmniRoute {
 			data = append(data, map[string]any{"id": id, "object": "model"})
 		}
 		json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
+	})
+	mux.HandleFunc("/v1/explain/routing", func(w http.ResponseWriter, r *http.Request) {
+		// Every other optional field on this fake is read live, at request
+		// time, so a test can set it any time before the request it affects —
+		// see CatalogIDs below. This route was first registered only when the
+		// field was already non-empty at construction, which meant setting
+		// it right after NewFakeOmniRoute (the natural, and every other
+		// field's, calling convention) silently did nothing.
+		f.mu.Lock()
+		configured := f.RoutingQuality
+		f.mu.Unlock()
+		if len(configured) == 0 {
+			// No data configured reads the same as "this OmniRoute instance
+			// predates the endpoint" — a plain 404, matching the real server.
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		f.recordAuth(r)
+		if !f.authOK(r) {
+			f.writeAuthError(w, r)
+			return
+		}
+		quality := make([]map[string]any, 0, len(configured))
+		for _, spec := range configured {
+			parts := strings.SplitN(spec, ":", 2)
+			providerModel, class := parts[0], "healthy"
+			if len(parts) == 2 {
+				class = parts[1]
+			}
+			pm := strings.SplitN(providerModel, "/", 2)
+			provider, model := pm[0], ""
+			if len(pm) == 2 {
+				model = pm[1]
+			}
+			quality = append(quality, map[string]any{
+				"provider": provider, "model": model, "classification": class,
+				"operational": 0.8, "confidence": 0.9, "samples": 20,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"object": "routing_explain", "events": []any{}, "quality": quality,
+		})
 	})
 	mux.HandleFunc("/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		f.recordAuth(r)
