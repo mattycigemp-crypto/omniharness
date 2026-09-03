@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"omniharness/internal/memory"
+	"omniharness/internal/session"
 )
 
 func newTestRegistry(t *testing.T, root string) *Registry {
@@ -380,5 +383,110 @@ func TestWorkspaceRootBehindASymlinkStillWorks(t *testing.T) {
 	}
 	if _, err := n.resolvePath(map[string]any{"path": "../outside.txt"}); err == nil {
 		t.Error("traversal out of the workspace must still be refused")
+	}
+}
+
+// With no Memory configured, "remember" must not appear at all — an agent
+// should never see a tool call that can only fail.
+func TestRememberToolAbsentWithNoMemoryConfigured(t *testing.T) {
+	r := newTestRegistry(t, t.TempDir())
+	if _, ok := r.Get("remember"); ok {
+		t.Fatal(`"remember" is registered despite no Memory being configured`)
+	}
+}
+
+func TestRememberToolRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	n := NewNative(dir)
+	n.Memory = memory.Project(store)
+	r := NewRegistry()
+	if err := n.Register(r); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := mustTool(t, r, "remember")
+	res, err := tool.Run(context.Background(), map[string]any{
+		"kind": "test-setup", "content": "run with -tags=integration",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "test-setup") {
+		t.Errorf("output = %q, want it to confirm the kind", res.Output)
+	}
+
+	content, found, err := n.Memory.Recall(dir, "test-setup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || content != "run with -tags=integration" {
+		t.Fatalf("recall = %q, %v, want the remembered content", content, found)
+	}
+}
+
+func TestRememberToolRequiresKindAndContent(t *testing.T) {
+	dir := t.TempDir()
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	n := NewNative(dir)
+	n.Memory = memory.Project(store)
+	r := NewRegistry()
+	if err := n.Register(r); err != nil {
+		t.Fatal(err)
+	}
+	tool := mustTool(t, r, "remember")
+
+	for _, args := range []map[string]any{
+		{"kind": "", "content": "something"},
+		{"kind": "something", "content": ""},
+		{},
+	} {
+		if _, err := tool.Run(context.Background(), args); err == nil {
+			t.Errorf("args %+v: expected an error for a missing kind or content", args)
+		}
+	}
+}
+
+// Reusing a kind overwrites its previous content — the tool description
+// says so explicitly, and this pins that the store actually behaves that
+// way rather than silently keeping the first write.
+func TestRememberToolReusingAKindOverwrites(t *testing.T) {
+	dir := t.TempDir()
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	n := NewNative(dir)
+	n.Memory = memory.Project(store)
+	r := NewRegistry()
+	if err := n.Register(r); err != nil {
+		t.Fatal(err)
+	}
+	tool := mustTool(t, r, "remember")
+
+	if _, err := tool.Run(context.Background(), map[string]any{"kind": "note", "content": "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"kind": "note", "content": "second"}); err != nil {
+		t.Fatal(err)
+	}
+	content, found, err := n.Memory.Recall(dir, "note")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || content != "second" {
+		t.Fatalf("recall = %q, %v, want the second write to have replaced the first", content, found)
 	}
 }

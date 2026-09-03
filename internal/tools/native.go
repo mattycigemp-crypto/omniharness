@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"omniharness/internal/envguard"
+	"omniharness/internal/memory"
 )
 
 // Native bundles the built-in filesystem, search, shell, git and process
@@ -26,6 +27,10 @@ type Native struct {
 	DefaultShellTimeout time.Duration
 	// MaxOutput caps tool output sizes.
 	MaxOutput int
+	// Memory backs the "remember" tool. Nil omits that tool from
+	// registration entirely, rather than registering one that always fails —
+	// an agent should never see a tool it cannot possibly use.
+	Memory *memory.ProjectMemories
 }
 
 // NewNative returns a Native with sane caps.
@@ -94,12 +99,33 @@ func (n *Native) Register(r *Registry) error {
 			"pid": map[string]any{"type": "integer", "description": "process id"},
 		}), n.processKill),
 	}
+	if n.Memory != nil {
+		tools = append(tools, n.tool("remember",
+			"Save a durable note about this project — a convention, a gotcha, a decision — for future tasks in this workspace. Recalled automatically into every agent's instructions; use it sparingly, for things worth knowing next time, not routine progress notes. kind is a slot: remembering again with the same kind overwrites what was there, so use a specific kind per distinct fact (e.g. \"test-setup\", \"known-issue-flaky-ci\") rather than one generic kind for everything.",
+			RiskLow, schema(map[string]any{
+				"kind":    map[string]any{"type": "string", "description": "short, specific slot name, e.g. \"test-setup\" or \"known-issue-flaky-ci\" — reusing a kind replaces its old content"},
+				"content": map[string]any{"type": "string", "description": "what to remember, in one or two sentences"},
+			}), n.remember))
+	}
 	for _, t := range tools {
 		if err := r.Register(t); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (n *Native) remember(ctx context.Context, in map[string]any) (Result, error) {
+	kind, _ := in["kind"].(string)
+	content, _ := in["content"].(string)
+	kind, content = strings.TrimSpace(kind), strings.TrimSpace(content)
+	if kind == "" || content == "" {
+		return Result{}, fmt.Errorf("remember requires both kind and content")
+	}
+	if err := n.Memory.Remember(n.WorkspaceRoot, kind, content); err != nil {
+		return Result{}, err
+	}
+	return Result{Output: fmt.Sprintf("remembered (%s): %s", kind, content)}, nil
 }
 
 func schema(props map[string]any) map[string]any {

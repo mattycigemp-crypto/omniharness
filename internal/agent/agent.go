@@ -140,6 +140,11 @@ type Deps struct {
 	Roles         map[Role]RoleConfig
 	Workspace     string
 	MaxIterations int // tool-call loop iterations per agent (0 = 100)
+	// ProjectInstructions are durable notes recalled from project memory
+	// (see memory.ProjectMemories) — conventions, gotchas, decisions an
+	// earlier task remembered about this workspace. Composed into every
+	// model call's system prompt; nil means nothing has been remembered yet.
+	ProjectInstructions []string
 	// Budget bounds the task's total consumption. It is shared by every agent
 	// working on the task, because the limits are task-wide: "total tokens
 	// across all agents" is not a per-agent allowance. Nil means unlimited.
@@ -466,7 +471,7 @@ func (a *Agent) callModel(ctx context.Context, toolSpecs []gateway.ToolSpec, rol
 		Spec:                a.Spec,
 		Profile:             a.Profile,
 		SystemPrompt:        roleCfg.Prompt,
-		ProjectInstructions: nil,
+		ProjectInstructions: a.deps.ProjectInstructions,
 		History:             toContextMessages(a.Transcript),
 		Summary:             a.Summary,
 	}

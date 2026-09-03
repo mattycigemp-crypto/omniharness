@@ -106,8 +106,12 @@ func New(cfg config.Config, opts Options) (*Runtime, error) {
 	// Applies before any tool can spawn a subprocess.
 	envguard.Configure(cfg.Policy.SecretEnv)
 
+	projectMemory := memory.Project(store)
+
 	reg := tools.NewRegistry()
-	if err := tools.NewNative(workspace).Register(reg); err != nil {
+	native := tools.NewNative(workspace)
+	native.Memory = projectMemory
+	if err := native.Register(reg); err != nil {
 		return nil, fmt.Errorf("register native tools: %w", err)
 	}
 
@@ -175,6 +179,7 @@ func New(cfg config.Config, opts Options) (*Runtime, error) {
 		Composer:       r.Composer,
 		Workspace:      workspace,
 		Advisor:        advisor,
+		Memory:         projectMemory,
 		MaxConcurrency: cfg.Budgets.MaxAgents,
 		MaxTaskRepairs: cfg.Budgets.MaxRepairCycl,
 	})
