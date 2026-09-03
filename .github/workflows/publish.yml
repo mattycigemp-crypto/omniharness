@@ -107,3 +107,61 @@ jobs:
           gh release create "v$VERSION" dist/* \
             --title "v$VERSION" \
             --notes-file /tmp/notes.md
+
+  # A failed release used to be silent. The steps above are ordered so a
+  # failure leaves the two channels agreeing — npm publishes before the tag, so
+  # a late failure means binaries are unattached rather than the two disagreeing
+  # about what shipped — but somebody still has to know it happened, and nobody
+  # watches a green repository.
+  #
+  # This opens an issue rather than sending mail directly. It needs no SMTP
+  # credentials and no secrets beyond the token the workflow already has, it
+  # leaves a durable record of which release failed and where, and GitHub's own
+  # notification routing turns it into email for whoever is watching the repo.
+  notify-failure:
+    name: notify on a failed release
+    needs: publish
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update a release-failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          title="Release failed on ${SHA:0:7}"
+          body=$(printf '%s\n' \
+            "The publish workflow failed. Whatever is on npm and on the releases page may" \
+            "now disagree with main." \
+            "" \
+            "- run: $RUN_URL" \
+            "- commit: $REPO@${SHA:0:7}" \
+            "" \
+            "Worth checking in this order, because the steps run in this order:" \
+            "" \
+            "1. \`npm view omniharness-cli version\` — did npm publish?" \
+            "2. \`gh release view\` — is there a tag, and are the six binaries attached?" \
+            "3. If npm published and the release did not, the binaries are missing rather" \
+            "   than wrong; re-running the workflow from the Actions tab is safe." \
+            "" \
+            "Opened automatically. Closing it does not fix anything.")
+          # One open issue per failure mode rather than one per push: a broken
+          # release usually breaks the next few pushes too, and a wall of
+          # identical issues is how a notification stops being read.
+          existing=$(gh issue list --repo "$REPO" --state open --label release-failure \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "$body"
+            echo "commented on #$existing"
+          else
+            gh issue create --repo "$REPO" --title "$title" --body "$body" \
+              --label release-failure || \
+            gh issue create --repo "$REPO" --title "$title" --body "$body"
+            echo "opened a new issue"
+          fi
