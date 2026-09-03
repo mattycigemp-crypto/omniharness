@@ -1,0 +1,34 @@
+name: Feature request
+description: Something the harness should do and does not
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: >
+        The situation, not the solution. What you were doing when you wanted this
+        matters more than the shape you imagine it taking — it usually turns out
+        there is a better shape.
+      placeholder: |
+        I run the same review prompt across several repos and paste it in each time.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you had in mind
+      description: If you have a shape in mind, describe it. Skip this if you do not.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: >
+        Including anything that nearly worked. Several existing features started as
+        somebody explaining the workaround they had settled for.
+    validations:
+      required: false
