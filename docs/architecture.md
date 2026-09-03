@@ -279,7 +279,15 @@ endpoint that misbehaves.
   (`[task] deep_analysis`, default `false`) so no existing install's spend
   changes on upgrade. Every failure path — no gateway configured, a model
   error, unparseable output — falls back to the Profile the pure analyzer
-  already produced.
+  already produced. The criteria are consumed in two places: the composed
+  system prompt carries them to every role (the implementer works toward
+  them; a reviewer on a verify step checks against them), and an
+  `acceptance-criteria` evaluator records them into the verification record.
+  That evaluator never returns Pass or Fail — whether prose criteria are met
+  is not something it can measure from a string, and matching keywords would
+  manufacture a verdict rather than report one — so it reports NEEDS_REVIEW
+  and names them, the same way a required verification with no matching
+  evaluator is recorded rather than silently treated as verified.
 - **Two heuristic signals that were computed and silently discarded are now
   wired in.** `Profile.Ambiguity` forces `plan-implement-verify` regardless
   of complexity (`internal/strategy/strategy.go`) — a short, vague request
