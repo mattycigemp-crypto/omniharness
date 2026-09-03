@@ -1,0 +1,80 @@
+name: Bug report
+description: Something behaves differently from what it says it does
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is a security issue — anything that escapes the workspace, leaks a
+        credential, or gets past the approval gate — please use
+        [private reporting](https://github.com/shipking-ai/omniharness/security/advisories/new)
+        instead of an issue.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what it did, and what you expected instead.
+      placeholder: |
+        Ran `omniharness run "..."` in a repo on an external drive.
+        Every file read was refused as outside the workspace root.
+        Expected it to read files in the directory I was standing in.
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `omniharness doctor`
+      description: >
+        This answers most of the questions we would otherwise have to ask. It prints
+        no credential material — the API key appears masked to its last four
+        characters, or as "not set".
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`omniharness --version`, and `omniharness-cli` from `npm ls -g` if the terminal UI is involved."
+      placeholder: omniharness 0.1.85 (4ad4983)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Platform
+      description: >
+        Worth asking rather than guessing. Path handling, symlink resolution and
+        process termination all differ, and confinement was broken on macOS for
+        several releases while working fine on Linux.
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+        - Windows
+        - Other / more than one
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal
+      description: Only if it is a display problem — which terminal, and the window size if it matters.
+      placeholder: Windows Terminal, 120x30, happens after maximising then restoring
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: >
+        A failing test is the most useful thing you can attach. Config is welcome
+        too — please remove `api_key` first.
+    validations:
+      required: false

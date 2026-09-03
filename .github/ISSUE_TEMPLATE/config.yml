@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security issue
+    url: https://github.com/shipking-ai/omniharness/security/advisories/new
+    about: Anything exploitable — workspace escape, credential leak, a way past the approval gate. Reported privately.
+  - name: OmniRoute itself
+    url: https://github.com/diegosouzapw/OmniRoute/issues
+    about: Routing, providers, model catalog or gateway behaviour. Not the harness.
