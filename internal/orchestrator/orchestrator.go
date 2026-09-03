@@ -53,6 +53,10 @@ type Deps struct {
 	// Advisor is performance memory; when non-nil its empirical records feed
 	// strategy and model selection with explainable reasons.
 	Advisor *memory.Advisor
+	// Memory is durable project memory — notes an agent chose to remember
+	// about this workspace (see the "remember" tool), recalled into every
+	// agent's system prompt. Nil means nothing is recalled or rememberable.
+	Memory *memory.ProjectMemories
 	// MaxConcurrency caps simultaneous agents (default 4).
 	MaxConcurrency int
 	// MaxTaskRepairs caps task-level repair cycles (default 3).
@@ -298,6 +302,26 @@ func (o *Orchestrator) requestTaskApproval(ctx context.Context, t *task.Task) (g
 	return decision == policy.Allow, nil
 }
 
+// recallProjectInstructions loads every note an earlier task chose to
+// remember about this workspace (see the "remember" tool) and formats them
+// for composer.Input.ProjectInstructions. No Memory configured, an empty
+// store, or a read error all resolve to nil — recall is best-effort, never
+// a reason to fail a task or block on a slow store.
+func (o *Orchestrator) recallProjectInstructions() []string {
+	if o.deps.Memory == nil {
+		return nil
+	}
+	rows, err := o.deps.Memory.RecallAll(o.deps.Workspace)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, fmt.Sprintf("[%s] %s", m.Kind, m.Content))
+	}
+	return out
+}
+
 func (o *Orchestrator) selectStrategy(t *task.Task) (strategy.Plan, error) {
 	in := strategy.Input{
 		Profile: t.Profile,
@@ -479,16 +503,17 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task.Task, role agent.Ro
 		spec.Prompt = spec.Prompt + "\n\n[Repair instructions] " + extra
 	}
 	deps := agent.Deps{
-		Bus:       o.deps.Bus,
-		Store:     o.deps.Store,
-		Gateway:   o.deps.Gateway,
-		ModelSel:  o.deps.ModelSel,
-		Tools:     o.deps.Tools,
-		Policy:    o.deps.Policy,
-		Composer:  o.deps.Composer,
-		Roles:     o.deps.Roles,
-		Workspace: o.deps.Workspace,
-		Budget:    budgets,
+		Bus:                 o.deps.Bus,
+		Store:               o.deps.Store,
+		Gateway:             o.deps.Gateway,
+		ModelSel:            o.deps.ModelSel,
+		Tools:               o.deps.Tools,
+		Policy:              o.deps.Policy,
+		Composer:            o.deps.Composer,
+		Roles:               o.deps.Roles,
+		Workspace:           o.deps.Workspace,
+		Budget:              budgets,
+		ProjectInstructions: o.recallProjectInstructions(),
 	}
 	ag := agent.New(deps, t.SessionID, t.ID, role, modelRef, spec, t.Profile)
 	if err := ag.Run(ctx); err != nil {

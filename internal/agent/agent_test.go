@@ -296,3 +296,24 @@ func TestAgentToolArgumentsDecoded(t *testing.T) {
 		t.Fatal("tool observation missing from transcript")
 	}
 }
+
+// A role's ToolAllow is a hardcoded list, not derived from the tool
+// registry — adding a new native tool does nothing for a role until that
+// role's list names it explicitly. "remember" was added as a tool without
+// updating any role's list, which silently denied every call to it (an
+// error observation the model saw, not a task failure) until this was
+// caught. Pinned here so a future tool cannot go dark the same way for
+// every role at once.
+func TestEveryDefaultRoleCanRemember(t *testing.T) {
+	for role, cfg := range DefaultRoles() {
+		found := false
+		for _, name := range cfg.ToolAllow {
+			if name == "remember" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("role %s cannot call \"remember\": %v", role, cfg.ToolAllow)
+		}
+	}
+}

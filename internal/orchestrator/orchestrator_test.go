@@ -16,6 +16,7 @@ import (
 	"omniharness/internal/evaluate"
 	"omniharness/internal/event"
 	"omniharness/internal/gateway"
+	"omniharness/internal/memory"
 	"omniharness/internal/model"
 	"omniharness/internal/policy"
 	"omniharness/internal/repair"
@@ -834,5 +835,113 @@ func TestHighRiskTaskFailsWhenNoApproverIsConnected(t *testing.T) {
 	}
 	if fake.RequestCount() != 0 {
 		t.Fatalf("chat requests = %d, want 0 — nothing should run without a decision", fake.RequestCount())
+	}
+}
+
+// A note already in project memory before the task starts must reach the
+// composed system prompt — proven by reading it back out of the request the
+// fake gateway actually received, not by inspecting internal state.
+func TestProjectMemoryReachesTheSystemPrompt(t *testing.T) {
+	dir := t.TempDir()
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.PutMemory(dir, "convention", "use tabs, not spaces"); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "done"})
+	o, _, _ := newOrchestrator(t, fake, dir)
+	o.deps.Memory = memory.Project(store)
+
+	if _, err := runTask(t, o, "s1", task.Spec{Prompt: "Fix the typo in README.md.", CWD: dir}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := fake.LastRequest()
+	if req == nil || len(req.Messages) == 0 {
+		t.Fatal("no chat request captured")
+	}
+	sys := req.Messages[0].Content
+	if !strings.Contains(sys, "use tabs, not spaces") {
+		t.Errorf("system prompt did not carry the remembered note: %q", sys)
+	}
+}
+
+// With no Memory configured (the default fixture), the system prompt must
+// carry no PROJECT INSTRUCTIONS section at all — recall is opt-in.
+func TestNoMemoryConfiguredMeansNoProjectInstructions(t *testing.T) {
+	dir := t.TempDir()
+	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "done"})
+	o, _, _ := newOrchestrator(t, fake, dir)
+
+	if _, err := runTask(t, o, "s1", task.Spec{Prompt: "Fix the typo in README.md.", CWD: dir}); err != nil {
+		t.Fatal(err)
+	}
+	req := fake.LastRequest()
+	if req == nil || len(req.Messages) == 0 {
+		t.Fatal("no chat request captured")
+	}
+	if strings.Contains(req.Messages[0].Content, "PROJECT INSTRUCTIONS") {
+		t.Errorf("system prompt carries PROJECT INSTRUCTIONS with no Memory configured: %q", req.Messages[0].Content)
+	}
+}
+
+// End to end: an agent remembers something via the "remember" tool during
+// one task, and a later task in the same workspace recalls it in its
+// system prompt — the actual write-then-read loop the whole feature exists
+// for, not just each half tested in isolation.
+func TestRememberedFactSurvivesToTheNextTask(t *testing.T) {
+	dir := t.TempDir()
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	projectMemory := memory.Project(store)
+
+	fake := testutil.NewFakeOmniRoute(t,
+		testutil.FakeStep{ToolCalls: []gateway.ToolCall{
+			testutil.ToolCall("c1", "remember", `{"kind":"test-setup","content":"run with -tags=integration"}`),
+		}},
+		testutil.FakeStep{Content: "noted"},
+	)
+	o, _, _ := newOrchestrator(t, fake, dir)
+	o.deps.Memory = projectMemory
+	nativeReg := tools.NewRegistry()
+	native := tools.NewNative(dir)
+	native.Memory = projectMemory
+	if err := native.Register(nativeReg); err != nil {
+		t.Fatal(err)
+	}
+	o.deps.Tools = nativeReg
+
+	// Reuses the exact prompt TestDirectStrategyRunsSingleAgent pins to a
+	// single-agent Direct strategy — this test is about the tool call and
+	// the memory round trip, not strategy selection, so it needs a strategy
+	// guaranteed not to split the two scripted responses across agents that
+	// race for them.
+	if _, err := runTask(t, o, "s1", task.Spec{Prompt: "Fix the typo in README.md.", CWD: dir}); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := projectMemory.Recall(dir, "test-setup"); !found {
+		t.Fatal("the remember tool call did not persist to project memory")
+	}
+
+	// A second, independent task in the same workspace must recall it.
+	fake2 := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "done"})
+	o2, _, _ := newOrchestrator(t, fake2, dir)
+	o2.deps.Memory = projectMemory
+	if _, err := runTask(t, o2, "s2", task.Spec{Prompt: "Fix the typo in README.md.", CWD: dir}); err != nil {
+		t.Fatal(err)
+	}
+	req := fake2.LastRequest()
+	if req == nil || len(req.Messages) == 0 {
+		t.Fatal("no chat request captured")
+	}
+	if !strings.Contains(req.Messages[0].Content, "run with -tags=integration") {
+		t.Errorf("second task's system prompt did not carry the first task's remembered note: %q", req.Messages[0].Content)
 	}
 }
