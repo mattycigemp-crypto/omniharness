@@ -6,7 +6,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"omniharness/internal/combo"
 	"omniharness/internal/event"
 	"omniharness/internal/version"
 )
@@ -417,5 +416,3 @@ func formatDurationMS(ms int64) string {
 		return fmt.Sprintf("%dm%02ds", ms/60000, (ms%60000)/1000)
 	}
 }
-
-var _ = combo.Describe
