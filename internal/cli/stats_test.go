@@ -29,9 +29,9 @@ func seedRuns(t *testing.T, store *session.Store) {
 	// Latencies that do not divide evenly: the average is the figure that
 	// used to make the whole model breakdown fail to scan.
 	calls := []session.ModelCall{
-		{ID: "m1", SessionID: "s1", Model: "openai/gpt-5", TokensIn: 100, TokensOut: 20, CostUSD: 0.10, LatencyMS: 200, Status: "ok"},
-		{ID: "m2", SessionID: "s1", Model: "openai/gpt-5", TokensIn: 50, TokensOut: 10, CostUSD: 0.05, LatencyMS: 401, Status: "failed"},
-		{ID: "m3", SessionID: "s1", Model: "anthropic/claude", TokensIn: 10, TokensOut: 1, CostUSD: 0.90, LatencyMS: 100, Status: "ok"},
+		{ID: "m1", SessionID: "s1", TaskID: "task-1", Model: "openai/gpt-5", TokensIn: 100, TokensOut: 20, CostUSD: 0.10, LatencyMS: 200, Status: "ok"},
+		{ID: "m2", SessionID: "s1", TaskID: "task-1", Model: "openai/gpt-5", TokensIn: 50, TokensOut: 10, CostUSD: 0.05, LatencyMS: 401, Status: "failed"},
+		{ID: "m3", SessionID: "s1", TaskID: "task-1", Model: "anthropic/claude", TokensIn: 10, TokensOut: 1, CostUSD: 0.90, LatencyMS: 100, Status: "ok"},
 	}
 	for i := range calls {
 		if err := store.RecordModelCall(&calls[i]); err != nil {
@@ -48,7 +48,7 @@ func seedRuns(t *testing.T, store *session.Store) {
 			t.Fatalf("record tool call: %v", err)
 		}
 	}
-	if err := store.CreateTask(&task.Task{ID: "task-1", SessionID: "s1", Status: task.StatusCompleted, Repairs: 1}); err != nil {
+	if err := store.CreateTask(&task.Task{ID: "task-1", SessionID: "s1", Strategy: "direct", Status: task.StatusCompleted, Repairs: 1}); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 }
@@ -69,6 +69,13 @@ func TestCollectStatsReadsAllThreeViews(t *testing.T) {
 	}
 	if len(r.Tools) != 2 {
 		t.Fatalf("got %d tools, want 2", len(r.Tools))
+	}
+	if len(r.Strategies) != 1 || r.Strategies[0].Strategy != "direct" {
+		t.Fatalf("strategies = %+v, want one row for %q", r.Strategies, "direct")
+	}
+	// The task's 3 model calls must count as one run, not three.
+	if r.Strategies[0].Runs != 1 {
+		t.Errorf("direct Runs = %d, want 1 (one task, three of its own model calls)", r.Strategies[0].Runs)
 	}
 	// Costliest first, so the row worth acting on leads.
 	if r.Models[0].Model != "anthropic/claude" {
@@ -118,6 +125,7 @@ func TestPrintStatsRendersEveryBreakdown(t *testing.T) {
 		"1 session, 1 task (1 completed, 0 failed), 1 repair",
 		"BY MODEL", "openai/gpt-5", "anthropic/claude",
 		"BY TOOL", "read_file", "shell",
+		"BY STRATEGY", "direct",
 		"$1.0500", // the totals line
 	} {
 		if !strings.Contains(out, want) {
@@ -146,7 +154,7 @@ func TestPrintStatsOnAnEmptyStore(t *testing.T) {
 	if got != "no runs recorded yet" {
 		t.Errorf("empty store printed %q, want a plain line saying nothing has run", got)
 	}
-	if strings.Contains(got, "BY MODEL") {
+	if strings.Contains(got, "BY MODEL") || strings.Contains(got, "BY STRATEGY") {
 		t.Error("empty headers must not be printed")
 	}
 }
@@ -164,14 +172,15 @@ func TestStatsJSONCarriesTheNumbersWithoutParsingColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 	var back struct {
-		Totals telemetry.GlobalMetrics `json:"totals"`
-		Models []telemetry.ModelStats  `json:"models"`
-		Tools  []telemetry.ToolStats   `json:"tools"`
+		Totals     telemetry.GlobalMetrics   `json:"totals"`
+		Models     []telemetry.ModelStats    `json:"models"`
+		Tools      []telemetry.ToolStats     `json:"tools"`
+		Strategies []telemetry.StrategyStats `json:"strategies"`
 	}
 	if err := json.Unmarshal(b, &back); err != nil {
 		t.Fatalf("the --json output must round-trip: %v", err)
 	}
-	if back.Totals.ModelCalls != 3 || len(back.Models) != 2 || len(back.Tools) != 2 {
+	if back.Totals.ModelCalls != 3 || len(back.Models) != 2 || len(back.Tools) != 2 || len(back.Strategies) != 1 {
 		t.Errorf("round-tripped report = %+v", back)
 	}
 }

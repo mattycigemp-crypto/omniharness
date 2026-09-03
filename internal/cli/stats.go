@@ -16,9 +16,10 @@ import (
 // not a rendering of the table below, so a script does not have to parse
 // columns to get at the numbers.
 type statsReport struct {
-	Totals telemetry.GlobalMetrics `json:"totals"`
-	Models []telemetry.ModelStats  `json:"models"`
-	Tools  []telemetry.ToolStats   `json:"tools"`
+	Totals     telemetry.GlobalMetrics    `json:"totals"`
+	Models     []telemetry.ModelStats     `json:"models"`
+	Tools      []telemetry.ToolStats      `json:"tools"`
+	Strategies []telemetry.StrategyStats  `json:"strategies"`
 }
 
 func newStatsCmd() *cobra.Command {
@@ -73,6 +74,9 @@ func collectStats(store *session.Store) (statsReport, error) {
 	if r.Tools, err = telemetry.ByTool(store); err != nil {
 		return r, fmt.Errorf("read tool breakdown: %w", err)
 	}
+	if r.Strategies, err = telemetry.ByStrategy(store); err != nil {
+		return r, fmt.Errorf("read strategy breakdown: %w", err)
+	}
 	return r, nil
 }
 
@@ -107,6 +111,19 @@ func printStats(out io.Writer, r statsReport) {
 		fmt.Fprintln(w, "TOOL\tCALLS\tFAILED\tDENIED")
 		for _, tl := range r.Tools {
 			fmt.Fprintf(w, "%s\t%d\t%d\t%d\n", tl.Tool, tl.Calls, tl.Failed, tl.Denied)
+		}
+		_ = w.Flush()
+	}
+
+	// This is the same data memory.Advisor uses internally to decide whether
+	// a strategy is underperforming enough to override — printed here so
+	// that decision is checkable, not just trusted.
+	if len(r.Strategies) > 0 {
+		fmt.Fprintln(out, "\nBY STRATEGY")
+		w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(w, "STRATEGY\tRUNS\tFAILED\tREPAIRS\tCOST")
+		for _, ss := range r.Strategies {
+			fmt.Fprintf(w, "%s\t%d\t%d\t%d\t$%.4f\n", ss.Strategy, ss.Runs, ss.Failed, ss.Repairs, ss.CostUSD)
 		}
 		_ = w.Flush()
 	}

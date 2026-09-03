@@ -113,35 +113,70 @@ func (a *Advisor) modelReason(cands []Candidate, best Candidate) string {
 }
 
 // modelStats aggregates one model's outcomes across recorded tasks.
+//
+// A task that calls the same model several times (multiple agent turns, a
+// multi-step strategy, a repair cycle) joins model_calls to tasks once per
+// call, not once per task. runs/successes/repairs are task-level facts —
+// counting or summing them straight over that join let a single task with
+// several calls outvote every single-call task, and let SuccessRate exceed
+// 100% outright (a 3-call task, once "completed", added 3 to successes
+// against a runs count that itself only used DISTINCT task_id). They are
+// computed here from a derived table of distinct tasks instead. Latency and
+// cost are genuinely call-level questions — "what does one more call to
+// this model typically cost" — so those two stay averaged over every call,
+// deliberately not deduplicated by task.
 func (a *Advisor) modelStats(model string) (runs, successes int, repairs float64, latencyMS int64, costUSD float64, err error) {
-	row := a.Store.DB().QueryRow(`
-		SELECT COUNT(DISTINCT mc.task_id),
-		       COALESCE(SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END), 0),
-		       COALESCE(AVG(t.repairs), 0),
-		       COALESCE(AVG(mc.latency_ms), 0),
-		       COALESCE(AVG(mc.cost_usd), 0)
+	taskRow := a.Store.DB().QueryRow(`
+		SELECT COUNT(*),
+		       COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0),
+		       COALESCE(AVG(repairs), 0)
+		FROM (
+			SELECT DISTINCT t.id, t.status, t.repairs
+			FROM tasks t
+			JOIN model_calls mc ON mc.task_id = t.id
+			WHERE mc.model = ? AND t.status IN ('completed', 'failed')
+		)`, model)
+	if err := taskRow.Scan(&runs, &successes, &repairs); err != nil {
+		return 0, 0, 0, 0, 0, err
+	}
+
+	callRow := a.Store.DB().QueryRow(`
+		SELECT COALESCE(AVG(mc.latency_ms), 0), COALESCE(AVG(mc.cost_usd), 0)
 		FROM model_calls mc
 		JOIN tasks t ON t.id = mc.task_id
-		WHERE mc.model = ? AND t.status IN ('completed','failed')`, model)
-	if err := row.Scan(&runs, &successes, &repairs, &latencyMS, &costUSD); err != nil {
+		WHERE mc.model = ? AND t.status IN ('completed', 'failed')`, model)
+	if err := callRow.Scan(&latencyMS, &costUSD); err != nil {
 		return 0, 0, 0, 0, 0, err
 	}
 	return runs, successes, repairs, latencyMS, costUSD, nil
 }
 
 // StrategyPerformance aggregates recorded outcomes per strategy, keyed for
-// strategy.Input.History.
+// strategy.Input.History. Costed per task (a task's calls summed, then
+// averaged across the strategy's tasks) via a CTE that groups by task id
+// first — the same double-counting risk modelStats guards against: a
+// strategy where tasks average several model calls each must not have its
+// runs/successes/repairs inflated by call count, and AvgCostUSD here means
+// "typical total cost of a task run under this strategy," which is the
+// number worth comparing between strategies — not "cost of one call,"
+// which barely varies with strategy at all.
 func (a *Advisor) StrategyPerformance() (map[string]strategy.Performance, error) {
 	rows, err := a.Store.DB().Query(`
-		SELECT t.strategy,
+		WITH task_costs AS (
+			SELECT t.id AS task_id, t.strategy, t.status, t.repairs,
+			       COALESCE(SUM(mc.cost_usd), 0) AS cost
+			FROM tasks t
+			LEFT JOIN model_calls mc ON mc.task_id = t.id
+			WHERE t.strategy != '' AND t.status IN ('completed', 'failed')
+			GROUP BY t.id
+		)
+		SELECT strategy,
 		       COUNT(*),
-		       COALESCE(SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END), 0),
-		       COALESCE(AVG(t.repairs), 0),
-		       COALESCE(AVG(mc.cost_usd), 0)
-		FROM tasks t
-		JOIN model_calls mc ON mc.task_id = t.id
-		WHERE t.strategy != '' AND t.status IN ('completed','failed')
-		GROUP BY t.strategy`)
+		       COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0),
+		       COALESCE(AVG(repairs), 0),
+		       COALESCE(AVG(cost), 0)
+		FROM task_costs
+		GROUP BY strategy`)
 	if err != nil {
 		return nil, err
 	}
