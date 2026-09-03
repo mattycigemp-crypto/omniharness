@@ -615,3 +615,106 @@ func TestRequiredVerificationWithNoEvaluatorIsRecorded(t *testing.T) {
 		}
 	}
 }
+
+// With no DeepAnalyzer configured — the default newOrchestrator fixture,
+// and the state of every install until this is wired into config — a task
+// runs exactly as it always did: no extra model call, no AcceptanceCriteria.
+func TestNoDeepAnalyzerConfiguredLeavesTheProfileAlone(t *testing.T) {
+	dir := t.TempDir()
+	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "done"})
+	o, _, _ := newOrchestrator(t, fake, dir)
+
+	tsk, err := runTask(t, o, "s1", task.Spec{Prompt: "Maybe clean up the code somehow, whatever seems right.", CWD: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tsk.Profile.AcceptanceCriteria != nil {
+		t.Fatalf("AcceptanceCriteria = %v, want nil with no DeepAnalyzer configured", tsk.Profile.AcceptanceCriteria)
+	}
+}
+
+// A prompt stacking several vague-signal words scores >= 3 in
+// task.Analyzer's detectAmbiguity, forcing Ambiguity=HIGH regardless of
+// complexity — worth deepening either way. The deepening call's usage must
+// be charged to the task's own budget tracker and recorded in the store,
+// and its acceptance criteria must land on the task's final Profile.
+func TestDeepAnalyzerAddsAcceptanceCriteriaAndAccountsItsCost(t *testing.T) {
+	dir := t.TempDir()
+	// First scripted response answers the deepening call; the rest answer the
+	// implementer's own turn(s).
+	fake := testutil.NewFakeOmniRoute(t,
+		testutil.FakeStep{Content: `["the change compiles", "existing tests still pass"]`},
+		testutil.FakeStep{Content: "done"},
+	)
+	o, store, _ := newOrchestrator(t, fake, dir)
+	o.deps.DeepAnalyzer = &task.DeepAnalyzer{Gateway: fake.Client(), ModelSel: o.deps.ModelSel}
+
+	tsk, err := runTask(t, o, "s1", task.Spec{Prompt: "Maybe clean up the code somehow, whatever seems right.", CWD: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tsk.Status != task.StatusCompleted {
+		t.Fatalf("status = %s (%s)", tsk.Status, tsk.Error)
+	}
+	if len(tsk.Profile.AcceptanceCriteria) != 2 {
+		t.Fatalf("AcceptanceCriteria = %v, want 2 entries", tsk.Profile.AcceptanceCriteria)
+	}
+
+	calls, err := store.ModelCallsForTask(tsk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deepenCalls int
+	for _, c := range calls {
+		if c.AgentID == "deep-analyzer" {
+			deepenCalls++
+			if c.Status != "ok" || c.TokensIn == 0 {
+				t.Errorf("deep-analyzer call not recorded properly: %+v", c)
+			}
+		}
+	}
+	if deepenCalls != 1 {
+		t.Fatalf("deep-analyzer model calls recorded = %d, want 1", deepenCalls)
+	}
+}
+
+// The deepening call's usage must land in the same budget tracker the rest
+// of the task is held to, not a separate, unaccounted allowance. A budget
+// sized to exactly what the deepening call spends (the fake gateway always
+// reports 100 prompt + 50 completion tokens) must already read as exhausted
+// before the implementer's own turn — proven by that turn never happening.
+func TestDeepAnalyzerCostCountsAgainstTheTaskBudget(t *testing.T) {
+	dir := t.TempDir()
+	// The first (and only affordable) response spends the whole budget; the
+	// second must never actually be requested.
+	fake := testutil.NewFakeOmniRoute(t,
+		testutil.FakeStep{Content: `["a criterion"]`},
+		testutil.FakeStep{Content: "should never be reached"},
+	)
+	o, _, bus := newOrchestrator(t, fake, dir)
+	o.deps.DeepAnalyzer = &task.DeepAnalyzer{Gateway: fake.Client(), ModelSel: o.deps.ModelSel}
+
+	ch, cancel := bus.Subscribe(256)
+	defer cancel()
+
+	spec := task.Spec{Prompt: "Maybe clean up the code somehow, whatever seems right.", CWD: dir, Budget: budget.Budget{MaxTokens: 150}}
+	tsk, err := runTask(t, o, "s1", spec)
+	if err == nil && tsk.Status == task.StatusCompleted {
+		t.Fatal("a budget already exhausted by the deepening call must not let the task complete")
+	}
+	if fake.RequestCount() != 1 {
+		t.Fatalf("chat requests = %d, want exactly 1 (only the deepening call — the budget was already spent)", fake.RequestCount())
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case e := <-ch:
+			if e.Type == event.BudgetExceeded {
+				return
+			}
+		case <-deadline:
+			t.Fatal("the deepening call's cost never registered as exceeding the budget")
+		}
+	}
+}

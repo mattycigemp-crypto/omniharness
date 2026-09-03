@@ -40,11 +40,16 @@ type Deps struct {
 	Evaluators *evaluate.Registry
 	Repair     *repair.Engine
 	Analyzer   *task.Analyzer
-	Strategist strategy.Selector
-	Tools      *tools.Registry
-	Policy     *policy.Engine
-	Composer   *composer.Composer
-	Workspace  string
+	// DeepAnalyzer optionally deepens the pure Analyzer's Profile with a
+	// single model call (see task.DeepAnalyzer). Nil disables the pass
+	// entirely — every task then behaves exactly as before this field
+	// existed.
+	DeepAnalyzer *task.DeepAnalyzer
+	Strategist   strategy.Selector
+	Tools        *tools.Registry
+	Policy       *policy.Engine
+	Composer     *composer.Composer
+	Workspace    string
 	// Advisor is performance memory; when non-nil its empirical records feed
 	// strategy and model selection with explainable reasons.
 	Advisor *memory.Advisor
@@ -134,7 +139,12 @@ func (o *Orchestrator) Run(ctx context.Context, sessionID string, spec task.Spec
 		o.cancelMu.Unlock()
 	}()
 
-	if err := o.analyze(runCtx, tsk); err != nil {
+	// One tracker per task, shared by everything working on it — including
+	// the optional deepening pass below — so the limits are task-wide, not
+	// a per-agent allowance.
+	budgets := budget.NewTracker(tsk.Spec.Budget)
+
+	if err := o.analyze(runCtx, tsk, budgets); err != nil {
 		o.fail(tsk, err)
 		return tsk, err
 	}
@@ -151,9 +161,6 @@ func (o *Orchestrator) Run(ctx context.Context, sessionID string, spec task.Spec
 	})
 
 	artifacts := &sync.Map{}
-	// One tracker per task, shared by every agent working on it: the limits are
-	// task-wide, not a per-agent allowance.
-	budgets := budget.NewTracker(tsk.Spec.Budget)
 	outputs, planErr := o.executePlan(runCtx, tsk, plan, artifacts, budgets)
 	if runCtx.Err() != nil {
 		tsk.Status = task.StatusCancelled
@@ -208,16 +215,50 @@ func (o *Orchestrator) loadOrCreateTask(sessionID string, spec task.Spec, taskID
 	return tsk, nil
 }
 
-func (o *Orchestrator) analyze(ctx context.Context, t *task.Task) error {
+func (o *Orchestrator) analyze(ctx context.Context, t *task.Task, budgets *budget.Tracker) error {
 	if t.Profile.Complexity != "" {
 		return nil // already analyzed (resume)
 	}
 	t.Profile = o.deps.Analyzer.Analyze(t.Spec)
+	o.deepen(ctx, t, budgets)
 	if err := o.deps.Store.UpdateTask(t); err != nil {
 		return err
 	}
 	o.taskEvent(t, &event.TaskAnalyzedData{Profile: t.Profile})
 	return nil
+}
+
+// deepen runs the optional model-based deepening pass and folds its result
+// into t.Profile. Every failure mode — no DeepAnalyzer configured, a model
+// error, an unusable response — leaves t.Profile exactly as the pure
+// Analyzer produced it; deepening is best-effort and must never fail the
+// task. When a call is actually made, its cost is charged against budgets
+// and recorded in the store like any other model call, so it is never a
+// hidden cost.
+func (o *Orchestrator) deepen(ctx context.Context, t *task.Task, budgets *budget.Tracker) {
+	if o.deps.DeepAnalyzer == nil {
+		return
+	}
+	result, err := o.deps.DeepAnalyzer.Analyze(ctx, t.Spec, t.Profile)
+	if !result.Ran {
+		return
+	}
+	cost := model.EstimateCost(result.Model, result.TokensIn, result.TokensOut)
+	if budgets != nil {
+		budgets.AddTokens(result.TokensIn+result.TokensOut, cost)
+	}
+	provider, _ := gateway.SplitModel(result.Model)
+	status, errMsg := "ok", ""
+	if err != nil {
+		status, errMsg = "failed", err.Error()
+	}
+	_ = o.deps.Store.RecordModelCall(&session.ModelCall{
+		SessionID: t.SessionID, TaskID: t.ID, AgentID: "deep-analyzer",
+		Provider: provider, Model: result.Model,
+		TokensIn: result.TokensIn, TokensOut: result.TokensOut,
+		CostUSD: cost, Status: status, Error: errMsg,
+	})
+	t.Profile = result.Profile
 }
 
 func (o *Orchestrator) selectStrategy(t *task.Task) (strategy.Plan, error) {

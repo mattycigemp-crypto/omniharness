@@ -25,6 +25,7 @@ type Config struct {
 	Benchmark   Benchmark   `toml:"benchmark"`
 	Logging     Logging     `toml:"logging"`
 	MCP         MCP         `toml:"mcp"`
+	Task        Task        `toml:"task"`
 }
 
 // MCP configures Model Context Protocol servers to load as tools.
@@ -128,6 +129,18 @@ type Logging struct {
 	Format string `toml:"format,omitempty"` // text | json
 }
 
+// Task configures optional task-analysis behavior.
+type Task struct {
+	// DeepAnalysis turns on an optional model call, made after the free
+	// heuristic analysis and only for tasks its own signals already flag as
+	// non-trivial (see task.DeepAnalyzer), that produces concrete acceptance
+	// criteria grounded in the actual request. It spends real tokens on top
+	// of the task's own work, so it defaults off: an existing install
+	// upgrading to a version that has this feature sees no change in
+	// behavior or spend until it turns this on.
+	DeepAnalysis bool `toml:"deep_analysis"`
+}
+
 // Default returns the default configuration.
 func Default() Config {
 	home, _ := os.UserHomeDir()
@@ -195,6 +208,7 @@ func Default() Config {
 			Level:  "info",
 			Format: "text",
 		}, MCP: MCP{},
+		Task: Task{DeepAnalysis: false},
 	}
 }
 
