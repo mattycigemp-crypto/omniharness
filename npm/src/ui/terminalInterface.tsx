@@ -457,6 +457,13 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   }, []);
 
   useEffect(() => {
+    // The real fix for a resize storm (maximise/restore firing a burst of
+    // intermediate sizes) lives one layer down, in resizeDebounce.ts: it
+    // coalesces delivery of the raw 'resize' event on the stream itself,
+    // before Ink's own internal listener — which redraws unconditionally on
+    // every tick, independent of any component state — ever sees it. This
+    // handler can stay a plain listener because of that; by the time it
+    // fires, the event has already been coalesced upstream.
     const onResize = (): void => {
       setWidth(widthOf(stdout));
       setRows(rowsOf(stdout));
@@ -554,7 +561,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     return () => {
       if (kittyTimer) clearTimeout(kittyTimer);
       stdin?.off('data', onProbe);
-      stdout.off('resize', onResize);
+      stdout.off('resize', onResize); // resizeDebounce cancels the coalesced timer on .off itself
       const pendingApproval = approvalResolve.current;
       approvalResolve.current = null;
       pendingApproval?.({ approved: false });
