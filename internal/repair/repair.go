@@ -25,7 +25,7 @@ const (
 // Failure is a classified failure.
 type Failure struct {
 	Stage   Stage  `json:"stage"`
-	Kind    string `json:"kind"` // rate_limit | auth | network | server | build | test | evaluate | tool | timeout | budget | unknown
+	Kind    string `json:"kind"` // rate_limit | auth | network | server | build | test | evaluate | tool | timeout | budget | replan | unknown
 	Error   string `json:"error"`
 	Attempt int    `json:"attempt"` // 1-based
 	// Strategy is the strategy that produced the failure; repair may override
@@ -164,6 +164,25 @@ func (e *Engine) Plan(f Failure, attempt, maxAttempts int) (Plan, error) {
 		}, nil
 	case "persistence":
 		return Plan{Strategy: "persistence", SkipRepair: true, Changed: []string{"storage failure; cannot repair automatically"}}, nil
+	case "replan":
+		// Not a defect to diagnose — an agent doing the work reported that
+		// the current plan is smaller than what the task actually needs.
+		// This skips straight to a structural change rather than the
+		// debugger-first sequence build/test/evaluate failures get above:
+		// there is nothing to reproduce, only more structure to add.
+		exec := "plan-implement-verify"
+		switch f.Strategy {
+		case "direct", "swarm", "":
+			exec = "sequential"
+		case "sequential":
+			exec = "plan-implement-verify"
+		}
+		return Plan{
+			Strategy:          "agent-requested-replan",
+			ExecutionStrategy: exec,
+			ExtraInstructions: "An earlier step reported that this task needs more structure than initially planned: " + f.Error,
+			Changed:           []string{"restructured into " + exec + " execution based on the agent's own request", "reason: " + f.Error},
+		}, nil
 	default:
 		// Unknown: escalate with more capable model + reviewer.
 		switch attempt {

@@ -98,6 +98,11 @@ func (n *Native) Register(r *Registry) error {
 		n.tool("process_kill", "Terminate a process by PID.", RiskHigh, schema(map[string]any{
 			"pid": map[string]any{"type": "integer", "description": "process id"},
 		}), n.processKill),
+		n.tool("request_replan",
+			"Call this when you discover the task needs real structure the current plan doesn't have — not a bug, a scope change: the request turned out to need several distinct pieces of work, or touches something the plan never accounted for. Do not call it for routine difficulty, a failing test you can fix yourself, or anything you can just finish. This does not do the extra work itself; it tells the harness to restructure execution around what you found, once this step finishes.",
+			RiskLow, schema(map[string]any{
+				"reason": map[string]any{"type": "string", "description": "specifically what you found that the current plan does not account for"},
+			}), n.requestReplan),
 	}
 	if n.Memory != nil {
 		tools = append(tools, n.tool("remember",
@@ -113,6 +118,15 @@ func (n *Native) Register(r *Registry) error {
 		}
 	}
 	return nil
+}
+
+func (n *Native) requestReplan(ctx context.Context, in map[string]any) (Result, error) {
+	reason, _ := in["reason"].(string)
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return Result{}, fmt.Errorf("request_replan requires a reason")
+	}
+	return Result{Output: "replan requested: " + reason, Replan: true}, nil
 }
 
 func (n *Native) remember(ctx context.Context, in map[string]any) (Result, error) {

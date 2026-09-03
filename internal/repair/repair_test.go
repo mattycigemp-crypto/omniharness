@@ -3,6 +3,7 @@ package repair
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"omniharness/internal/gateway"
@@ -171,5 +172,48 @@ func TestBudgetClassificationWinsOverOtherSignals(t *testing.T) {
 	f := Classify(StageModel, errors.New("budget exceeded while running the tool that timed out"))
 	if f.Kind != "budget" {
 		t.Errorf("kind = %q, want budget; a terminal failure must not be retried", f.Kind)
+	}
+}
+
+// A "replan" failure is not a defect — nothing to reproduce — so it must
+// skip straight to a structural change on the very first attempt, unlike
+// build/test/evaluate which spend attempts 1-2 on a debugger role first.
+func TestReplanSkipsStraightToRestructuring(t *testing.T) {
+	e := Engine{MaxAttempts: 4}
+	p, err := e.Plan(Failure{Kind: "replan", Error: "found two unrelated bugs", Strategy: "direct"}, 1, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.SkipRepair {
+		t.Fatal("SkipRepair = true, want a real restructuring plan")
+	}
+	if p.ExecutionStrategy != "sequential" {
+		t.Fatalf("direct → replan should escalate to sequential, got %q", p.ExecutionStrategy)
+	}
+	if !strings.Contains(p.ExtraInstructions, "found two unrelated bugs") {
+		t.Errorf("ExtraInstructions = %q, want it to carry the reason", p.ExtraInstructions)
+	}
+
+	p2, _ := e.Plan(Failure{Kind: "replan", Error: "x", Strategy: "sequential"}, 1, 4)
+	if p2.ExecutionStrategy != "plan-implement-verify" {
+		t.Fatalf("sequential → replan should escalate to plan-implement-verify, got %q", p2.ExecutionStrategy)
+	}
+
+	p3, _ := e.Plan(Failure{Kind: "replan", Error: "x", Strategy: ""}, 1, 4)
+	if p3.ExecutionStrategy != "sequential" {
+		t.Fatalf("no prior strategy → replan should escalate to sequential, got %q", p3.ExecutionStrategy)
+	}
+}
+
+// A replan request is still bounded by the same repair-limit machinery as
+// every other failure kind — it must not be able to loop forever.
+func TestReplanRespectsTheRepairLimit(t *testing.T) {
+	e := Engine{MaxAttempts: 2}
+	p, err := e.Plan(Failure{Kind: "replan", Error: "x"}, 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.SkipRepair {
+		t.Fatalf("attempt at the limit must give up: %+v", p)
 	}
 }

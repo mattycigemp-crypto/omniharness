@@ -317,3 +317,75 @@ func TestEveryDefaultRoleCanRemember(t *testing.T) {
 		}
 	}
 }
+
+// The same regression class as TestEveryDefaultRoleCanRemember, for the
+// other tool that ships without needing a dependency wired up.
+func TestEveryDefaultRoleCanRequestReplan(t *testing.T) {
+	for role, cfg := range DefaultRoles() {
+		found := false
+		for _, name := range cfg.ToolAllow {
+			if name == "request_replan" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("role %s cannot call \"request_replan\": %v", role, cfg.ToolAllow)
+		}
+	}
+}
+
+func TestAgentRecordsAReplanRequest(t *testing.T) {
+	fake := testutil.NewFakeOmniRoute(t,
+		testutil.FakeStep{ToolCalls: []gateway.ToolCall{
+			testutil.ToolCall("call_1", "request_replan", `{"reason":"found two unrelated bugs, not one"}`),
+		}},
+		testutil.FakeStep{Content: "noted"},
+	)
+	deps := testDeps(t, fake, t.TempDir())
+	ag, err := runAgent(t, deps, task.Spec{Prompt: "fix the bug"}, RoleImplementer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ag.Status != task.StatusCompleted {
+		t.Fatalf("status = %s", ag.Status)
+	}
+	if got := ag.ReplanReason(); !strings.Contains(got, "found two unrelated bugs") {
+		t.Fatalf("ReplanReason() = %q, want it to carry the tool call's reason", got)
+	}
+}
+
+// The first request_replan call wins — a second one in the same run must
+// not silently overwrite the reason the orchestrator will act on.
+func TestAgentKeepsTheFirstReplanReason(t *testing.T) {
+	fake := testutil.NewFakeOmniRoute(t,
+		testutil.FakeStep{ToolCalls: []gateway.ToolCall{
+			testutil.ToolCall("call_1", "request_replan", `{"reason":"first reason"}`),
+		}},
+		testutil.FakeStep{ToolCalls: []gateway.ToolCall{
+			testutil.ToolCall("call_2", "request_replan", `{"reason":"second reason"}`),
+		}},
+		testutil.FakeStep{Content: "done"},
+	)
+	deps := testDeps(t, fake, t.TempDir())
+	ag, err := runAgent(t, deps, task.Spec{Prompt: "fix the bug"}, RoleImplementer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ag.ReplanReason(); got != "replan requested: first reason" {
+		t.Fatalf("ReplanReason() = %q, want the first request to have won", got)
+	}
+}
+
+// A normal run — no request_replan call anywhere — must report no reason at
+// all, not an empty-but-non-nil signal.
+func TestAgentWithNoReplanRequestHasNoReason(t *testing.T) {
+	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "done"})
+	deps := testDeps(t, fake, t.TempDir())
+	ag, err := runAgent(t, deps, task.Spec{Prompt: "fix the bug"}, RoleImplementer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ag.ReplanReason(); got != "" {
+		t.Fatalf("ReplanReason() = %q, want empty", got)
+	}
+}

@@ -386,6 +386,41 @@ func TestWorkspaceRootBehindASymlinkStillWorks(t *testing.T) {
 	}
 }
 
+// request_replan needs no dependency (unlike remember), so it is always
+// registered.
+func TestRequestReplanToolIsAlwaysRegistered(t *testing.T) {
+	r := newTestRegistry(t, t.TempDir())
+	if _, ok := r.Get("request_replan"); !ok {
+		t.Fatal(`"request_replan" was not registered`)
+	}
+}
+
+func TestRequestReplanRequiresAReason(t *testing.T) {
+	r := newTestRegistry(t, t.TempDir())
+	tool := mustTool(t, r, "request_replan")
+	if _, err := tool.Run(context.Background(), map[string]any{"reason": ""}); err == nil {
+		t.Fatal("expected an error for an empty reason")
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{}); err == nil {
+		t.Fatal("expected an error for a missing reason")
+	}
+}
+
+func TestRequestReplanMarksTheResult(t *testing.T) {
+	r := newTestRegistry(t, t.TempDir())
+	tool := mustTool(t, r, "request_replan")
+	res, err := tool.Run(context.Background(), map[string]any{"reason": "found a second, unrelated bug"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Replan {
+		t.Fatal("Replan = false, want true")
+	}
+	if !strings.Contains(res.Output, "found a second, unrelated bug") {
+		t.Errorf("output = %q, want it to echo the reason", res.Output)
+	}
+}
+
 // With no Memory configured, "remember" must not appear at all — an agent
 // should never see a tool call that can only fail.
 func TestRememberToolAbsentWithNoMemoryConfigured(t *testing.T) {

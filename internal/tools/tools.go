@@ -45,6 +45,12 @@ type Result struct {
 	Output string `json:"output"`
 	// Artifact marks outputs worth persisting (files produced, etc.).
 	Artifact bool `json:"artifact,omitempty"`
+	// Replan marks that this call is a request to restructure the task's
+	// execution — the agent that ran it has decided the current plan is too
+	// small for what it has actually found. The caller (agent.Agent) records
+	// the reason (Output); the orchestrator acts on it once the current step
+	// finishes.
+	Replan bool `json:"replan,omitempty"`
 }
 
 // Tool is the execution interface.
