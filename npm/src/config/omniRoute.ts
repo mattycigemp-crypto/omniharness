@@ -1,4 +1,4 @@
-import type { ChatWireMessage, CompressionTracker, OmniRouteMetrics, ToolCallRequest } from '../types/index.js';
+import type { ChatWireMessage, CompressionTracker, OmniRouteMetrics, ToolCallRequest, UsageTracker } from '../types/index.js';
 
 /** Deltas surfaced incrementally while a streaming completion is in flight. */
 export type StreamDelta =
@@ -98,6 +98,7 @@ export class OmniRouteClient {
   private readonly metrics: OmniRouteMetrics = {
     compression: { inputTokens: 0, compressedTokens: 0, ratio: 1, strategy: 'none', updatedAt: new Date().toISOString() },
     fallback: { attempts: 0 },
+    usage: { contextTokens: 0, tokensIn: 0, tokensOut: 0, costUsd: 0 },
     requestCount: 0,
   };
 
@@ -252,8 +253,19 @@ export class OmniRouteClient {
     let lineBuffer = '';
     // Partially-accumulated tool calls keyed by stream index.
     const toolStreams = new Map<number, { id: string; name: string; argsFragments: string[] }>();
+    // OmniRoute's response headers are sent at stream start, before the
+    // latency, usage and cost are known, so on a stream they carry zeros. With
+    // OMNIROUTE_SSE_COMMENTS on, the gateway ends the stream with the same
+    // fields as `: x-omniroute-<name>=<value>` comment lines — the values that
+    // were final. They are collected here and read like a second header set.
+    const trailer = new Headers();
 
     const flushData = (line: string): void => {
+      if (line.startsWith(':')) {
+        const meta = /^:\s*(x-omniroute-[a-z0-9-]+)=(.*)$/i.exec(line);
+        if (meta) trailer.set(meta[1]!.toLowerCase(), meta[2]!.trim());
+        return;
+      }
       const sep = line.indexOf(':');
       if (sep === -1) return;
       if (line.slice(0, sep) !== 'data') return;
@@ -328,6 +340,10 @@ export class OmniRouteClient {
     const toolCalls: ToolCallRequest[] = [...toolStreams.values()]
       .filter((entry) => entry.id !== '' && entry.name !== '')
       .map((entry) => ({ id: entry.id, type: 'function', function: { name: entry.name, arguments: entry.argsFragments.join('') } }));
+    // The trailer names the provider and model that finished the stream, so it
+    // supersedes the routing picture taken from the initial headers.
+    this.updateMetrics(trailer);
+    this.recordCompletion(response.headers, usage, trailer);
     return { content, model: answered, finishReason, reasoning: reasoning || undefined, toolCalls, usage, headers: response.headers, compression: this.compressionFrom(response.headers) };
   }
 
@@ -349,6 +365,11 @@ export class OmniRouteClient {
     // (the combo may have routed anywhere); fall back to the requested id.
     const answered = typeof payload.model === 'string' && payload.model.trim() !== '' ? payload.model : model;
     const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls.map((call: unknown) => this.asToolCall(call)).filter((call): call is ToolCallRequest => call !== null) : undefined;
+    this.recordCompletion(response.headers, usage ? {
+      inputTokens: this.number(usage.prompt_tokens),
+      outputTokens: this.number(usage.completion_tokens),
+      totalTokens: this.number(usage.total_tokens),
+    } : undefined);
     return {
       content: typeof message.content === 'string' ? message.content : '',
       model: answered,
@@ -363,6 +384,47 @@ export class OmniRouteClient {
       headers: response.headers,
       compression: this.compressionFrom(response.headers),
     };
+  }
+
+  /**
+   * OmniRoute's cost-telemetry set for one completion, or undefined when the
+   * headers carry no token counts. A stream's initial headers hold zeros for
+   * every field the gateway could not know yet, and zeros are treated as
+   * absent so they never overwrite a count read elsewhere.
+   */
+  private usageFromHeaders(headers: Headers): { inputTokens: number; outputTokens: number; costUsd?: number; latencyMs?: number } | undefined {
+    const inputTokens = this.headerNumber(headers, 'x-omniroute-tokens-in') ?? 0;
+    const outputTokens = this.headerNumber(headers, 'x-omniroute-tokens-out') ?? 0;
+    if (inputTokens <= 0 && outputTokens <= 0) return undefined;
+    const costUsd = this.headerNumber(headers, 'x-omniroute-response-cost');
+    const latencyMs = this.headerNumber(headers, 'x-omniroute-latency-ms');
+    return {
+      inputTokens: Math.max(0, inputTokens),
+      outputTokens: Math.max(0, outputTokens),
+      costUsd: costUsd !== undefined && costUsd > 0 ? costUsd : undefined,
+      latencyMs: latencyMs !== undefined && latencyMs > 0 ? latencyMs : undefined,
+    };
+  }
+
+  /**
+   * Fold one completion into the session's usage. Sources, most authoritative
+   * first: the SSE metadata trailer (final values of a stream), the response
+   * headers (final on a non-streaming reply, zeros on a stream), then the
+   * `usage` object in the body. Token counts come from one source only, so a
+   * reply that reports itself twice is still counted once.
+   */
+  private recordCompletion(headers: Headers, body: ChatResult['usage'], trailer?: Headers): void {
+    const usage = this.metrics.usage as UsageTracker;
+    const measured = (trailer && this.usageFromHeaders(trailer))
+      ?? this.usageFromHeaders(headers)
+      ?? (body && (body.inputTokens > 0 || body.outputTokens > 0) ? { inputTokens: body.inputTokens, outputTokens: body.outputTokens } : undefined);
+    if (!measured) return;
+    if (measured.inputTokens > 0) usage.contextTokens = measured.inputTokens;
+    usage.tokensIn += measured.inputTokens;
+    usage.tokensOut += measured.outputTokens;
+    if (measured.costUsd !== undefined) usage.costUsd += measured.costUsd;
+    if (measured.latencyMs !== undefined) usage.latencyMs = measured.latencyMs;
+    usage.updatedAt = new Date().toISOString();
   }
 
   private compressionFrom(headers: Headers): CompressionInfo | undefined {

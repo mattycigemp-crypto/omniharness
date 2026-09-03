@@ -938,9 +938,12 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
   const terminalRows = rows;
 
   const metrics = engine.client.snapshotMetrics();
-  const meter = contextMeter(metrics.compression.inputTokens, engine.state.activeModel, metrics.fallback.activeProvider);
+  // The prompt tokens of the last completion, as the gateway counted them,
+  // are the size of the context the next turn will carry.
+  const contextTokens = metrics.usage?.contextTokens ?? 0;
+  const meter = contextMeter(contextTokens, engine.state.activeModel, metrics.fallback.activeProvider);
   const meterColor = meter.zone === 'danger' ? PALETTE.error : meter.zone === 'warn' ? PALETTE.warn : PALETTE.muted;
-  const contextLabel = metrics.compression.inputTokens > 0 ? `ctx ${meterBar(meter.fraction, 8)} ${Math.round(meter.fraction * 100)}%` : '';
+  const contextLabel = contextTokens > 0 ? `ctx ${meterBar(meter.fraction, 8)} ${Math.round(meter.fraction * 100)}%` : '';
   const compression = metrics.compression.inputTokens > 0 ? `${Math.round((1 - metrics.compression.ratio) * 100)}% ${metrics.compression.strategy.toUpperCase()}` : '';
 
   const phase = busy && currentTool ? phaseFor(currentTool) : (busy ? 'working' : 'ready');
@@ -977,7 +980,7 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     mode={mode}
     perm={permMode}
     workspace={engine.state.workspace.root}
-    usage={{ tokensIn: metrics.compression.inputTokens, requests: metrics.requestCount }}
+    usage={{ tokensIn: metrics.usage?.tokensIn, tokensOut: metrics.usage?.tokensOut, costUSD: metrics.usage?.costUsd, requests: metrics.requestCount }}
     agents={agents}
     todos={taskQueue}
     skills={engine.skills.length}

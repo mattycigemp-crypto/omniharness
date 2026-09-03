@@ -74,9 +74,30 @@ export interface FallbackTracker {
   cooldownUntil?: string;
 }
 
+/**
+ * What the gateway reports a completion consumed, read from OmniRoute's
+ * cost-telemetry set (`X-OmniRoute-Tokens-In` / `-Tokens-Out` /
+ * `-Response-Cost` / `-Latency-Ms`) or, on a stream, from the final usage
+ * chunk and the `: x-omniroute-*` metadata trailer.
+ */
+export interface UsageTracker {
+  /** Prompt tokens of the most recent completion — the live size of the context. */
+  contextTokens: number;
+  /** Prompt tokens summed across the session. */
+  tokensIn: number;
+  /** Completion tokens summed across the session. */
+  tokensOut: number;
+  /** USD summed across the session; `0` while every reply was free or unpriced. */
+  costUsd: number;
+  /** Gateway-reported latency of the most recent completion, ms. */
+  latencyMs?: number;
+  updatedAt?: string;
+}
+
 export interface OmniRouteMetrics {
   compression: CompressionTracker;
   fallback: FallbackTracker;
+  usage?: UsageTracker;
   remainingQuota?: number;
   requestCount: number;
 }
