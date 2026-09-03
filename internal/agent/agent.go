@@ -60,55 +60,55 @@ func DefaultRoles() map[Role]RoleConfig {
 			Role:        RoleArchitect,
 			Prompt:      "You are the architect. Produce precise designs, plans and decomposition. Be concrete: name files, functions and interfaces. Prefer reading before writing.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapReasoning, model.CapCoding}},
-			ToolAllow:   []string{"read_file", "list_dir", "find_files", "search", "git", "remember"},
+			ToolAllow:   []string{"read_file", "list_dir", "find_files", "search", "git", "remember", "request_replan"},
 		},
 		RoleImplementer: {
 			Role:        RoleImplementer,
 			Prompt:      "You are the implementer. Make minimal, correct changes. Prefer editing existing files. Run the provided tools to inspect before you modify. Keep changes focused on the task.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapCoding, model.CapFast}},
-			ToolAllow:   []string{"read_file", "write_file", "edit_file", "list_dir", "find_files", "search", "shell", "git", "remember"},
+			ToolAllow:   []string{"read_file", "write_file", "edit_file", "list_dir", "find_files", "search", "shell", "git", "remember", "request_replan"},
 		},
 		RoleResearcher: {
 			Role:        RoleResearcher,
 			Prompt:      "You are the researcher. Gather evidence and sources. Report findings with citations and note uncertainty explicitly. Do not fabricate sources.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapResearch, model.CapReasoning}},
-			ToolAllow:   []string{"read_file", "list_dir", "find_files", "search", "shell", "git", "remember"},
+			ToolAllow:   []string{"read_file", "list_dir", "find_files", "search", "shell", "git", "remember", "request_replan"},
 		},
 		RoleDebugger: {
 			Role:        RoleDebugger,
 			Prompt:      "You are the debugger. Reproduce the failure first, then isolate root cause with the smallest possible experiment. Report the root cause and the fix.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapReasoning, model.CapCoding}},
-			ToolAllow:   []string{"read_file", "search", "shell", "git", "remember"},
+			ToolAllow:   []string{"read_file", "search", "shell", "git", "remember", "request_replan"},
 		},
 		RoleReviewer: {
 			Role:        RoleReviewer,
 			Prompt:      "You are the reviewer. Check correctness, safety, and adherence to the task. Identify concrete defects with file/line references. Be skeptical; do not rubber-stamp.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapReview, model.CapReasoning}},
-			ToolAllow:   []string{"read_file", "list_dir", "find_files", "search", "shell", "git", "remember"},
+			ToolAllow:   []string{"read_file", "list_dir", "find_files", "search", "shell", "git", "remember", "request_replan"},
 		},
 		RoleTester: {
 			Role:        RoleTester,
 			Prompt:      "You are the tester. Write and run tests that prove the behavior described in the task. Report pass/fail per test.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapCoding, model.CapFast}},
-			ToolAllow:   []string{"read_file", "write_file", "edit_file", "search", "shell", "git", "remember"},
+			ToolAllow:   []string{"read_file", "write_file", "edit_file", "search", "shell", "git", "remember", "request_replan"},
 		},
 		RoleSecurityAuditor: {
 			Role:        RoleSecurityAuditor,
 			Prompt:      "You are the security auditor. Look for injection, secrets, unsafe file/shell operations, and privilege issues. Report severity and concrete fixes.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapReasoning, model.CapReview}},
-			ToolAllow:   []string{"read_file", "search", "git", "remember"},
+			ToolAllow:   []string{"read_file", "search", "git", "remember", "request_replan"},
 		},
 		RoleOptimizer: {
 			Role:        RoleOptimizer,
 			Prompt:      "You are the optimizer. Improve performance without changing observable behavior. Measure before and after.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapCoding, model.CapReasoning}},
-			ToolAllow:   []string{"read_file", "edit_file", "search", "shell", "git", "remember"},
+			ToolAllow:   []string{"read_file", "edit_file", "search", "shell", "git", "remember", "request_replan"},
 		},
 		RoleSynthesizer: {
 			Role:        RoleSynthesizer,
 			Prompt:      "You are the synthesizer. Combine the collected results into one coherent deliverable. Integrate, reconcile conflicts, and produce the final answer.",
 			ModelIntent: model.Intent{Capabilities: []string{model.CapReasoning, model.CapCoding}},
-			ToolAllow:   []string{"read_file", "search", "remember"},
+			ToolAllow:   []string{"read_file", "search", "remember", "request_replan"},
 		},
 	}
 }
@@ -178,6 +178,9 @@ type Agent struct {
 	Summary string // running condensation summary
 	// Artifacts are paths produced by artifact-marking tools.
 	Artifacts []string
+	// replanReason is set when a replan-marking tool call (request_replan)
+	// runs. Read via ReplanReason(); empty means nothing was requested.
+	replanReason string
 
 	deps   Deps
 	mu     sync.Mutex
@@ -598,6 +601,13 @@ func (a *Agent) executeToolCall(ctx context.Context, tc gateway.ToolCall, roleCf
 			a.mu.Unlock()
 		}
 	}
+	if result.Replan {
+		a.mu.Lock()
+		if a.replanReason == "" {
+			a.replanReason = result.Output
+		}
+		a.mu.Unlock()
+	}
 
 	if runErr != nil {
 		a.publish(&event.ToolFinishedData{Tool: name, AgentID: a.ID, Status: "failed", Duration: duration, Error: runErr.Error()})
@@ -655,6 +665,14 @@ func (a *Agent) ArtifactPaths() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return append([]string(nil), a.Artifacts...)
+}
+
+// ReplanReason returns why the agent asked for the task to be restructured
+// (see the request_replan tool), or "" if it never did.
+func (a *Agent) ReplanReason() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.replanReason
 }
 
 // LastOutput returns the final assistant message content, if any.

@@ -180,7 +180,7 @@ func (o *Orchestrator) Run(ctx context.Context, sessionID string, spec task.Spec
 	})
 
 	artifacts := &sync.Map{}
-	outputs, planErr := o.executePlan(runCtx, tsk, plan, artifacts, budgets)
+	outputs, replanReason, planErr := o.executePlan(runCtx, tsk, plan, artifacts, budgets)
 	if runCtx.Err() != nil {
 		tsk.Status = task.StatusCancelled
 		tsk.Error = "cancelled"
@@ -194,7 +194,7 @@ func (o *Orchestrator) Run(ctx context.Context, sessionID string, spec task.Spec
 	}
 
 	// Task-level verification + repair loop.
-	if err := o.verifyAndRepair(runCtx, tsk, plan, outputs, artifacts, budgets); err != nil {
+	if err := o.verifyAndRepair(runCtx, tsk, plan, outputs, replanReason, artifacts, budgets); err != nil {
 		if runCtx.Err() != nil {
 			tsk.Status = task.StatusCancelled
 			_ = o.deps.Store.UpdateTask(tsk)
@@ -337,10 +337,15 @@ func (o *Orchestrator) selectStrategy(t *task.Task) (strategy.Plan, error) {
 
 // executePlan runs all steps respecting dependencies, up to MaxConcurrency at
 // a time. Artifacts produced by any agent are collected into the shared map.
-func (o *Orchestrator) executePlan(ctx context.Context, t *task.Task, plan strategy.Plan, artifacts *sync.Map, budgets *budget.Tracker) (map[string]string, error) {
-	outputs := map[string]string{}
+// The returned replanReason is non-empty when any step's agent called
+// request_replan — every step still runs to completion in that case (an
+// in-flight concurrent scheduler is not a safe place to abort steps
+// mid-way); the caller decides what to do with the request once the whole
+// plan has finished.
+func (o *Orchestrator) executePlan(ctx context.Context, t *task.Task, plan strategy.Plan, artifacts *sync.Map, budgets *budget.Tracker) (outputs map[string]string, replanReason string, err error) {
+	outputs = map[string]string{}
 	if len(plan.Steps) == 0 {
-		return outputs, nil
+		return outputs, "", nil
 	}
 
 	var mu sync.Mutex
@@ -357,6 +362,7 @@ func (o *Orchestrator) executePlan(ctx context.Context, t *task.Task, plan strat
 
 	var firstErr error
 	firstErrSet := false
+	var replan string
 	ready := make(chan scheduledStep)
 	var wg sync.WaitGroup
 
@@ -426,6 +432,9 @@ func (o *Orchestrator) executePlan(ctx context.Context, t *task.Task, plan strat
 					firstErrSet = true
 				} else if res.Err == nil {
 					outputs[res.ID] = res.Output
+					if res.ReplanReason != "" && replan == "" {
+						replan = res.ReplanReason
+					}
 				}
 				for _, dep := range dependents[res.ID] {
 					if remaining[dep] > 0 {
@@ -443,7 +452,7 @@ func (o *Orchestrator) executePlan(ctx context.Context, t *task.Task, plan strat
 	case <-waitDone:
 	case <-ctx.Done():
 	}
-	return outputs, firstErr
+	return outputs, replan, firstErr
 }
 
 // stepResult wraps executeStep output.
@@ -451,6 +460,10 @@ type stepResult struct {
 	ID     string
 	Output string
 	Err    error
+	// ReplanReason is set when the step's agent called request_replan — it
+	// completed the step, but flagged that the task needs more structure
+	// than the current plan gives it. Empty on every ordinary step.
+	ReplanReason string
 }
 
 // scheduledStep is what the executePlan scheduler hands a worker: a step
@@ -518,7 +531,7 @@ func (o *Orchestrator) executeStep(ctx context.Context, t *task.Task, step strat
 		}
 		ag, err := o.runAgent(ctx, t, role, modelRef, extra, step.Task, depContext, artifacts, budgets)
 		if err == nil {
-			return stepResult{ID: step.ID, Output: ag.LastOutput()}
+			return stepResult{ID: step.ID, Output: ag.LastOutput(), ReplanReason: ag.ReplanReason()}
 		}
 		failure := repair.Classify(repair.StageModel, err)
 		failure.Attempt = attempt + 1
@@ -585,8 +598,14 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task.Task, role agent.Ro
 
 // verifyAndRepair runs evaluators and drives the task-level repair loop. The
 // task may be re-run up to MaxTaskRepairs times with changed variables before
-// the failure is terminal.
-func (o *Orchestrator) verifyAndRepair(ctx context.Context, t *task.Task, plan strategy.Plan, outputs map[string]string, artifacts *sync.Map, budgets *budget.Tracker) error {
+// the failure is terminal. replanReason, when non-empty, is an explicit
+// request from a step's own agent (see the request_replan tool) that the
+// task needs more structure than the plan just executed gave it — the same
+// loop that restructures a plan after a verification failure restructures
+// it here too, skipping evaluation for that cycle rather than asking
+// evaluators to judge a result the agent itself already flagged as
+// incomplete by design, not by defect.
+func (o *Orchestrator) verifyAndRepair(ctx context.Context, t *task.Task, plan strategy.Plan, outputs map[string]string, replanReason string, artifacts *sync.Map, budgets *budget.Tracker) error {
 	final := o.finalOutput(plan, outputs)
 	t.Result = &task.Result{Summary: final, Output: final, Artifacts: artifactList(artifacts)}
 
@@ -594,12 +613,34 @@ func (o *Orchestrator) verifyAndRepair(ctx context.Context, t *task.Task, plan s
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		outcome, detail := o.evaluate(ctx, t)
-		if outcome == evaluate.Pass || outcome == evaluate.PassWithWarnings || outcome == evaluate.NeedsReview {
-			t.Status = task.StatusCompleted
-			_ = o.deps.Store.UpdateTask(t)
-			return nil
+
+		var failure repair.Failure
+		var detail string
+		if replanReason != "" {
+			detail = replanReason
+			failure = repair.Failure{Stage: repair.StageOrchestra, Kind: "replan", Error: replanReason, Attempt: cycle, Strategy: t.Strategy}
+		} else {
+			outcome, evalDetail := o.evaluate(ctx, t)
+			if outcome == evaluate.Pass || outcome == evaluate.PassWithWarnings || outcome == evaluate.NeedsReview {
+				t.Status = task.StatusCompleted
+				_ = o.deps.Store.UpdateTask(t)
+				return nil
+			}
+			detail = evalDetail
+			// Classify the verification detail so repair picks the right
+			// strategy: build/test failures get the debugger sequence;
+			// generic verification failures escalate.
+			kind := "evaluate"
+			lower := strings.ToLower(detail)
+			switch {
+			case strings.Contains(lower, "build failed"):
+				kind = "build"
+			case strings.Contains(lower, "tests failed"):
+				kind = "test"
+			}
+			failure = repair.Failure{Stage: repair.StageEvaluate, Kind: kind, Error: detail, Attempt: cycle, Strategy: t.Strategy}
 		}
+
 		if cycle > o.deps.MaxTaskRepairs {
 			t.Status = task.StatusFailed
 			t.Error = fmt.Sprintf("verification failed after %d repair cycles: %s", o.deps.MaxTaskRepairs, detail)
@@ -607,18 +648,6 @@ func (o *Orchestrator) verifyAndRepair(ctx context.Context, t *task.Task, plan s
 			o.taskEvent(t, &event.TaskFailedData{Status: task.StatusFailed, Error: t.Error})
 			return fmt.Errorf("%s", t.Error)
 		}
-		// Classify the verification detail so repair picks the right strategy:
-		// build/test failures get the debugger sequence; generic verification
-		// failures escalate.
-		kind := "evaluate"
-		lower := strings.ToLower(detail)
-		switch {
-		case strings.Contains(lower, "build failed"):
-			kind = "build"
-		case strings.Contains(lower, "tests failed"):
-			kind = "test"
-		}
-		failure := repair.Failure{Stage: repair.StageEvaluate, Kind: kind, Error: detail, Attempt: cycle, Strategy: t.Strategy}
 		// The loop's own counter decides when to give up (after MaxTaskRepairs
 		// re-runs); the planner's limit is set one higher so it never pre-empts.
 		rplan, err := o.deps.Repair.Plan(failure, cycle, o.deps.MaxTaskRepairs+1)
@@ -655,8 +684,13 @@ func (o *Orchestrator) verifyAndRepair(ctx context.Context, t *task.Task, plan s
 		o.taskEvent(t, &event.StrategySelectedData{
 			Strategy: string(selPlan.Strategy), Reason: selPlan.Reason, Steps: stepNames(selPlan.Steps),
 		})
-		outputs, err = o.executePlan(ctx, t, selPlan, artifacts, budgets)
+		outputs, replanReason, err = o.executePlan(ctx, t, selPlan, artifacts, budgets)
 		if err != nil {
+			// A real failure takes priority over a replan signal from
+			// whichever other step of this same cycle happened to succeed —
+			// the next iteration re-evaluates the (still-failing) result
+			// normally rather than acting on a stale request.
+			replanReason = ""
 			continue
 		}
 		final = o.finalOutput(selPlan, outputs)

@@ -1040,3 +1040,59 @@ func TestFormatDepOutputsTruncatesLongOutput(t *testing.T) {
 		t.Fatalf("got length %d, want it bounded near the cap, not the full 6500-char input", len(got))
 	}
 }
+
+// End to end: a task starts as Direct (one step), but that step's own agent
+// calls request_replan mid-run. The task must not just complete on the
+// direct step's own output — it must restructure into a bigger strategy
+// (sequential, direct's own escalation target — see repair.Plan's "replan"
+// case) and actually run that new plan before completing.
+func TestReplanRequestRestructuresAndCompletes(t *testing.T) {
+	dir := t.TempDir()
+	fake := testutil.NewFakeOmniRoute(t,
+		// The initial Direct step: calls request_replan, then finishes its
+		// own turn normally.
+		testutil.FakeStep{ToolCalls: []gateway.ToolCall{
+			testutil.ToolCall("c1", "request_replan", `{"reason":"found two unrelated bugs, not one"}`),
+		}},
+		testutil.FakeStep{Content: "acknowledged"},
+		// The restructured sequential plan's three steps.
+		testutil.FakeStep{Content: "s1 done"},
+		testutil.FakeStep{Content: "s2 done"},
+		testutil.FakeStep{Content: "s3 done"},
+	)
+	o, _, bus := newOrchestrator(t, fake, dir)
+
+	ch, cancel := bus.Subscribe(256)
+	defer cancel()
+
+	spec := task.Spec{Prompt: "Fix the typo in README.md.", CWD: dir}
+	tsk, err := runTask(t, o, "s1", spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tsk.Status != task.StatusCompleted {
+		t.Fatalf("status = %s (%s)", tsk.Status, tsk.Error)
+	}
+	if tsk.Strategy != string(strategy.Sequential) {
+		t.Fatalf("strategy = %s, want the task to have restructured to sequential", tsk.Strategy)
+	}
+	if tsk.Repairs < 1 {
+		t.Fatalf("repairs = %d, want at least 1 — the replan counts as a repair cycle", tsk.Repairs)
+	}
+	if fake.RequestCount() != 5 {
+		t.Fatalf("chat requests = %d, want 5 (2 for the direct step, 3 for the restructured sequential plan)", fake.RequestCount())
+	}
+
+	var sawReplanReason bool
+	deadline := time.After(2 * time.Second)
+	for !sawReplanReason {
+		select {
+		case e := <-ch:
+			if e.Type == event.RepairStarted && strings.Contains(string(e.Data), "found two unrelated bugs") {
+				sawReplanReason = true
+			}
+		case <-deadline:
+			t.Fatal("no repair event carried the replan reason")
+		}
+	}
+}
