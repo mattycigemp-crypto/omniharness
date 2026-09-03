@@ -117,7 +117,7 @@ The Go side (`internal/**`) carries the orchestration engine and a scriptable CL
 omniharness doctor                       # check endpoint + auth, safely
 omniharness run "fix the failing test"   # headless, current directory
 omniharness stack                        # choose the model combo
-omniharness stats                        # spend and tool use, by model
+omniharness stats                        # spend, tool use and outcomes — by model, tool and strategy
 omniharness sessions | models | serve
 ```
 

@@ -107,7 +107,7 @@ internal/model         capability-based model selection
 internal/gateway       OmniRoute OpenAI-compatible client
 internal/context       context engine + composer
 internal/memory        project + performance memory (SQLite)
-internal/tools         tool registry + native tools (fs, shell, git, search, proc)
+internal/tools         tool registry + native tools (fs, shell, git, search, proc, memory, replan)
 internal/mcp           MCP stdio client (first-class protocol)
 internal/policy        risk classes, permission evaluation, approvals
 internal/evaluate      evaluator framework (build/test/lint/constraint/evidence)
@@ -269,7 +269,76 @@ endpoint that misbehaves.
   exactly one session.
 - **`serve /health`** reports the real version and an auth-state diagnosis.
 
-## 9. Live integration verification (real OmniRoute, authenticated)
+## 9. Task intelligence, memory, and mid-run replanning
+
+- **Deep analysis is optional and off by default** (`internal/task/intel.go`,
+  `task.DeepAnalyzer`). `Analyzer.Analyze` stays pure and free; a second pass
+  spends one model call to produce concrete `AcceptanceCriteria` for a task,
+  gated on `Profile.worthDeepening()` (complexity != LOW, or ambiguity/risk
+  == HIGH) so trivial tasks never pay for it, and on config
+  (`[task] deep_analysis`, default `false`) so no existing install's spend
+  changes on upgrade. Every failure path — no gateway configured, a model
+  error, unparseable output — falls back to the Profile the pure analyzer
+  already produced.
+- **Two heuristic signals that were computed and silently discarded are now
+  wired in.** `Profile.Ambiguity` forces `plan-implement-verify` regardless
+  of complexity (`internal/strategy/strategy.go`) — a short, vague request
+  ("clean up the code") used to go straight to `direct` with no stated plan
+  for anyone to check. `Profile.ApprovalRecommended` (Risk == HIGH) now
+  actually asks before a high-risk task runs at all
+  (`Orchestrator.requestTaskApproval`), through a genuine task-level policy
+  method (`policy.Engine.EvaluateAndExecuteTaskRisk`) rather than a repurposed
+  tool-call request — the same `[policy.risk_action]` config and the same
+  CLI/TUI approver prompt govern both. A decline lands the task `cancelled`,
+  not `failed`.
+- **Project memory is wired end to end.** `internal/memory.ProjectMemories`
+  (backed by a real session-store table) had a complete write/read API and
+  zero callers; `composer.Input.ProjectInstructions` already rendered into
+  every system prompt and was always `nil`. A `remember` tool (native,
+  `RiskLow`, present only when memory is configured) lets an agent persist a
+  convention, gotcha, or decision keyed by workspace + a slot name (reusing a
+  slot overwrites it — an upsert, not a list); the orchestrator recalls
+  everything remembered once per agent construction.
+- **A step's own output now reaches the steps that depend on it**
+  (`internal/orchestrator/orchestrator.go`, `formatDepOutputs`).
+  `strategy.Step.Depends` only ever controlled scheduling order — an "impl"
+  step that depends on a "plan" step ran strictly after it but never saw
+  what the plan said; `parallel`'s own "join" step, whose task is
+  "integrate results", never received any of the parallel sub-tasks'
+  results either. Every multi-step strategy now threads each step's direct
+  dependencies' output into its prompt (capped per dependency, snapshotted
+  under the scheduler's existing lock — no new data race).
+- **A step can ask for the task to be restructured without failing first**
+  (`request_replan` tool + `repair.Engine`'s `"replan"` failure kind).
+  Repair previously triggered only on failure; there was no way for a step
+  that succeeded, but found the task needed more structure than planned, to
+  say so. The request is collected once the whole plan finishes (steps are
+  never aborted mid-flight) and drives the same re-selection/restructuring
+  machinery a verification failure uses, skipping the debugger-first
+  sequence build/test/evaluate failures get — there is nothing to
+  reproduce — and bounded by the same `MaxTaskRepairs` limit.
+- **Verification is no longer Go-only.** `NpmBuildEvaluator` /
+  `NpmTestEvaluator` (`internal/evaluate/evaluate.go`) mirror
+  `GoBuildEvaluator`/`GoTestEvaluator`'s own pattern exactly: offered to
+  every software task, each self-skips (`NEEDS_REVIEW`, not a failure) when
+  there's no `package.json` or no matching script.
+- **A double-counting bug in performance memory is fixed.**
+  `memory.Advisor.modelStats` and `StrategyPerformance` joined `tasks`
+  straight to `model_calls` and aggregated over that join — a task with
+  several calls (the normal case: multiple agent turns, a multi-step
+  strategy, a repair cycle) contributed once per call, not once per task,
+  which could push a computed success rate mathematically past 100%. Fixed
+  by aggregating over a derived table that groups by task id first. This
+  data drives real decisions (`RecommendModel`, `RecommendStrategy`) and is
+  now also surfaced directly — a **BY STRATEGY** section in
+  `omniharness stats`, sourced from the new `telemetry.ByStrategy`.
+- **`doctor` reads OmniRoute's own routing-quality snapshot**
+  (`gateway.Client.ExplainRouting`, `GET /v1/explain/routing`): a warning,
+  not a failure, naming how many tracked models are degraded — quietly
+  skipped on a gateway that predates the endpoint (404 reads as "not
+  supported," not an error).
+
+## 10. Live integration verification (real OmniRoute, authenticated)
 
 Verified against the running OmniRoute instance (`omniroute serve`, port map
 below) with a real model inference:
@@ -319,7 +388,7 @@ below) with a real model inference:
   deprecating bypass-2FA tokens (direct publish ends January 2027), and OIDC
   only exists on hosted CI runners.
 
-## 10. Anti-goals (v1)
+## 11. Anti-goals (v1)
 
 No Kubernetes, microservices, remote DBs, message brokers, web frontends, Electron,
 vector databases, or "AI frameworks". Local-first, native, single binary.
