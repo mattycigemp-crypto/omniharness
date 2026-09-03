@@ -233,7 +233,7 @@ func TestDeepAnalysisOffByDefaultInRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tsk, err := rt.RunTask(context.Background(), ss.ID, "clean up the code", RunOptions{})
+	tsk, err := rt.RunTask(context.Background(), ss.ID, "Maybe clean up the code somehow, whatever seems right.", RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestDeepAnalysisWiredFromConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tsk, err := rt.RunTask(context.Background(), ss.ID, "clean up the code", RunOptions{})
+	tsk, err := rt.RunTask(context.Background(), ss.ID, "Maybe clean up the code somehow, whatever seems right.", RunOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

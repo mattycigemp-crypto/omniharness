@@ -624,7 +624,7 @@ func TestNoDeepAnalyzerConfiguredLeavesTheProfileAlone(t *testing.T) {
 	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "done"})
 	o, _, _ := newOrchestrator(t, fake, dir)
 
-	tsk, err := runTask(t, o, "s1", task.Spec{Prompt: "clean up the code", CWD: dir})
+	tsk, err := runTask(t, o, "s1", task.Spec{Prompt: "Maybe clean up the code somehow, whatever seems right.", CWD: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -633,11 +633,11 @@ func TestNoDeepAnalyzerConfiguredLeavesTheProfileAlone(t *testing.T) {
 	}
 }
 
-// A vague prompt ("clean up the code" forces Ambiguity=HIGH regardless of
-// complexity — see task.Analyzer's detectAmbiguity) is worth deepening. The
-// deepening call's usage must be charged to the task's own budget tracker
-// and recorded in the store, and its acceptance criteria must land on the
-// task's final Profile.
+// A prompt stacking several vague-signal words scores >= 3 in
+// task.Analyzer's detectAmbiguity, forcing Ambiguity=HIGH regardless of
+// complexity — worth deepening either way. The deepening call's usage must
+// be charged to the task's own budget tracker and recorded in the store,
+// and its acceptance criteria must land on the task's final Profile.
 func TestDeepAnalyzerAddsAcceptanceCriteriaAndAccountsItsCost(t *testing.T) {
 	dir := t.TempDir()
 	// First scripted response answers the deepening call; the rest answer the
@@ -649,7 +649,7 @@ func TestDeepAnalyzerAddsAcceptanceCriteriaAndAccountsItsCost(t *testing.T) {
 	o, store, _ := newOrchestrator(t, fake, dir)
 	o.deps.DeepAnalyzer = &task.DeepAnalyzer{Gateway: fake.Client(), ModelSel: o.deps.ModelSel}
 
-	tsk, err := runTask(t, o, "s1", task.Spec{Prompt: "clean up the code", CWD: dir})
+	tsk, err := runTask(t, o, "s1", task.Spec{Prompt: "Maybe clean up the code somehow, whatever seems right.", CWD: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -697,7 +697,7 @@ func TestDeepAnalyzerCostCountsAgainstTheTaskBudget(t *testing.T) {
 	ch, cancel := bus.Subscribe(256)
 	defer cancel()
 
-	spec := task.Spec{Prompt: "clean up the code", CWD: dir, Budget: budget.Budget{MaxTokens: 150}}
+	spec := task.Spec{Prompt: "Maybe clean up the code somehow, whatever seems right.", CWD: dir, Budget: budget.Budget{MaxTokens: 150}}
 	tsk, err := runTask(t, o, "s1", spec)
 	if err == nil && tsk.Status == task.StatusCompleted {
 		t.Fatal("a budget already exhausted by the deepening call must not let the task complete")
