@@ -718,3 +718,121 @@ func TestDeepAnalyzerCostCountsAgainstTheTaskBudget(t *testing.T) {
 		}
 	}
 }
+
+// A prompt stacking several destructive-signal words scores >= 3 in
+// task.Analyzer's detectRisk, forcing Risk=HIGH and, with it,
+// ApprovalRecommended.
+const highRiskPrompt = "Delete the credentials file, wipe the secret store, and force push."
+
+// ApprovalRecommended was computed by the pure analyzer and never read by
+// anything downstream. This is the fixture's default policy (RiskAction
+// high=ask, an approver that always grants) — so a HIGH-risk task must
+// still complete, having been asked first.
+func TestHighRiskTaskAsksApprovalAndProceedsWhenGranted(t *testing.T) {
+	dir := t.TempDir()
+	var asked policy.Request
+	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "done"})
+	o, _, _ := newOrchestrator(t, fake, dir)
+	o.deps.Policy.SetApprover(policy.ApproverFunc(func(_ context.Context, r policy.Request, _ string) (bool, error) {
+		asked = r
+		return true, nil
+	}))
+
+	tsk, err := runTask(t, o, "s1", task.Spec{Prompt: highRiskPrompt, CWD: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tsk.Profile.ApprovalRecommended {
+		t.Fatalf("this prompt must score HIGH risk to exercise the gate: profile = %+v", tsk.Profile)
+	}
+	if tsk.Status != task.StatusCompleted {
+		t.Fatalf("status = %s (%s)", tsk.Status, tsk.Error)
+	}
+	if asked.Risk != tools.RiskHigh {
+		t.Fatalf("approver was asked with risk = %q, want %q", asked.Risk, tools.RiskHigh)
+	}
+}
+
+// A decline must stop the task before any agent runs — proven by the fake
+// gateway never receiving a request — and land as cancelled, not failed:
+// the human said no, nothing went wrong.
+func TestHighRiskTaskCancelsWhenApprovalDenied(t *testing.T) {
+	dir := t.TempDir()
+	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "should never be requested"})
+	o, _, bus := newOrchestrator(t, fake, dir)
+	o.deps.Policy.SetApprover(policy.ApproverFunc(func(context.Context, policy.Request, string) (bool, error) {
+		return false, nil
+	}))
+
+	ch, cancel := bus.Subscribe(256)
+	defer cancel()
+
+	tsk, err := runTask(t, o, "s1", task.Spec{Prompt: highRiskPrompt, CWD: dir})
+	if err == nil {
+		t.Fatal("a declined high-risk task must return an error")
+	}
+	if tsk.Status != task.StatusCancelled {
+		t.Fatalf("status = %s, want cancelled — a decline is not a failure", tsk.Status)
+	}
+	if fake.RequestCount() != 0 {
+		t.Fatalf("chat requests = %d, want 0 — nothing should run before approval is granted", fake.RequestCount())
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case e := <-ch:
+			if e.Type == event.TaskCancelled {
+				return
+			}
+		case <-deadline:
+			t.Fatal("no event announced the declined task as cancelled")
+		}
+	}
+}
+
+// A low-risk task must never reach the approver at all: an approver that
+// panics if invoked proves the gate was skipped, not merely granted.
+func TestLowRiskTaskNeverAsksForApproval(t *testing.T) {
+	dir := t.TempDir()
+	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "fixed it"})
+	o, _, _ := newOrchestrator(t, fake, dir)
+	o.deps.Policy.SetApprover(policy.ApproverFunc(func(context.Context, policy.Request, string) (bool, error) {
+		t.Fatal("approver must not be consulted for a low-risk task")
+		return false, nil
+	}))
+
+	tsk, err := runTask(t, o, "s1", task.Spec{Prompt: "Fix the typo in README.md.", CWD: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tsk.Profile.ApprovalRecommended {
+		t.Fatalf("this prompt must not score HIGH risk: profile = %+v", tsk.Profile)
+	}
+	if tsk.Status != task.StatusCompleted {
+		t.Fatalf("status = %s (%s)", tsk.Status, tsk.Error)
+	}
+}
+
+// No approver connected is not a silent allow: a headless run with no way
+// to ask must fail loudly rather than either running an unapproved
+// high-risk task or hanging.
+func TestHighRiskTaskFailsWhenNoApproverIsConnected(t *testing.T) {
+	dir := t.TempDir()
+	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "should never be requested"})
+	o, _, _ := newOrchestrator(t, fake, dir)
+	o.deps.Policy = policy.NewEngine(policy.Config{
+		RiskAction: map[string]string{"low": "allow", "medium": "allow", "high": "ask", "critical": "block"},
+	}, nil)
+
+	tsk, err := runTask(t, o, "s1", task.Spec{Prompt: highRiskPrompt, CWD: dir})
+	if err == nil {
+		t.Fatal("a high-risk task with no approver connected must fail, not run silently")
+	}
+	if tsk.Status != task.StatusFailed {
+		t.Fatalf("status = %s, want failed", tsk.Status)
+	}
+	if fake.RequestCount() != 0 {
+		t.Fatalf("chat requests = %d, want 0 — nothing should run without a decision", fake.RequestCount())
+	}
+}

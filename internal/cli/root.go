@@ -152,12 +152,19 @@ func installApprover(rt *runtime.Runtime, approveAll bool) {
 		if approveAll {
 			return true, nil
 		}
+		// An empty Tool means the orchestrator is asking about the task as a
+		// whole (see orchestrator.requestTaskApproval) rather than one
+		// specific action; "tool """ would read as a bug, not a task.
+		subject := fmt.Sprintf("tool %q", r.Tool)
+		if r.Tool == "" {
+			subject = "this task"
+		}
 		if !isTerminal(os.Stdin) {
-			fmt.Fprintf(os.Stderr, "denied: tool %q (%s risk) needs approval and stdin is not a terminal\n   reason: %s\n   re-run with --yes to auto-approve\n",
-				r.Tool, r.Risk, reason)
+			fmt.Fprintf(os.Stderr, "denied: %s (%s risk) needs approval and stdin is not a terminal\n   reason: %s\n   re-run with --yes to auto-approve\n",
+				subject, r.Risk, reason)
 			return false, nil
 		}
-		fmt.Fprintf(os.Stderr, "\napproval required: tool %q (%s risk)\n   reason: %s\n   approve? [y/N] ", r.Tool, r.Risk, reason)
+		fmt.Fprintf(os.Stderr, "\napproval required: %s (%s risk)\n   reason: %s\n   approve? [y/N] ", subject, r.Risk, reason)
 		reader := bufio.NewReader(os.Stdin)
 		line, _ := reader.ReadString('\n')
 		line = strings.ToLower(strings.TrimSpace(line))

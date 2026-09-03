@@ -149,6 +149,21 @@ func (o *Orchestrator) Run(ctx context.Context, sessionID string, spec task.Spec
 		return tsk, err
 	}
 
+	if tsk.Profile.ApprovalRecommended {
+		granted, err := o.requestTaskApproval(runCtx, tsk)
+		if err != nil {
+			o.fail(tsk, err)
+			return tsk, err
+		}
+		if !granted {
+			tsk.Status = task.StatusCancelled
+			tsk.Error = "declined: this task was flagged high-risk and approval was not granted"
+			_ = o.deps.Store.UpdateTask(tsk)
+			o.taskEvent(tsk, &event.TaskCancelledData{Status: task.StatusCancelled, Message: tsk.Error})
+			return tsk, fmt.Errorf("%s", tsk.Error)
+		}
+	}
+
 	plan, err := o.selectStrategy(tsk)
 	if err != nil {
 		o.fail(tsk, err)
@@ -259,6 +274,28 @@ func (o *Orchestrator) deepen(ctx context.Context, t *task.Task, budgets *budget
 		CostUSD: cost, Status: status, Error: errMsg,
 	})
 	t.Profile = result.Profile
+}
+
+// requestTaskApproval consults policy before a task the heuristic analyzer
+// flagged HIGH risk does any work — ApprovalRecommended was computed on
+// task.Analyze and, until now, never read anywhere. It shares the same
+// policy.RiskAction config every tool call resolves against (a permissive
+// "allow" skips the prompt; "block" refuses outright) and the same CLI/TUI
+// approver prompt, via policy.Engine.EvaluateAndExecuteTaskRisk — the
+// task-level counterpart to the tool-level gate, not a repurposed tool
+// request. A decline stops the task before any agent runs, so nothing has
+// spent tokens yet. No policy engine configured means nothing to ask, so
+// the task proceeds — matching how an unconfigured tool-risk gate would
+// behave.
+func (o *Orchestrator) requestTaskApproval(ctx context.Context, t *task.Task) (granted bool, err error) {
+	if o.deps.Policy == nil {
+		return true, nil
+	}
+	decision, err := o.deps.Policy.EvaluateAndExecuteTaskRisk(ctx, tools.RiskHigh)
+	if err != nil {
+		return false, err
+	}
+	return decision == policy.Allow, nil
 }
 
 func (o *Orchestrator) selectStrategy(t *task.Task) (strategy.Plan, error) {
