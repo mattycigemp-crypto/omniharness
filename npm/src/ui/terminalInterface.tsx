@@ -471,20 +471,40 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     stdout.on('resize', onResize);
     stdout.write(KITTY_PUSH);
     let kittyTimer: ReturnType<typeof setTimeout> | undefined;
-    // One probe pass: kitty keyboard protocol + synchronized output (DECSET 2026).
-    const onProbe = (chunk: Buffer): void => {
-      const text = chunk.toString();
-      if (isSyncOutputReply(text) && syncRestoreRef.current === null) {
-        syncRestoreRef.current = wrapSynchronizedOutput(stdout as unknown as { write: (c: unknown, ...r: unknown[]) => boolean });
-      }
-      if (!isKittyQueryResponse(text)) return;
+
+    // Two independent probes, not one shared listener. They used to be a
+    // single handler torn down together after 300ms, on the assumption both
+    // replies would have arrived by then. Some terminals answer the
+    // synchronized-output query well after that — observed landing right
+    // around a resize, though the terminal's own reasons for the delay are
+    // opaque from here — and a listener already removed cannot catch a late
+    // reply. Two things followed from that: synchronized output silently
+    // never turned on for the rest of the session, and the reply itself, with
+    // nothing left to claim it, reached Ink's own useInput and got typed into
+    // the input box as literal text (the isEncodedKey guard now recognises
+    // and drops that shape regardless, but the actual fix is to keep
+    // listening for it rather than lean on that alone).
+    const onSyncProbe = (chunk: Buffer): void => {
+      if (syncRestoreRef.current !== null) return;
+      if (!isSyncOutputReply(chunk.toString())) return;
+      syncRestoreRef.current = wrapSynchronizedOutput(stdout as unknown as { write: (c: unknown, ...r: unknown[]) => boolean });
+      stdin?.off('data', onSyncProbe);
+    };
+
+    // The kitty check is a UI decision — whether Ctrl+letter and a distinct
+    // Shift+Tab are available — that has to resolve one way or the other, so
+    // it keeps a bounded timeout; "no answer in 300ms" is itself the answer.
+    const onKittyProbe = (chunk: Buffer): void => {
+      if (!isKittyQueryResponse(chunk.toString())) return;
       if (kittyTimer) clearTimeout(kittyTimer);
-      stdin?.off('data', onProbe);
+      stdin?.off('data', onKittyProbe);
       setKitty(true);
     };
+
     if (stdin) {
-      stdin.on('data', onProbe);
-      kittyTimer = setTimeout(() => { setKitty(false); stdin.off('data', onProbe); }, 300);
+      stdin.on('data', onSyncProbe);
+      stdin.on('data', onKittyProbe);
+      kittyTimer = setTimeout(() => { setKitty(false); stdin.off('data', onKittyProbe); }, 300);
       stdout.write(SYNC_QUERY);
       stdout.write(KITTY_QUERY);
     } else {
@@ -560,7 +580,8 @@ export function TerminalInterface({ engine }: Props): React.ReactElement {
     process.on('exit', onUnload);
     return () => {
       if (kittyTimer) clearTimeout(kittyTimer);
-      stdin?.off('data', onProbe);
+      stdin?.off('data', onSyncProbe);
+      stdin?.off('data', onKittyProbe);
       stdout.off('resize', onResize); // resizeDebounce cancels the coalesced timer on .off itself
       const pendingApproval = approvalResolve.current;
       approvalResolve.current = null;

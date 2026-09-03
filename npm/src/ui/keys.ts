@@ -103,9 +103,21 @@ export function parseRawKey(chunk: string): KeyAction | null {
 }
 
 /**
- * True when `value` is a CSI-u encoded key or protocol response (kitty key
- * events, push/pop echoes, query answers), never plain text to insert.
+ * True when `value` is a CSI-u encoded key, a protocol response (kitty key
+ * events, push/pop echoes, query answers), or a DECRQM mode-report reply
+ * (`CSI ? Ps ; Pm $ y`, e.g. the answer to the synchronized-output query) —
+ * never plain text to insert.
+ *
+ * `value` here is Ink's own parsed form, which strips the leading ESC before
+ * handing the rest to `useInput`. A terminal's reply to a query this project
+ * sends (synchronized output, in particular) arrives on the same stdin the
+ * editor reads from, and if nothing recognises it in this stripped form it is
+ * treated as pasted text and typed into whatever the user was editing — the
+ * escape sequence itself, landing in the input box. Some terminals are slow
+ * to answer that specific query, so this has to keep matching however late
+ * the reply arrives, not just during a short probe window at startup.
  */
 export function isEncodedKey(value: string): boolean {
-  return /^\[\d+(?:;\d+)*u$|^\[[><?]\d+(?:;\d+)*u$/.test(value);
+  return /^\[\d+(?:;\d+)*u$|^\[[><?]\d+(?:;\d+)*u$/.test(value)
+    || /^\[\?\d+;\d\$y$/.test(value);
 }
