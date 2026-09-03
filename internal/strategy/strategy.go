@@ -97,6 +97,19 @@ func (Selector) selectByProfile(in Input) (Plan, error) {
 		return plan(in, PlanImplementVerify, "verification is REQUIRED; plan-implement-verify keeps the verify step explicit")
 	}
 
+	// High ambiguity means the agent's own reading of the request could be
+	// wrong, and complexity says nothing about that risk — "clean up the
+	// code" is two words and, before this rule, went straight to Direct with
+	// no one checking what "clean up" was taken to mean. This has to run
+	// ahead of the low-complexity shortcut below, or the short, vague
+	// requests that need it most never reach it. A stated plan turns the
+	// agent's interpretation into something a human or an evaluator can
+	// catch before the work happens, rather than discovering the
+	// misunderstanding after it is already in the diff.
+	if p.Ambiguity == task.LevelHigh {
+		return plan(in, PlanImplementVerify, "ambiguity is HIGH; a stated plan surfaces the agent's interpretation before it acts on it")
+	}
+
 	// Research without a software deliverable.
 	if p.Domain == task.DomainResearch && p.Complexity != task.ComplexityLow {
 		return plan(in, ResearchSynthesis, "research domain with meaningful depth; gather evidence then synthesize")
