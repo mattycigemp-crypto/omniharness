@@ -91,3 +91,11 @@ refresh_ms = 100
 [logging]
 level = "info"
 format = "text"
+
+# deep_analysis turns on an optional model call, made after the free
+# heuristic task analysis and only for tasks its own signals already flag as
+# non-trivial, that produces concrete acceptance criteria grounded in the
+# actual request. It spends real tokens on top of the task's own work, so it
+# defaults off.
+[task]
+deep_analysis = false

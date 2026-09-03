@@ -221,3 +221,55 @@ func TestConfigBudgetsReachTheTaskSpec(t *testing.T) {
 		t.Errorf("unset dimensions must still fall back: %+v", got)
 	}
 }
+
+// config.Default() leaves deep_analysis off, so a task that would otherwise
+// warrant deepening must still come back with no AcceptanceCriteria: the
+// runtime must not wire the pass in unless the config says to.
+func TestDeepAnalysisOffByDefaultInRuntime(t *testing.T) {
+	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "done"})
+	rt := testRuntime(t, fake, t.TempDir())
+
+	ss, err := rt.NewSession("", "test task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tsk, err := rt.RunTask(context.Background(), ss.ID, "clean up the code", RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tsk.Profile.AcceptanceCriteria != nil {
+		t.Fatalf("AcceptanceCriteria = %v, want nil with deep_analysis left at its default (off)", tsk.Profile.AcceptanceCriteria)
+	}
+}
+
+// Turning cfg.Task.DeepAnalysis on must actually reach the orchestrator —
+// proven end to end, not just by inspecting the config value.
+func TestDeepAnalysisWiredFromConfig(t *testing.T) {
+	fake := testutil.NewFakeOmniRoute(t,
+		testutil.FakeStep{Content: `["a real criterion"]`}, // the deepening call
+		testutil.FakeStep{Content: "done"},
+	)
+	dir := t.TempDir()
+	testutil.InitFakeWorkspace(t, dir)
+	cfg := config.Default()
+	cfg.Persistence.Dir = dir
+	cfg.Policy.WorkspaceRoot = dir
+	cfg.Task.DeepAnalysis = true
+	rt, err := New(cfg, Options{Gateway: fake.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(rt.Close)
+
+	ss, err := rt.NewSession("", "test task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tsk, err := rt.RunTask(context.Background(), ss.ID, "clean up the code", RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tsk.Profile.AcceptanceCriteria) != 1 {
+		t.Fatalf("AcceptanceCriteria = %v, want 1 entry — config.Task.DeepAnalysis=true should reach the orchestrator", tsk.Profile.AcceptanceCriteria)
+	}
+}

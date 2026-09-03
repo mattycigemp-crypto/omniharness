@@ -269,6 +269,37 @@ func TestExampleConfigDoesNotRemoveTheCeiling(t *testing.T) {
 	}
 }
 
+// DeepAnalysis spends real tokens on top of a task's own work, so an
+// existing install upgrading to a version that has it must see no change in
+// behavior until it opts in.
+func TestDeepAnalysisDefaultsOff(t *testing.T) {
+	if Default().Task.DeepAnalysis {
+		t.Fatal("deep_analysis defaults to true, want false")
+	}
+	cfg, err := Load("../../config/omniharness.example.toml")
+	if err != nil {
+		t.Fatalf("example config must parse: %v", err)
+	}
+	if cfg.Task.DeepAnalysis {
+		t.Error("example config sets deep_analysis = true, want it documented as off")
+	}
+}
+
+func TestDeepAnalysisCanBeTurnedOn(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/c.toml"
+	if err := os.WriteFile(path, []byte("[task]\ndeep_analysis = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Task.DeepAnalysis {
+		t.Error("deep_analysis = true in the file was not honoured")
+	}
+}
+
 // An explicit 0 still means unlimited: the ceiling is a default, not a policy
 // nobody can turn off.
 func TestAnExplicitZeroStillMeansUnlimited(t *testing.T) {

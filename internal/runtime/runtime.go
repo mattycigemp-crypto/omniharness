@@ -152,6 +152,13 @@ func New(cfg config.Config, opts Options) (*Runtime, error) {
 		Workspace:  workspace,
 	}
 
+	// Off by default (see config.Task.DeepAnalysis) — nil disables the pass
+	// entirely, exactly as if this field didn't exist.
+	var deepAnalyzer *task.DeepAnalyzer
+	if cfg.Task.DeepAnalysis {
+		deepAnalyzer = &task.DeepAnalyzer{Gateway: gw, ModelSel: r.ModelSel}
+	}
+
 	r.Orchestrator = orchestrator.New(orchestrator.Deps{
 		Bus:            bus,
 		Store:          store,
@@ -161,6 +168,7 @@ func New(cfg config.Config, opts Options) (*Runtime, error) {
 		Evaluators:     evals,
 		Repair:         r.Repair,
 		Analyzer:       r.Analyzer,
+		DeepAnalyzer:   deepAnalyzer,
 		Strategist:     strategy.Selector{},
 		Tools:          reg,
 		Policy:         pol,

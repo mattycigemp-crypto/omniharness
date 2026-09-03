@@ -93,6 +93,14 @@ type Profile struct {
 	ApprovalRecommended bool         `json:"approvalRecommended"`
 	Confidence          float64      `json:"confidence"`
 	Signals             []string     `json:"signals,omitempty"`
+	// AcceptanceCriteria are concrete, checkable statements of what "done"
+	// looks like for this specific task — grounded in the actual request,
+	// not a generic checklist. Set only by DeepAnalyzer's optional
+	// model-based pass; Analyzer.Analyze alone never populates it, so nil
+	// here means either the pass was skipped (see Profile.worthDeepening)
+	// or it ran and found nothing usable to add. Nothing may assume it is
+	// present.
+	AcceptanceCriteria []string `json:"acceptanceCriteria,omitempty"`
 }
 
 // Result is the outcome of a completed task.
