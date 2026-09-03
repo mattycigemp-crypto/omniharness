@@ -159,3 +159,40 @@ func TestComposeStaysWithinMaxTokens(t *testing.T) {
 		t.Errorf("an unlimited composer dropped %d attachments", out.Dropped)
 	}
 }
+
+// The criteria the deepening pass produces were computed, stored on the
+// Profile, and read by nothing — the same dead-signal shape Ambiguity and
+// ApprovalRecommended used to have. Every agent should see what "done"
+// means for this specific task.
+func TestAcceptanceCriteriaReachTheSystemPrompt(t *testing.T) {
+	c := NewComposer(Limits{})
+	out, _ := c.Compose(Input{
+		Spec: task.Spec{Prompt: "x"},
+		Profile: task.Profile{
+			Complexity:         task.ComplexityHigh,
+			AcceptanceCriteria: []string{"the parser handles empty input", "go test ./... passes"},
+		},
+	})
+	sys := out.Messages[0].Content
+	if !strings.Contains(sys, "ACCEPTANCE CRITERIA") {
+		t.Fatalf("no acceptance criteria section in the system prompt: %q", sys)
+	}
+	for _, want := range []string{"the parser handles empty input", "go test ./... passes"} {
+		if !strings.Contains(sys, want) {
+			t.Errorf("system prompt missing criterion %q", want)
+		}
+	}
+}
+
+// A profile with no criteria (the common case — the deepening pass is off by
+// default) must not grow an empty, confusing section.
+func TestNoAcceptanceCriteriaMeansNoSection(t *testing.T) {
+	c := NewComposer(Limits{})
+	out, _ := c.Compose(Input{
+		Spec:    task.Spec{Prompt: "x"},
+		Profile: task.Profile{Complexity: task.ComplexityLow},
+	})
+	if strings.Contains(out.Messages[0].Content, "ACCEPTANCE CRITERIA") {
+		t.Fatalf("empty criteria produced a section anyway: %q", out.Messages[0].Content)
+	}
+}

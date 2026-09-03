@@ -105,6 +105,13 @@ func (r *Registry) ForTask(p task.Profile) []Evaluator {
 			out = append(out, e)
 		}
 	}
+	// Not gated on domain: criteria describe what "done" means for whatever
+	// this task is, and only exist at all when the deepening pass ran.
+	if len(p.AcceptanceCriteria) > 0 {
+		if e, ok := r.evaluators["acceptance-criteria"]; ok {
+			out = append(out, e)
+		}
+	}
 	return out
 }
 
@@ -115,6 +122,7 @@ func (r *Registry) RegisterDefaults() error {
 		&GoTestEvaluator{},
 		&NpmBuildEvaluator{},
 		&NpmTestEvaluator{},
+		&AcceptanceCriteriaEvaluator{},
 		&DiffCheckEvaluator{},
 		&EvidenceEvaluator{},
 	} {
@@ -235,6 +243,39 @@ func (e *NpmTestEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, st
 		return Fail, "npm test failed:\n" + truncate(out, 4000), nil
 	}
 	return Pass, "npm test passed", nil
+}
+
+// AcceptanceCriteriaEvaluator surfaces the acceptance criteria the optional
+// deepening pass produced (task.DeepAnalyzer) into the verification record.
+//
+// It deliberately never returns Pass or Fail. Whether prose criteria are met
+// is a judgment this evaluator cannot make from a string — matching keywords
+// against the result would manufacture a verdict rather than measure one, and
+// a fabricated pass is worse than an honest "nobody checked". So it reports
+// NeedsReview and names the criteria, which puts them in the evaluations
+// table and in front of whoever reads the run. The criteria also reach every
+// agent through the composed system prompt, so a reviewer on a verify step
+// can judge them with tools; this row records that the harness itself did not.
+type AcceptanceCriteriaEvaluator struct{}
+
+func (e *AcceptanceCriteriaEvaluator) Name() string { return "acceptance-criteria" }
+
+func (e *AcceptanceCriteriaEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, string, error) {
+	criteria := r.Task.Profile.AcceptanceCriteria
+	if len(criteria) == 0 {
+		return NeedsReview, "no acceptance criteria were produced for this task", nil
+	}
+	return NeedsReview, fmt.Sprintf("%s, not machine-checked:\n- %s",
+		plural(len(criteria), "acceptance criterion", "acceptance criteria"),
+		strings.Join(criteria, "\n- ")), nil
+}
+
+// plural renders a count with the right noun form.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 // DiffCheckEvaluator verifies a change-producing task actually changed files.
