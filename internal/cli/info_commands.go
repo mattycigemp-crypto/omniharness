@@ -174,6 +174,36 @@ func newDoctorCmd() *cobra.Command {
 			authOK := diag.State == gateway.AuthOK || diag.State == gateway.AuthNotRequired
 			check("omniroute auth", authOK, fmt.Sprintf("%s [%s] (%s)", authLabel(diag.State), keyMask, diag.Detail))
 
+			// OmniRoute's own live routing-quality snapshot — not a table this
+			// codebase maintains, the gateway's actual confidence-adjusted read
+			// on the providers it has been routing through. A quiet skip on an
+			// older gateway that predates the endpoint (ExplainRouting returns
+			// nil, nil for that), a warning rather than a failure on anything
+			// else, because this is a diagnostic extra, not a core guarantee.
+			if authOK {
+				explain, err := rt.Gateway.ExplainRouting(ctx, 100)
+				if err != nil {
+					warn("omniroute routing quality", false, "", err.Error())
+				} else if explain != nil {
+					degraded, cold := 0, 0
+					for _, q := range explain.Quality {
+						switch q.Classification {
+						case gateway.QualityDegraded:
+							degraded++
+						case gateway.QualityCold:
+							cold++
+						}
+					}
+					// A degraded upstream provider is worth surfacing, not a
+					// reason to fail doctor: it says something about the
+					// gateway's fleet, not about whether this install works.
+					okDetail := fmt.Sprintf("%s tracked, none degraded", count(len(explain.Quality), "model"))
+					warnDetail := fmt.Sprintf("%s tracked, %s degraded, %s untested",
+						count(len(explain.Quality), "model"), count(degraded, "model"), count(cold, "model"))
+					warn("omniroute routing quality", degraded == 0, okDetail, warnDetail)
+				}
+			}
+
 			g, err := telemetry.Global(rt.Store)
 			if err == nil {
 				check("store", true, fmt.Sprintf("%d sessions, %d tasks, %d model calls", g.Sessions, g.Tasks, g.ModelCalls))

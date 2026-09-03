@@ -541,3 +541,117 @@ func (c *Client) ListCombos(ctx context.Context) ([]Combo, error) {
 	}
 	return nil, c.errf(KindBadRequest, 0, "decode combos: %s", trimmed)
 }
+
+// RoutingEvent is one recent routing decision from OmniRoute's in-memory ring
+// buffer. It carries decision metadata only — never a prompt, a body, or a
+// credential — which is what OmniRoute's own handler documents as the safety
+// boundary for this endpoint.
+type RoutingEvent struct {
+	RequestID    string   `json:"requestId"`
+	Provider     string   `json:"provider"`
+	Model        string   `json:"model"`
+	Strategy     string   `json:"strategy"` // combo name, or "direct" when not routed through one
+	LatencyMS    int64    `json:"latencyMs"`
+	TTFTMS       *int64   `json:"ttftMs"` // null for non-streaming, or when nothing was forwarded
+	ITLMS        *int64   `json:"itlMs"`  // null unless streaming
+	InputTokens  *int64   `json:"inputTokens"`
+	OutputTokens *int64   `json:"outputTokens"`
+	Cost         *float64 `json:"cost"`
+	Retries      int      `json:"retries"`
+	FallbackUsed bool     `json:"fallbackUsed"`
+	Outcome      string   `json:"outcome"`
+	Status       *int     `json:"status"` // null when the request never reached a provider
+	FinishReason *string  `json:"finishReason"`
+	TS           int64    `json:"ts"`
+}
+
+// RoutingQualityClass mirrors OmniRoute's own classifyQuality: "cold" means
+// never observed, "warming" means too few samples to trust yet, "degraded"
+// means the operational score has fallen at or below neutral, "healthy" is
+// everything else. Absent or unrecognised values are left as the zero value
+// rather than guessed at.
+type RoutingQualityClass string
+
+const (
+	QualityHealthy  RoutingQualityClass = "healthy"
+	QualityDegraded RoutingQualityClass = "degraded"
+	QualityWarming  RoutingQualityClass = "warming"
+	QualityCold     RoutingQualityClass = "cold"
+)
+
+// RoutingQuality is OmniRoute's live confidence-adjusted quality snapshot for
+// one (provider, model) pair, built from real traffic rather than a static
+// table — this is what a "which model is actually behaving right now" check
+// should read, in preference to any table this codebase maintains itself.
+type RoutingQuality struct {
+	Provider           string              `json:"provider"`
+	Model              string              `json:"model"`
+	Operational        float64             `json:"operational"` // [0,1], confidence-adjusted, 0.5 neutral cold
+	Semantic           *float64            `json:"semantic"`    // [0,1] from an evaluator, or absent
+	Confidence         float64             `json:"confidence"`  // [0,1], sample-count based
+	SemanticConfidence *float64            `json:"semanticConfidence"`
+	Samples            int64               `json:"samples"`
+	Anomalies          int64               `json:"anomalies"`
+	RateLimited        int64               `json:"rateLimited"`
+	LatencyEwmaMS      float64             `json:"latencyEwmaMs"`
+	RecencyMS          *int64              `json:"recencyMs"` // ms since last observed event, absent if never
+	Classification     RoutingQualityClass `json:"classification"`
+}
+
+// RoutingExplain is the response from GET /v1/explain/routing: a bounded
+// window of recent routing decisions across the whole gateway, plus the live
+// per-model quality snapshot. This is retrospective, gateway-wide data — not
+// a prediction for one upcoming request — so it belongs in a diagnostic
+// surface like doctor, not injected into an agent's per-turn context.
+type RoutingExplain struct {
+	Events  []RoutingEvent   `json:"events"`
+	Quality []RoutingQuality `json:"quality"`
+}
+
+// ExplainRouting fetches OmniRoute's own routing-decision ring buffer and
+// live quality snapshot. limit bounds how many recent events come back (the
+// server itself clamps to [1,500]; 0 lets the server apply its own default).
+//
+// A 404 is treated as "not supported by this OmniRoute instance" rather than
+// an error: the endpoint is recent, and a harness talking to an older gateway
+// should degrade to not showing this, not fail doctor outright.
+func (c *Client) ExplainRouting(ctx context.Context, limit int) (*RoutingExplain, error) {
+	url := c.endpoint + "/v1/explain/routing"
+	if limit > 0 {
+		url += fmt.Sprintf("?limit=%d", limit)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, c.errf(KindNetwork, 0, "build request: %v", err)
+	}
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, c.errf(KindNetwork, 0, "%v", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, c.errf(KindNetwork, 0, "read routing explain: %v", err)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.errf(Classify(resp.StatusCode), resp.StatusCode, "explain routing")
+	}
+	var body struct {
+		Events  []RoutingEvent   `json:"events"`
+		Quality []RoutingQuality `json:"quality"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		trimmed := strings.TrimSpace(string(raw))
+		if len(trimmed) > 200 {
+			trimmed = trimmed[:200]
+		}
+		return nil, c.errf(KindBadRequest, 0, "decode routing explain: %s", trimmed)
+	}
+	return &RoutingExplain{Events: body.Events, Quality: body.Quality}, nil
+}
