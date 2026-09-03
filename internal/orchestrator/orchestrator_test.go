@@ -945,3 +945,98 @@ func TestRememberedFactSurvivesToTheNextTask(t *testing.T) {
 		t.Errorf("second task's system prompt did not carry the first task's remembered note: %q", req.Messages[0].Content)
 	}
 }
+
+// userPrompt returns the composed user-role message from a captured chat
+// request — where a step's own spec.Prompt (and any dependency context
+// appended to it) actually lands, as opposed to the system message.
+func userPrompt(t *testing.T, req *gateway.ChatRequest) string {
+	t.Helper()
+	for _, m := range req.Messages {
+		if m.Role == "user" {
+			return m.Content
+		}
+	}
+	t.Fatal("no user message in request")
+	return ""
+}
+
+// step.Depends controlled scheduling order only — a dependent step ran
+// strictly after the step(s) it depended on, but never actually saw what
+// they produced. This is the sequential strategy (s1 → s2 → s3, each
+// depending only on the one immediately before it) proving each step's
+// prompt now carries its own direct dependency's output, and only that
+// one — not a transitive dependency two steps back, and not on the first
+// step, which has no dependency to carry.
+func TestSequentialStepsSeeTheirDirectDependencysOutput(t *testing.T) {
+	dir := t.TempDir()
+	fake := testutil.NewFakeOmniRoute(t,
+		testutil.FakeStep{Content: "PARSER_DESIGN: recursive descent over tokens from lexer.go"},
+		testutil.FakeStep{Content: "EVALUATOR_DESIGN: tree-walking interpreter over the parser's AST"},
+		testutil.FakeStep{Content: "REPL_DESIGN: read a line, evaluate it, print the result"},
+	)
+	o, _, _ := newOrchestrator(t, fake, dir)
+	spec := task.Spec{Prompt: "First write the parser, then the evaluator, then the repl.", CWD: dir}
+	tsk, err := runTask(t, o, "s1", spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tsk.Strategy != string(strategy.Sequential) {
+		t.Fatalf("strategy = %s, want sequential", tsk.Strategy)
+	}
+
+	reqs := fake.RequestsSnapshot()
+	if len(reqs) != 3 {
+		t.Fatalf("chat requests = %d, want 3 (one per sequential step)", len(reqs))
+	}
+
+	if strings.Contains(userPrompt(t, &reqs[0]), "[Output from step") {
+		t.Error("the first step has no dependency and must carry no dependency context")
+	}
+	if !strings.Contains(userPrompt(t, &reqs[1]), "PARSER_DESIGN") {
+		t.Error("the second step's prompt did not carry the first step's output")
+	}
+	third := userPrompt(t, &reqs[2])
+	if !strings.Contains(third, "EVALUATOR_DESIGN") {
+		t.Error("the third step's prompt did not carry the second step's (its direct dependency's) output")
+	}
+	if strings.Contains(third, "PARSER_DESIGN") {
+		t.Error("the third step's prompt leaked the first step's output — it depends only on the second, not transitively on the first")
+	}
+}
+
+func TestFormatDepOutputsFollowsDependsOrder(t *testing.T) {
+	// Depends lists s2 before s1; the rendered context must follow that
+	// order, not Go's unspecified map iteration order.
+	step := strategy.Step{ID: "s3", Depends: []string{"s2", "s1"}}
+	got := formatDepOutputs(step, map[string]string{"s1": "FIRST", "s2": "SECOND"})
+	i1, i2 := strings.Index(got, "FIRST"), strings.Index(got, "SECOND")
+	if i1 == -1 || i2 == -1 || i2 > i1 {
+		t.Fatalf("output not in Depends order (s2, s1): %q", got)
+	}
+}
+
+func TestFormatDepOutputsSkipsBlankAndMissingOutputs(t *testing.T) {
+	step := strategy.Step{ID: "s2", Depends: []string{"s1", "no-such-step"}}
+	got := formatDepOutputs(step, map[string]string{"s1": "   "})
+	if got != "" {
+		t.Fatalf("got = %q, want empty — one dependency's output was blank, the other missing entirely", got)
+	}
+}
+
+func TestFormatDepOutputsIsEmptyWithNoDependencies(t *testing.T) {
+	if got := formatDepOutputs(strategy.Step{ID: "s1"}, nil); got != "" {
+		t.Fatalf("got = %q, want empty for a step with no dependencies", got)
+	}
+}
+
+func TestFormatDepOutputsTruncatesLongOutput(t *testing.T) {
+	long := strings.Repeat("x", depOutputCap+500)
+	step := strategy.Step{ID: "s2", Depends: []string{"s1"}}
+	got := formatDepOutputs(step, map[string]string{"s1": long})
+	if !strings.Contains(got, "...[truncated]") {
+		t.Fatal("expected a truncation marker for output over the cap")
+	}
+	if len(got) > depOutputCap+100 {
+		t.Fatalf("got length %d, want it bounded near the cap, not the full 6500-char input", len(got))
+	}
+}

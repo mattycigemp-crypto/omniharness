@@ -357,7 +357,7 @@ func (o *Orchestrator) executePlan(ctx context.Context, t *task.Task, plan strat
 
 	var firstErr error
 	firstErrSet := false
-	ready := make(chan strategy.Step)
+	ready := make(chan scheduledStep)
 	var wg sync.WaitGroup
 
 	// Scheduler goroutine: emits ready steps until every step is done, an
@@ -393,9 +393,18 @@ func (o *Orchestrator) executePlan(ctx context.Context, t *task.Task, plan strat
 				continue
 			}
 			remaining[emit.ID] = -1 // claimed
+			// Every dependency's output is already final by the time a step
+			// is ready to run — that is what remaining[emit.ID] == 0 means —
+			// so it is safe to snapshot them here, still under the lock that
+			// protects outputs, and hand the snapshot to the worker instead
+			// of a live reference into a map other goroutines keep writing.
+			depOutputs := make(map[string]string, len(emit.Depends))
+			for _, d := range emit.Depends {
+				depOutputs[d] = outputs[d]
+			}
 			mu.Unlock()
 			select {
-			case ready <- *emit:
+			case ready <- scheduledStep{Step: *emit, DepOutputs: depOutputs}:
 			case <-ctx.Done():
 				return
 			}
@@ -406,8 +415,9 @@ func (o *Orchestrator) executePlan(ctx context.Context, t *task.Task, plan strat
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for step := range ready {
-				res := o.executeStep(ctx, t, step, artifacts, budgets)
+			for sched := range ready {
+				step := sched.Step
+				res := o.executeStep(ctx, t, step, sched.DepOutputs, artifacts, budgets)
 
 				mu.Lock()
 				pending.Add(-1)
@@ -443,10 +453,53 @@ type stepResult struct {
 	Err    error
 }
 
+// scheduledStep is what the executePlan scheduler hands a worker: a step
+// that is ready to run, plus a snapshot of its own dependencies' outputs —
+// already final, since a step only becomes ready once every dependency has
+// completed.
+type scheduledStep struct {
+	Step       strategy.Step
+	DepOutputs map[string]string
+}
+
+// depOutputCap bounds how much of a single dependency's output is carried
+// into a dependent step's prompt — enough to actually inform the next
+// step's work without letting one verbose step consume the whole context
+// budget on its own.
+const depOutputCap = 6000
+
+// formatDepOutputs renders the outputs of step's own dependencies as prompt
+// context, in step.Depends order rather than map iteration order so the
+// same plan always produces the same prompt. Without this, step.Depends
+// only ever controlled scheduling order — an "impl" step that depends on a
+// "plan" step ran strictly after it, but never saw what the plan actually
+// said; a "synthesizer" step never saw what the researchers it depended on
+// actually found. Every multi-step strategy (sequential,
+// plan-implement-verify, research-synthesis, debate...) ran its steps in
+// the right order while each one worked from the original task prompt
+// alone, blind to what the step before it had produced.
+func formatDepOutputs(step strategy.Step, depOutputs map[string]string) string {
+	if len(step.Depends) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, id := range step.Depends {
+		out := strings.TrimSpace(depOutputs[id])
+		if out == "" {
+			continue
+		}
+		if len(out) > depOutputCap {
+			out = out[:depOutputCap] + "\n...[truncated]"
+		}
+		fmt.Fprintf(&b, "\n\n[Output from step %q]\n%s", id, out)
+	}
+	return b.String()
+}
+
 // executeStep runs one plan step with a single agent and a per-step repair
 // loop. Repairs change variables (role, model capability, instructions) — the
 // exact failed execution is never blindly repeated.
-func (o *Orchestrator) executeStep(ctx context.Context, t *task.Task, step strategy.Step, artifacts *sync.Map, budgets *budget.Tracker) stepResult {
+func (o *Orchestrator) executeStep(ctx context.Context, t *task.Task, step strategy.Step, depOutputs map[string]string, artifacts *sync.Map, budgets *budget.Tracker) stepResult {
 	role := agent.Role(step.Role)
 	if role == "" {
 		role = agent.RoleImplementer
@@ -457,12 +510,13 @@ func (o *Orchestrator) executeStep(ctx context.Context, t *task.Task, step strat
 	if maxAttempts <= 0 {
 		maxAttempts = 2
 	}
+	depContext := formatDepOutputs(step, depOutputs)
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if ctx.Err() != nil {
 			return stepResult{ID: step.ID, Err: ctx.Err()}
 		}
-		ag, err := o.runAgent(ctx, t, role, modelRef, extra, step.Task, artifacts, budgets)
+		ag, err := o.runAgent(ctx, t, role, modelRef, extra, step.Task, depContext, artifacts, budgets)
 		if err == nil {
 			return stepResult{ID: step.ID, Output: ag.LastOutput()}
 		}
@@ -494,11 +548,12 @@ func (o *Orchestrator) executeStep(ctx context.Context, t *task.Task, step strat
 }
 
 // runAgent creates and runs one agent for the task.
-func (o *Orchestrator) runAgent(ctx context.Context, t *task.Task, role agent.Role, modelRef, extra, stepTask string, artifacts *sync.Map, budgets *budget.Tracker) (*agent.Agent, error) {
+func (o *Orchestrator) runAgent(ctx context.Context, t *task.Task, role agent.Role, modelRef, extra, stepTask, depContext string, artifacts *sync.Map, budgets *budget.Tracker) (*agent.Agent, error) {
 	spec := t.Spec
 	if stepTask != "" && stepTask != "execute the task" && !strings.HasPrefix(stepTask, "step ") {
 		spec.Prompt = spec.Prompt + "\n\n[This step] " + stepTask
 	}
+	spec.Prompt += depContext
 	if extra != "" {
 		spec.Prompt = spec.Prompt + "\n\n[Repair instructions] " + extra
 	}
