@@ -52,6 +52,90 @@ func TestGoTestEvaluator(t *testing.T) {
 	}
 }
 
+func TestNpmBuildSkipsWithNoPackageJSON(t *testing.T) {
+	e := &NpmBuildEvaluator{}
+	outcome, detail, err := e.Evaluate(context.Background(), Request{CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != NeedsReview {
+		t.Fatalf("outcome = %s (%s), want NeedsReview for a non-Node workspace", outcome, detail)
+	}
+}
+
+// A Node project with no "build" script (a plain library, a script) is not
+// a failure to build — there is nothing to build, same as GoBuildEvaluator
+// reads "no go.mod" as "not applicable" rather than "broken".
+func TestNpmBuildSkipsWithNoBuildScript(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"x","scripts":{"test":"echo ok"}}`), 0o644)
+	e := &NpmBuildEvaluator{}
+	outcome, detail, err := e.Evaluate(context.Background(), Request{CWD: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != NeedsReview {
+		t.Fatalf("outcome = %s (%s), want NeedsReview with no build script", outcome, detail)
+	}
+}
+
+func TestNpmBuildPassAndFail(t *testing.T) {
+	if _, err := exec.LookPath("npm"); err != nil {
+		t.Skip("npm not available")
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"x","scripts":{"build":"node -e \"process.exit(0)\""}}`), 0o644)
+	e := &NpmBuildEvaluator{}
+	outcome, detail, err := e.Evaluate(context.Background(), Request{CWD: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != Pass {
+		t.Fatalf("outcome %s: %s", outcome, detail)
+	}
+
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"x","scripts":{"build":"node -e \"process.exit(1)\""}}`), 0o644)
+	outcome, detail, _ = e.Evaluate(context.Background(), Request{CWD: dir})
+	if outcome != Fail {
+		t.Fatalf("expected fail, got %s: %s", outcome, detail)
+	}
+}
+
+func TestNpmTestSkipsWithNoTestScript(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"x","scripts":{"build":"echo ok"}}`), 0o644)
+	e := &NpmTestEvaluator{}
+	outcome, detail, err := e.Evaluate(context.Background(), Request{CWD: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != NeedsReview {
+		t.Fatalf("outcome = %s (%s), want NeedsReview with no test script", outcome, detail)
+	}
+}
+
+func TestNpmTestPassAndFail(t *testing.T) {
+	if _, err := exec.LookPath("npm"); err != nil {
+		t.Skip("npm not available")
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"x","scripts":{"test":"node -e \"process.exit(0)\""}}`), 0o644)
+	e := &NpmTestEvaluator{}
+	outcome, detail, err := e.Evaluate(context.Background(), Request{CWD: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != Pass {
+		t.Fatalf("outcome %s: %s", outcome, detail)
+	}
+
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"x","scripts":{"test":"node -e \"process.exit(1)\""}}`), 0o644)
+	outcome, detail, _ = e.Evaluate(context.Background(), Request{CWD: dir})
+	if outcome != Fail {
+		t.Fatalf("expected fail, got %s: %s", outcome, detail)
+	}
+}
+
 func TestDiffCheck(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -157,7 +241,7 @@ func TestRegistrySelection(t *testing.T) {
 	for _, e := range evs {
 		names[e.Name()] = true
 	}
-	if !names["go-build"] || !names["go-test"] || !names["diff-check"] {
+	if !names["go-build"] || !names["go-test"] || !names["npm-build"] || !names["npm-test"] || !names["diff-check"] {
 		t.Fatalf("software evaluators %v", names)
 	}
 	// A read-only software task still gets build/test, but no diff check: it
@@ -172,7 +256,7 @@ func TestRegistrySelection(t *testing.T) {
 	if names["diff-check"] {
 		t.Fatalf("read-only software task must not run diff-check: %v", names)
 	}
-	if !names["go-build"] || !names["go-test"] {
+	if !names["go-build"] || !names["go-test"] || !names["npm-build"] || !names["npm-test"] {
 		t.Fatalf("read-only software task still needs build/test: %v", names)
 	}
 	// Research task gets evidence.

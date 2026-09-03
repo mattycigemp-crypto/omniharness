@@ -6,6 +6,7 @@ package evaluate
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -84,6 +85,17 @@ func (r *Registry) ForTask(p task.Profile) []Evaluator {
 		if e, ok := r.evaluators["go-test"]; ok {
 			out = append(out, e)
 		}
+		// Same offer-unconditionally-and-self-skip pattern as the Go pair
+		// above: every software task gets these regardless of language, and
+		// each one checks for package.json (and the script it needs) itself
+		// rather than the harness trying to detect "this is a Node project"
+		// up front.
+		if e, ok := r.evaluators["npm-build"]; ok {
+			out = append(out, e)
+		}
+		if e, ok := r.evaluators["npm-test"]; ok {
+			out = append(out, e)
+		}
 		if e, ok := r.evaluators["diff-check"]; ok && p.ModifiesFiles {
 			out = append(out, e)
 		}
@@ -96,13 +108,13 @@ func (r *Registry) ForTask(p task.Profile) []Evaluator {
 	return out
 }
 
-// hasToolchain is a permissive probe: the profile's tools mention the runtime.
-
 // RegisterDefaults adds the built-in evaluators.
 func (r *Registry) RegisterDefaults() error {
 	for _, e := range []Evaluator{
 		&GoBuildEvaluator{},
 		&GoTestEvaluator{},
+		&NpmBuildEvaluator{},
+		&NpmTestEvaluator{},
 		&DiffCheckEvaluator{},
 		&EvidenceEvaluator{},
 	} {
@@ -161,6 +173,68 @@ func (e *GoTestEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, str
 		return Fail, "tests failed:\n" + truncate(out, 4000), nil
 	}
 	return Pass, "tests pass", nil
+}
+
+// hasNpmScript reports whether dir's package.json declares the named script.
+// A missing or unparseable package.json reads the same as "no such script" —
+// the caller's own os.Stat check on package.json distinguishes "not a Node
+// project" from "malformed package.json" for the message it reports.
+func hasNpmScript(dir, script string) bool {
+	b, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return false
+	}
+	var pkg struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if err := json.Unmarshal(b, &pkg); err != nil {
+		return false
+	}
+	_, ok := pkg.Scripts[script]
+	return ok
+}
+
+// NpmBuildEvaluator runs `npm run build` for a Node/TypeScript workspace.
+// Skips when there is no package.json (not a Node project) or no "build"
+// script (many Node projects — libraries, plain scripts — have nothing to
+// build), same as GoBuildEvaluator skips a workspace with no go.mod.
+type NpmBuildEvaluator struct{}
+
+func (e *NpmBuildEvaluator) Name() string { return "npm-build" }
+
+func (e *NpmBuildEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, string, error) {
+	if _, err := os.Stat(filepath.Join(r.CWD, "package.json")); err != nil {
+		return NeedsReview, "no package.json — npm build check skipped", nil
+	}
+	if !hasNpmScript(r.CWD, "build") {
+		return NeedsReview, `no "build" script in package.json — npm build check skipped`, nil
+	}
+	out, err := runCmd(ctx, r.CWD, "npm", "run", "build")
+	if err != nil {
+		return Fail, "npm run build failed:\n" + truncate(out, 4000), nil
+	}
+	return Pass, "npm run build ok", nil
+}
+
+// NpmTestEvaluator runs `npm test` for a Node/TypeScript workspace. Skips
+// when there is no package.json or no "test" script, same reasoning as
+// NpmBuildEvaluator.
+type NpmTestEvaluator struct{}
+
+func (e *NpmTestEvaluator) Name() string { return "npm-test" }
+
+func (e *NpmTestEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, string, error) {
+	if _, err := os.Stat(filepath.Join(r.CWD, "package.json")); err != nil {
+		return NeedsReview, "no package.json — npm test check skipped", nil
+	}
+	if !hasNpmScript(r.CWD, "test") {
+		return NeedsReview, `no "test" script in package.json — npm test check skipped`, nil
+	}
+	out, err := runCmd(ctx, r.CWD, "npm", "test")
+	if err != nil {
+		return Fail, "npm test failed:\n" + truncate(out, 4000), nil
+	}
+	return Pass, "npm test passed", nil
 }
 
 // DiffCheckEvaluator verifies a change-producing task actually changed files.
