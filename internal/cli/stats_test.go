@@ -172,9 +172,11 @@ func TestStatsJSONCarriesTheNumbersWithoutParsingColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 	var back struct {
-		Totals     telemetry.GlobalMetrics   `json:"totals"`
-		Models     []telemetry.ModelStats    `json:"models"`
-		Tools      []telemetry.ToolStats     `json:"tools"`
+		Totals telemetry.GlobalMetrics `json:"totals"`
+		Models []telemetry.ModelStats  `json:"models"`
+		Tools  []telemetry.ToolStats   `json:"tools"`
+		// Its own field: adding it to the group above would have shifted
+		// every one of their columns too.
 		Strategies []telemetry.StrategyStats `json:"strategies"`
 	}
 	if err := json.Unmarshal(b, &back); err != nil {

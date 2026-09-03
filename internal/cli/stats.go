@@ -16,10 +16,12 @@ import (
 // not a rendering of the table below, so a script does not have to parse
 // columns to get at the numbers.
 type statsReport struct {
-	Totals     telemetry.GlobalMetrics    `json:"totals"`
-	Models     []telemetry.ModelStats     `json:"models"`
-	Tools      []telemetry.ToolStats      `json:"tools"`
-	Strategies []telemetry.StrategyStats  `json:"strategies"`
+	Totals telemetry.GlobalMetrics `json:"totals"`
+	Models []telemetry.ModelStats  `json:"models"`
+	Tools  []telemetry.ToolStats   `json:"tools"`
+	// Strategies is its own field, not aligned with the three above: adding
+	// it to that group would have shifted every one of their columns too.
+	Strategies []telemetry.StrategyStats `json:"strategies"`
 }
 
 func newStatsCmd() *cobra.Command {
