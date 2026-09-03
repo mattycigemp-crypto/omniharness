@@ -35,6 +35,13 @@ export interface OmniRouteCombo {
 
 export type ChatMessage = ChatWireMessage;
 
+/** One `/v1/models` entry: the id, and the context window when the catalog states one. */
+export interface CatalogEntry {
+  id: string;
+  /** Tokens, from `context_length` (or `max_input_tokens` when that is all the entry carries). */
+  contextLength?: number;
+}
+
 export interface ChatTool {
   type: 'function';
   function: { name: string; description?: string; parameters: unknown };
@@ -213,15 +220,26 @@ export class OmniRouteClient {
 
   /** List every model id the gateway exposes, including `auto/*` virtual combos and individual providers. */
   public async listModels(signal?: AbortSignal): Promise<readonly string[]> {
+    return (await this.listCatalog(signal)).map((entry) => entry.id);
+  }
+
+  /**
+   * The catalog with the context window each entry advertises. OmniRoute
+   * states `context_length` on providers' models, on `auto/*` engines and on
+   * combos alike; `max_input_tokens` stands in when an entry carries only that.
+   */
+  public async listCatalog(signal?: AbortSignal): Promise<readonly CatalogEntry[]> {
     const response = await this.requestWithRetry('/v1/models', { method: 'GET', signal });
     const payload: unknown = await response.json();
     const data = this.isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
-    const ids: string[] = [];
+    const entries: CatalogEntry[] = [];
     for (const entry of data) {
-      if (this.isRecord(entry) && typeof entry.id === 'string' && entry.id.trim() !== '') ids.push(entry.id);
+      if (!this.isRecord(entry) || typeof entry.id !== 'string' || entry.id.trim() === '') continue;
+      const window = this.positive(entry.context_length) ?? this.positive(entry.max_input_tokens);
+      entries.push(window !== undefined ? { id: entry.id, contextLength: window } : { id: entry.id });
     }
-    if (ids.length === 0) throw new OmniRouteError(response.status, 'invalid models response');
-    return ids;
+    if (entries.length === 0) throw new OmniRouteError(response.status, 'invalid models response');
+    return entries;
   }
 
   /** Retry transient responses for idempotent metadata reads without touching chat/tool requests. */
@@ -480,6 +498,8 @@ export class OmniRouteClient {
     const decision = this.parseDecision(headers.get('x-omniroute-decision'));
     const provider = headers.get('x-omniroute-provider') ?? decision.provider;
     if (provider) fallback.activeProvider = provider;
+    const model = headers.get('x-omniroute-model');
+    if (model && model.trim() !== '') fallback.model = model.trim();
     if (decision.strategy) fallback.strategy = decision.strategy;
     if (decision.latencyMs !== undefined) fallback.latencyMs = decision.latencyMs;
     fallback.lastFailure = headers.get('x-omniroute-fallback-reason') ?? fallback.lastFailure;
@@ -525,6 +545,10 @@ export class OmniRouteClient {
 
   private number(value: unknown): number {
     return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  }
+
+  private positive(value: unknown): number | undefined {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
   }
 
   private safeParse(text: string): Record<string, unknown> | null {

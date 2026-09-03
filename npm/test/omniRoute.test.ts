@@ -407,3 +407,55 @@ test('usage: the SSE metadata trailer is the final word on a stream, and other c
     assert.equal(metrics.fallback.activeProvider, 'openrouter');
   } finally { live.close(); }
 });
+
+test('listCatalog() keeps the context window each entry states, and listModels() still returns the ids', async () => {
+  const live = server(() => Response.json({ object: 'list', data: [
+    { id: 'auto/best-coding', owned_by: 'combo', context_length: 1_048_576, max_input_tokens: 1_048_576 },
+    { id: 'cc/claude-sonnet-4-6', owned_by: 'claude', context_length: 200_000 },
+    { id: 'nebius/some-model', owned_by: 'nebius', max_input_tokens: 32_768 },
+    { id: 'openai/gpt-5.4', owned_by: 'openai' },
+    { id: 'odd/entry', context_length: 'lots' },
+    { id: '' },
+    'not an entry',
+  ] }));
+  try {
+    const client = new OmniRouteClient({ endpoint: live.url });
+    const catalog = await client.listCatalog();
+    assert.deepEqual(catalog, [
+      { id: 'auto/best-coding', contextLength: 1_048_576 },
+      { id: 'cc/claude-sonnet-4-6', contextLength: 200_000 },
+      { id: 'nebius/some-model', contextLength: 32_768 },
+      { id: 'openai/gpt-5.4' },
+      { id: 'odd/entry' },
+    ]);
+    assert.deepEqual(await client.listModels(), ['auto/best-coding', 'cc/claude-sonnet-4-6', 'nebius/some-model', 'openai/gpt-5.4', 'odd/entry']);
+  } finally { live.close(); }
+  const empty = server(() => Response.json({ data: [] }));
+  try { await assert.rejects(() => new OmniRouteClient({ endpoint: empty.url }).listCatalog(), (error: unknown) => error instanceof OmniRouteError); }
+  finally { empty.close(); }
+});
+
+test('the model that answered is read from X-OmniRoute-Model, on a reply and at the end of a stream', async () => {
+  const reply = server(() => {
+    const response = Response.json({ model: 'omniroute', choices: [{ message: { role: 'assistant', content: 'ok' } }] });
+    response.headers.set('x-omniroute-model', 'gpt-4o-mini');
+    return response;
+  });
+  try {
+    const client = new OmniRouteClient({ endpoint: reply.url });
+    await client.chat('auto/best-fast', [{ role: 'user', content: 'hi' }]);
+    assert.equal(client.snapshotMetrics().fallback.model, 'gpt-4o-mini');
+  } finally { reply.close(); }
+
+  const stream = sseServer([
+    'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}',
+    ': x-omniroute-model=claude-sonnet-4-6',
+    'data: [DONE]',
+    '',
+  ].join('\n'), { 'x-omniroute-model': 'gpt-4o-mini' });
+  try {
+    const client = new OmniRouteClient({ endpoint: stream.url });
+    await client.chatStream('auto/best-coding', [{ role: 'user', content: 'hi' }]);
+    assert.equal(client.snapshotMetrics().fallback.model, 'claude-sonnet-4-6');
+  } finally { stream.close(); }
+});

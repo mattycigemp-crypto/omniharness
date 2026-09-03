@@ -43,6 +43,13 @@ function stubGateway() {
   let inFlightWorkers = 0;
   let peakConcurrentWorkers = 0;
   const server = http.createServer(async (req, res) => {
+    // The TUI reads the catalog at start-up to size the context meter; this
+    // gateway has no catalog to offer, and that is not what the test is about.
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ object: 'list', data: [] }));
+      return;
+    }
     const raw: Buffer[] = [];
     for await (const c of req) raw.push(Buffer.from(c));
     const body = JSON.parse(Buffer.concat(raw).toString()) as {

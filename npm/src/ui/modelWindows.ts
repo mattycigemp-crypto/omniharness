@@ -6,6 +6,12 @@
  * a model id (or the provider name OmniRoute reports) to a token budget;
  * `contextMeter` turns "tokens in" into a fill fraction and a zone the UI
  * colours (ok / warn / danger) using the playbook's 70 / 90 thresholds.
+ *
+ * The gateway's catalog is the first source: `/v1/models` states a
+ * `context_length` per entry, and `windowIndex` turns that into a lookup the
+ * meter consults before the substring table below. The table remains the
+ * answer for a model the catalog does not size, and when the catalog could
+ * not be read at all.
  */
 
 export type ContextZone = 'ok' | 'warn' | 'danger';
@@ -48,12 +54,56 @@ const WINDOWS: ReadonlyArray<readonly [pattern: string, tokens: number]> = [
 /** Fallback window when nothing matches — conservative so the meter warns early rather than late. */
 export const DEFAULT_WINDOW = 128_000;
 
+/** Windows keyed by lower-cased model id. */
+export type WindowIndex = ReadonlyMap<string, number>;
+
+/** The catalog shape `windowIndex` reads: an id and, when stated, a window. */
+export interface WindowSource {
+  id: string;
+  contextLength?: number;
+}
+
+/**
+ * Build the lookup from a catalog. Each entry is keyed by its full id and,
+ * when the id carries a provider prefix, by the bare model name after it —
+ * `X-OmniRoute-Model` reports the upstream name (`claude-sonnet-4-6`) while
+ * the catalog lists it under a prefix (`cc/claude-sonnet-4-6`). The first
+ * entry to claim a bare name keeps it, so a `dual`-mode mirror never
+ * contradicts its primary.
+ */
+export function windowIndex(entries: readonly WindowSource[]): WindowIndex {
+  const index = new Map<string, number>();
+  for (const entry of entries) {
+    const tokens = entry.contextLength;
+    if (tokens === undefined || !Number.isFinite(tokens) || tokens <= 0) continue;
+    const id = entry.id.trim().toLowerCase();
+    if (id === '') continue;
+    if (!index.has(id)) index.set(id, tokens);
+    const slash = id.indexOf('/');
+    if (slash > 0 && slash < id.length - 1) {
+      const bare = id.slice(slash + 1);
+      if (!index.has(bare)) index.set(bare, tokens);
+    }
+  }
+  return index;
+}
+
 /**
  * Resolve a context window for a model id and/or the provider OmniRoute
- * reported for the turn. Matching is case-insensitive substring; the longest
- * matching pattern wins so `gpt-4o-mini` beats `gpt-4o`.
+ * reported for the turn. A catalog `known` answers first, by the exact id and
+ * then by the bare name after a provider prefix. Otherwise matching is
+ * case-insensitive substring; the longest matching pattern wins so
+ * `gpt-4o-mini` beats `gpt-4o`.
  */
-export function windowFor(modelId: string | undefined, provider?: string): number {
+export function windowFor(modelId: string | undefined, provider?: string, known?: WindowIndex): number {
+  if (known && modelId) {
+    const id = modelId.trim().toLowerCase();
+    const exact = known.get(id);
+    if (exact !== undefined) return exact;
+    const slash = id.indexOf('/');
+    const bare = slash > 0 ? known.get(id.slice(slash + 1)) : undefined;
+    if (bare !== undefined) return bare;
+  }
   const haystack = `${modelId ?? ''} ${provider ?? ''}`.toLowerCase();
   let best: number | undefined;
   let bestLen = 0;
@@ -67,8 +117,8 @@ export function windowFor(modelId: string | undefined, provider?: string): numbe
 }
 
 /** Build the meter. `used` below 0 clamps to 0; the fraction is capped at 1. */
-export function contextMeter(used: number, modelId: string | undefined, provider?: string): ContextMeter {
-  const window = windowFor(modelId, provider);
+export function contextMeter(used: number, modelId: string | undefined, provider?: string, known?: WindowIndex): ContextMeter {
+  const window = windowFor(modelId, provider, known);
   const safeUsed = Math.max(0, used);
   const fraction = Math.min(1, safeUsed / window);
   const zone: ContextZone = fraction >= 0.9 ? 'danger' : fraction >= 0.7 ? 'warn' : 'ok';
