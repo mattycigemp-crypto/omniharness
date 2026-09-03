@@ -918,7 +918,12 @@ func TestRememberedFactSurvivesToTheNextTask(t *testing.T) {
 	}
 	o.deps.Tools = nativeReg
 
-	if _, err := runTask(t, o, "s1", task.Spec{Prompt: "Note the test setup for this repo.", CWD: dir}); err != nil {
+	// Reuses the exact prompt TestDirectStrategyRunsSingleAgent pins to a
+	// single-agent Direct strategy — this test is about the tool call and
+	// the memory round trip, not strategy selection, so it needs a strategy
+	// guaranteed not to split the two scripted responses across agents that
+	// race for them.
+	if _, err := runTask(t, o, "s1", task.Spec{Prompt: "Fix the typo in README.md.", CWD: dir}); err != nil {
 		t.Fatal(err)
 	}
 	if _, found, _ := projectMemory.Recall(dir, "test-setup"); !found {
