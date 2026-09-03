@@ -7,6 +7,7 @@ import { ownVersion, runUpdate } from './update.js';
 import { readActiveCombo } from './config/settings.js';
 import { OmniRouteClient } from './config/omniRoute.js';
 import { doctor, helpText, models } from './doctor.js';
+import { debounceResizeEvents } from './ui/resizeDebounce.js';
 
 // A crash anywhere below would otherwise surface as a raw Node stack trace, or
 // as an unhandled rejection that terminates the process without saying why.
@@ -77,8 +78,13 @@ if (command === 'update') {
     // The cost is that quitting no longer restores the pre-launch screen. For
     // a tool whose output you are meant to read back, that is the right trade.
     //
+    // Coalesce resize delivery before Ink's own internal listener ever sees
+    // it — see resizeDebounce.ts. Only meaningful for a real terminal; a
+    // non-TTY stdout never emits 'resize' and patching it would be inert.
+    const stdout = process.stdout.isTTY ? debounceResizeEvents(process.stdout, 80) : process.stdout;
+
     // The app owns Ctrl+C so idle quits but an in-flight run is cancelled first.
-    const { waitUntilExit } = render(<TerminalInterface engine={engine} />, { exitOnCtrlC: false });
+    const { waitUntilExit } = render(<TerminalInterface engine={engine} />, { stdout, exitOnCtrlC: false });
     await waitUntilExit();
   })();
 }
