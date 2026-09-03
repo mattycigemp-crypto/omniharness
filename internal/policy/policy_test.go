@@ -355,3 +355,80 @@ func TestEveryRefusalExplainsItself(t *testing.T) {
 		}
 	}
 }
+
+// EvaluateTaskRisk is the task-level counterpart to Evaluate: it must reach
+// the same RiskAction verdict a tool of that risk class would get, but skip
+// every tool-specific rule — there is no tool name to check against
+// allow/block lists or the shell/git/workspace special cases.
+func TestEvaluateTaskRiskMatchesToolRiskAction(t *testing.T) {
+	e := NewEngine(defaultCfg(), nil)
+
+	if d, _ := e.EvaluateTaskRisk(tools.RiskLow); d != Allow {
+		t.Errorf("low risk = %s, want allow", d)
+	}
+	if d, reason := e.EvaluateTaskRisk(tools.RiskHigh); d != Ask {
+		t.Errorf("high risk = %s (%s), want ask", d, reason)
+	}
+	if d, reason := e.EvaluateTaskRisk(tools.RiskCritical); d != Block {
+		t.Errorf("critical risk = %s (%s), want block — critical cannot be talked down to a prompt", d, reason)
+	}
+}
+
+// A task with no tool name at all must not trip Evaluate's "missing tool
+// name" block — that rule exists for tool calls, and a task-level decision
+// has no tool to name.
+func TestEvaluateTaskRiskDoesNotBlockOnAnEmptyToolName(t *testing.T) {
+	e := NewEngine(defaultCfg(), nil)
+	if d, reason := e.EvaluateTaskRisk(tools.RiskLow); d != Allow {
+		t.Fatalf("decision = %s (%s), want allow", d, reason)
+	}
+}
+
+func TestEvaluateAndExecuteTaskRiskConsultsTheApprover(t *testing.T) {
+	var granted bool
+	e := NewEngine(defaultCfg(), &fakeApprover{fn: func() bool { return granted }})
+
+	granted = true
+	d, err := e.EvaluateAndExecuteTaskRisk(context.Background(), tools.RiskHigh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d != Allow {
+		t.Fatalf("expected allow after grant, got %s", d)
+	}
+
+	granted = false
+	d, err = e.EvaluateAndExecuteTaskRisk(context.Background(), tools.RiskHigh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d != Block {
+		t.Fatalf("expected block after deny, got %s", d)
+	}
+}
+
+func TestEvaluateAndExecuteTaskRiskFailsLoudlyWithNoApprover(t *testing.T) {
+	e := NewEngine(defaultCfg(), nil)
+	d, err := e.EvaluateAndExecuteTaskRisk(context.Background(), tools.RiskHigh)
+	if err == nil {
+		t.Fatal("expected an error when no approver is connected")
+	}
+	if d != Block {
+		t.Fatalf("decision = %s, want block", d)
+	}
+}
+
+// A risk class outside RiskAction's four known values (low/medium/high/
+// critical) still must not silently allow — the same rule Evaluate applies
+// to a mislabelled tool applies to a task-level risk that doesn't match any
+// configured action.
+func TestEvaluateAndExecuteTaskRiskDoesNotAllowByDefault(t *testing.T) {
+	e := NewEngine(Config{RiskAction: map[string]string{}}, &fakeApprover{fn: func() bool { return true }})
+	d, err := e.EvaluateAndExecuteTaskRisk(context.Background(), tools.RiskHigh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d != Allow {
+		t.Fatalf("decision = %s, want allow — approver granted an ask-by-default unrecognised risk class", d)
+	}
+}

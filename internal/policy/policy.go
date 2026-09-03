@@ -128,32 +128,74 @@ func (e *Engine) Evaluate(ctx context.Context, r Request) (Decision, string, err
 		}
 	}
 
+	d, reason := e.decideForRisk(r.Risk)
+	return d, reason, nil
+}
+
+// decideForRisk maps a risk class to a decision using cfg.RiskAction alone —
+// no tool name, no allow/block lists, no shell/git/workspace special cases.
+// Evaluate falls through to this once every tool-specific rule has cleared;
+// EvaluateTaskRisk uses it directly, since none of those tool-specific rules
+// mean anything for a task considered as a whole rather than one action.
+func (e *Engine) decideForRisk(risk tools.Risk) (Decision, string) {
 	// An unrecognised risk class is not a licence to run. The four known
 	// classes are always present in the config (Default seeds them and a
 	// partial TOML table merges into it rather than replacing it), so reaching
-	// this fallback means a tool declared something outside that set — an
-	// empty risk, or a value this build does not know. Allowing it would let a
-	// tool opt out of the gate simply by mislabelling itself.
-	action, ok := e.cfg.RiskAction[string(r.Risk)]
+	// this fallback means something declared a risk outside that set — empty,
+	// or a value this build does not know. Allowing it would let a caller opt
+	// out of the gate simply by mislabelling itself.
+	action, ok := e.cfg.RiskAction[string(risk)]
 	if !ok {
-		return Ask, fmt.Sprintf("tool %q declares an unrecognised risk class %q; approval required", r.Tool, r.Risk), nil
+		return Ask, fmt.Sprintf("unrecognised risk class %q; approval required", risk)
 	}
 	switch action {
 	case "block":
-		return Block, fmt.Sprintf("risk class %q is blocked by policy", r.Risk), nil
+		return Block, fmt.Sprintf("risk class %q is blocked by policy", risk)
 	case "ask":
 		// Critical is the one class that cannot be talked down to a prompt.
 		// Configuring it as "ask" does not make it promptable; it still
 		// blocks, whether or not an approver is connected. The old wording
 		// here blamed a missing approver, which read as a setup problem when
 		// it is a deliberate refusal.
-		if r.Risk == tools.RiskCritical {
-			return Block, "critical-risk tools cannot be approved interactively; set an explicit policy for them", nil
+		if risk == tools.RiskCritical {
+			return Block, "critical-risk actions cannot be approved interactively; set an explicit policy for them"
 		}
-		return Ask, fmt.Sprintf("risk class %q requires approval", r.Risk), nil
+		return Ask, fmt.Sprintf("risk class %q requires approval", risk)
 	default:
-		return Allow, "allowed by policy", nil
+		return Allow, "allowed by policy"
 	}
+}
+
+// EvaluateTaskRisk decides whether a task as a whole — not any one tool call
+// — may proceed, using the same cfg.RiskAction config every tool risk class
+// resolves against. It skips every tool-specific rule in Evaluate
+// (allow/block lists, shell/git/workspace special cases): those describe one
+// action, and a task-level decision happens before any tool has even been
+// chosen.
+func (e *Engine) EvaluateTaskRisk(risk tools.Risk) (Decision, string) {
+	return e.decideForRisk(risk)
+}
+
+// EvaluateAndExecuteTaskRisk is EvaluateTaskRisk's EvaluateAndExecute
+// counterpart: evaluate, and if the decision is Ask, consult the approver
+// with a Request whose Tool is deliberately empty — the approver prompt (CLI
+// and TUI both) renders that as "this task" rather than a specific action.
+func (e *Engine) EvaluateAndExecuteTaskRisk(ctx context.Context, risk tools.Risk) (Decision, error) {
+	d, reason := e.EvaluateTaskRisk(risk)
+	if d != Ask {
+		return d, nil
+	}
+	if e.approver == nil {
+		return Block, fmt.Errorf("approval required (%s) but no approver is connected", reason)
+	}
+	granted, err := e.approver.RequestApproval(ctx, Request{Risk: risk}, reason)
+	if err != nil {
+		return Block, err
+	}
+	if !granted {
+		return Block, nil
+	}
+	return Allow, nil
 }
 
 // EvaluateAndExecute is a convenience used by the agent loop: evaluate, and
