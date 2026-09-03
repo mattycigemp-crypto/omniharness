@@ -165,3 +165,54 @@ jobs:
             gh issue create --repo "$REPO" --title "$title" --body "$body"
             echo "opened a new issue"
           fi
+
+      # Mail as well as the issue, because this repository is owned by a user
+      # rather than an organisation, and per-repository notification routing is
+      # an organisation feature. On a personal account there is one default
+      # notification address for everything, so pointing GitHub itself at a
+      # build inbox would send every notification there.
+      #
+      # Optional and non-fatal. Without AGENTMAIL_API_KEY the step says so and
+      # the run still succeeds: the issue above is the record that matters, and
+      # a release failure should not be compounded by a notifier failure.
+      - name: Email the build address
+        if: always()
+        env:
+          AGENTMAIL_API_KEY: ${{ secrets.AGENTMAIL_API_KEY }}
+          AGENTMAIL_INBOX: ${{ vars.AGENTMAIL_INBOX }}
+          AGENTMAIL_TO: ${{ vars.AGENTMAIL_TO }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          if [ -z "${AGENTMAIL_API_KEY:-}" ]; then
+            echo "AGENTMAIL_API_KEY is not set — skipping mail, the issue is the record"
+            exit 0
+          fi
+          inbox="${AGENTMAIL_INBOX:-shipking@agentmail.to}"
+          to="${AGENTMAIL_TO:-$inbox}"
+          text="The publish workflow failed on ${SHA:0:7}.
+
+          $RUN_URL
+
+          npm and the releases page may now disagree with main. Check in this order:
+            1. npm view omniharness-cli version
+            2. gh release view
+          If npm published and the release did not, the binaries are missing rather
+          than wrong, and re-running the workflow is safe.
+
+          An issue was opened on $REPO with the same detail."
+          code=$(jq -n --arg to "$to" --arg subject "omniharness: release failed on ${SHA:0:7}" --arg text "$text" \
+                   '{to: $to, subject: $subject, text: $text}' \
+                 | curl -sS -o /tmp/mail.out -w '%{http_code}' --max-time 30 \
+                     -X POST "https://api.agentmail.to/v0/inboxes/$inbox/messages/send" \
+                     -H "Authorization: Bearer $AGENTMAIL_API_KEY" \
+                     -H 'Content-Type: application/json' --data @-)
+          if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+            echo "mailed $to (HTTP $code)"
+          else
+            # Never fail the job over this. The response can echo the request,
+            # so only the status code is printed.
+            echo "mail failed with HTTP $code — the issue above is still the record" >&2
+          fi
