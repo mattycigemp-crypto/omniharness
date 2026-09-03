@@ -86,6 +86,15 @@ func (c *Composer) Compose(in Input) (Output, error) {
 		if len(p.Tools) > 0 {
 			sys += " tools=" + strings.Join(p.Tools, ",")
 		}
+		// What "done" means for this specific task, when the optional
+		// deepening pass produced it (task.DeepAnalyzer). Every role sees
+		// it: the implementer works toward it, and the reviewer on a verify
+		// step has something concrete to check the result against rather
+		// than its own idea of complete.
+		if len(p.AcceptanceCriteria) > 0 {
+			sys += "\n\nACCEPTANCE CRITERIA (this task is done when all of these hold):\n- " +
+				strings.Join(p.AcceptanceCriteria, "\n- ")
+		}
 	}
 
 	// The system prompt and the task prompt are not discretionary — the run is

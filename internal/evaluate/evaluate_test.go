@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"omniharness/internal/task"
@@ -276,5 +277,79 @@ func run(t *testing.T, dir, name string, args ...string) {
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+	}
+}
+
+func TestAcceptanceCriteriaEvaluatorNamesTheCriteria(t *testing.T) {
+	e := &AcceptanceCriteriaEvaluator{}
+	req := Request{Task: task.Task{Profile: task.Profile{
+		AcceptanceCriteria: []string{"empty input returns 0", "go test ./... passes"},
+	}}}
+	outcome, detail, err := e.Evaluate(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Never Pass or Fail: this evaluator cannot judge prose criteria, and a
+	// fabricated verdict would be worse than an honest "nobody checked".
+	if outcome != NeedsReview {
+		t.Fatalf("outcome = %s, want NeedsReview — this evaluator must never claim a verdict it cannot measure", outcome)
+	}
+	for _, want := range []string{"empty input returns 0", "go test ./... passes", "not machine-checked"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail missing %q: %s", want, detail)
+		}
+	}
+	if !strings.Contains(detail, "2 acceptance criteria") {
+		t.Errorf("detail should count the criteria: %s", detail)
+	}
+}
+
+func TestAcceptanceCriteriaEvaluatorWithNoCriteria(t *testing.T) {
+	e := &AcceptanceCriteriaEvaluator{}
+	outcome, detail, err := e.Evaluate(context.Background(), Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != NeedsReview {
+		t.Fatalf("outcome = %s (%s), want NeedsReview", outcome, detail)
+	}
+}
+
+// One criterion reads as "1 acceptance criterion", not "1 acceptance criteria".
+func TestAcceptanceCriteriaEvaluatorSingular(t *testing.T) {
+	e := &AcceptanceCriteriaEvaluator{}
+	req := Request{Task: task.Task{Profile: task.Profile{
+		AcceptanceCriteria: []string{"only one thing"},
+	}}}
+	_, detail, _ := e.Evaluate(context.Background(), req)
+	if !strings.Contains(detail, "1 acceptance criterion,") {
+		t.Errorf("detail = %q, want the singular noun", detail)
+	}
+}
+
+// Selection is not gated on domain: criteria describe what done means for
+// whatever the task is, and only exist when the deepening pass ran.
+func TestAcceptanceCriteriaSelectedForAnyDomainWhenPresent(t *testing.T) {
+	r := NewRegistry()
+	if err := r.RegisterDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	withCriteria := task.Profile{Domain: task.DomainGeneral, AcceptanceCriteria: []string{"x"}}
+	names := map[string]bool{}
+	for _, e := range r.ForTask(withCriteria) {
+		names[e.Name()] = true
+	}
+	if !names["acceptance-criteria"] {
+		t.Fatalf("a general task with criteria did not select the evaluator: %v", names)
+	}
+
+	// Without criteria it must not be selected at all — an always-on
+	// NeedsReview row on every task would be noise, not signal.
+	names = map[string]bool{}
+	for _, e := range r.ForTask(task.Profile{Domain: task.DomainSoftware}) {
+		names[e.Name()] = true
+	}
+	if names["acceptance-criteria"] {
+		t.Fatalf("selected the evaluator with no criteria to report: %v", names)
 	}
 }
