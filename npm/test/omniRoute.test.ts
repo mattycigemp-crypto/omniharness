@@ -282,3 +282,128 @@ test('a blank endpoint or OMNIROUTE_URL falls back to the default', () => {
     else process.env.OMNIROUTE_URL = previous;
   }
 });
+
+// Fake gateway that answers a stream: the body is served verbatim as
+// text/event-stream, with whatever OmniRoute-style headers the case sets.
+function sseServer(body: string, headers: Record<string, string>): { url: string; close: () => void } {
+  return server(() => new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream', ...headers } }));
+}
+
+test('usage: the cost-telemetry headers of a non-streaming reply feed context, output tokens and spend', async () => {
+  let calls = 0;
+  const live = server(() => {
+    calls += 1;
+    // The body's usage is deliberately wrong so a double count would show.
+    const response = Response.json({ model: 'test/model', choices: [{ message: { role: 'assistant', content: 'ok' } }], usage: { prompt_tokens: 999, completion_tokens: 999, total_tokens: 1998 } });
+    response.headers.set('x-omniroute-tokens-in', calls === 1 ? '120' : '340');
+    response.headers.set('x-omniroute-tokens-out', calls === 1 ? '30' : '12');
+    response.headers.set('x-omniroute-response-cost', calls === 1 ? '0.0004500000' : '0.0000000000');
+    response.headers.set('x-omniroute-latency-ms', calls === 1 ? '812' : '95');
+    return response;
+  });
+  try {
+    const client = new OmniRouteClient({ endpoint: live.url });
+    assert.deepEqual(client.snapshotMetrics().usage, { contextTokens: 0, tokensIn: 0, tokensOut: 0, costUsd: 0 });
+
+    await client.chat('combo', [{ role: 'user', content: 'hi' }]);
+    let usage = client.snapshotMetrics().usage!;
+    assert.equal(usage.contextTokens, 120);
+    assert.equal(usage.tokensIn, 120);
+    assert.equal(usage.tokensOut, 30);
+    assert.ok(Math.abs(usage.costUsd - 0.00045) < 1e-12);
+    assert.equal(usage.latencyMs, 812);
+
+    // The second reply was free: context is the latest count, the totals
+    // accumulate, and spend does not move.
+    await client.chat('combo', [{ role: 'user', content: 'again' }]);
+    usage = client.snapshotMetrics().usage!;
+    assert.equal(usage.contextTokens, 340);
+    assert.equal(usage.tokensIn, 460);
+    assert.equal(usage.tokensOut, 42);
+    assert.ok(Math.abs(usage.costUsd - 0.00045) < 1e-12);
+    assert.equal(usage.latencyMs, 95);
+  } finally { live.close(); }
+});
+
+test('usage: without telemetry headers the body usage counts, and nothing is recorded for a reply with neither', async () => {
+  const withBody = server(() => Response.json({ model: 'm', choices: [{ message: { role: 'assistant', content: 'ok' } }], usage: { prompt_tokens: 70, completion_tokens: 5, total_tokens: 75 } }));
+  try {
+    const client = new OmniRouteClient({ endpoint: withBody.url });
+    await client.chat('m', []);
+    const usage = client.snapshotMetrics().usage!;
+    assert.equal(usage.contextTokens, 70);
+    assert.equal(usage.tokensOut, 5);
+    assert.equal(usage.costUsd, 0);
+  } finally { withBody.close(); }
+  const bare = server(() => Response.json({ model: 'm', choices: [{ message: { role: 'assistant', content: 'ok' } }] }));
+  try {
+    const client = new OmniRouteClient({ endpoint: bare.url });
+    await client.chat('m', []);
+    assert.equal(client.snapshotMetrics().usage?.updatedAt, undefined);
+    assert.equal(client.snapshotMetrics().usage?.contextTokens, 0);
+  } finally { bare.close(); }
+});
+
+test('usage: a stream counts its final usage chunk once, and the zeroed start headers never clobber it', async () => {
+  const body = [
+    'data: {"model":"claude/claude-sonnet-4-6","choices":[{"delta":{"content":"hel"}}]}',
+    'data: {"choices":[{"delta":{"content":"lo"},"finish_reason":"stop"}]}',
+    'data: {"choices":[],"usage":{"prompt_tokens":900,"completion_tokens":40,"total_tokens":940}}',
+    'data: [DONE]',
+    '',
+  ].join('\n');
+  // What OmniRoute sends at stream start: routing known, the rest not yet.
+  const live = sseServer(body, {
+    'x-omniroute-provider': 'anthropic',
+    'x-omniroute-tokens-in': '0',
+    'x-omniroute-tokens-out': '0',
+    'x-omniroute-response-cost': '0.0000000000',
+    'x-omniroute-latency-ms': '0',
+  });
+  try {
+    const client = new OmniRouteClient({ endpoint: live.url });
+    const result = await client.chatStream('auto/best-coding', [{ role: 'user', content: 'hi' }]);
+    assert.equal(result.content, 'hello');
+    assert.equal(result.model, 'claude/claude-sonnet-4-6');
+    const metrics = client.snapshotMetrics();
+    assert.equal(metrics.usage?.contextTokens, 900);
+    assert.equal(metrics.usage?.tokensIn, 900);
+    assert.equal(metrics.usage?.tokensOut, 40);
+    assert.equal(metrics.usage?.costUsd, 0);
+    assert.equal(metrics.usage?.latencyMs, undefined);
+    assert.equal(metrics.fallback.activeProvider, 'anthropic');
+  } finally { live.close(); }
+});
+
+test('usage: the SSE metadata trailer is the final word on a stream, and other comment lines are ignored', async () => {
+  const body = [
+    ': keepalive',
+    'data: {"choices":[{"delta":{"content":"hello"},"finish_reason":"stop"}]}',
+    'data: {"choices":[],"usage":{"prompt_tokens":900,"completion_tokens":40,"total_tokens":940}}',
+    ': x-omniroute-cache-hit=false',
+    ': x-omniroute-provider=openrouter',
+    ': x-omniroute-model=anthropic/claude-sonnet-4-6',
+    ': x-omniroute-latency-ms=1240',
+    ': x-omniroute-response-cost=0.0012000000',
+    ': x-omniroute-tokens-in=905',
+    ': x-omniroute-tokens-out=41',
+    ': not-a-metadata-line',
+    'data: [DONE]',
+    '',
+  ].join('\n');
+  const live = sseServer(body, { 'x-omniroute-provider': 'anthropic', 'x-omniroute-tokens-in': '0', 'x-omniroute-tokens-out': '0' });
+  try {
+    const client = new OmniRouteClient({ endpoint: live.url });
+    const result = await client.chatStream('auto/best-coding', [{ role: 'user', content: 'hi' }]);
+    assert.equal(result.content, 'hello');
+    const metrics = client.snapshotMetrics();
+    // Trailer over body: 905, not 900 — and counted once.
+    assert.equal(metrics.usage?.contextTokens, 905);
+    assert.equal(metrics.usage?.tokensIn, 905);
+    assert.equal(metrics.usage?.tokensOut, 41);
+    assert.ok(Math.abs((metrics.usage?.costUsd ?? 0) - 0.0012) < 1e-12);
+    assert.equal(metrics.usage?.latencyMs, 1240);
+    // The provider that finished the stream, not the one it started with.
+    assert.equal(metrics.fallback.activeProvider, 'openrouter');
+  } finally { live.close(); }
+});
