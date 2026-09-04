@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -430,5 +431,73 @@ func TestEvaluateAndExecuteTaskRiskDoesNotAllowByDefault(t *testing.T) {
 	}
 	if d != Allow {
 		t.Fatalf("decision = %s, want allow — approver granted an ask-by-default unrecognised risk class", d)
+	}
+}
+
+// The runtime always sets a workspace root, and a model normally emits a
+// relative path. Judging that path by literal prefix marked every relative
+// path as an escape, so write_file was denied for the whole life of a task —
+// invisible to every test here, because the fixtures left WorkspaceRoot
+// empty and skipped the containment branch entirely.
+func TestRelativePathsAreInsideTheWorkspace(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.WorkspaceRoot = filepath.Join(string(filepath.Separator)+"work", "project")
+	e := NewEngine(cfg, nil)
+
+	for _, p := range []string{"hello.txt", "src/main.go", filepath.Join("a", "b", "c.txt")} {
+		d, reason, err := e.Evaluate(context.Background(), Request{
+			Tool: "write_file", Risk: tools.RiskMedium, Input: map[string]any{"path": p},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d == Block {
+			t.Errorf("relative path %q was blocked: %s", p, reason)
+		}
+	}
+}
+
+// The traversal protection must survive the fix: resolving a relative path
+// against the root must not turn an escape into an allow.
+func TestTraversalOutOfTheWorkspaceIsStillBlocked(t *testing.T) {
+	cfg := defaultCfg()
+	root := filepath.Join(string(filepath.Separator)+"work", "project")
+	cfg.WorkspaceRoot = root
+	e := NewEngine(cfg, nil)
+
+	for _, p := range []string{
+		filepath.Join("..", "..", "escape.txt"),
+		filepath.Join(string(filepath.Separator)+"etc", "passwd"),
+		filepath.Join(root+"-sibling", "sneaky.txt"), // prefix-similar, not inside
+	} {
+		d, reason, err := e.Evaluate(context.Background(), Request{
+			Tool: "write_file", Risk: tools.RiskMedium, Input: map[string]any{"path": p},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d != Block {
+			t.Errorf("path %q escaped the workspace but was %s: %s", p, d, reason)
+		}
+	}
+}
+
+// An absolute path inside the workspace was the only shape that used to work,
+// and must keep working.
+func TestAbsolutePathInsideTheWorkspaceIsAllowed(t *testing.T) {
+	cfg := defaultCfg()
+	root := filepath.Join(string(filepath.Separator)+"work", "project")
+	cfg.WorkspaceRoot = root
+	e := NewEngine(cfg, nil)
+
+	d, reason, err := e.Evaluate(context.Background(), Request{
+		Tool: "write_file", Risk: tools.RiskMedium,
+		Input: map[string]any{"path": filepath.Join(root, "hello.txt")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d == Block {
+		t.Errorf("absolute in-workspace path was blocked: %s", reason)
 	}
 }

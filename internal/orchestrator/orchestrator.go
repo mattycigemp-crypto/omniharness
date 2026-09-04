@@ -375,6 +375,7 @@ func (o *Orchestrator) executePlan(ctx context.Context, t *task.Task, plan strat
 	var firstErr error
 	firstErrSet := false
 	var replan string
+	repairs := 0
 	ready := make(chan scheduledStep)
 	var wg sync.WaitGroup
 
@@ -448,6 +449,7 @@ func (o *Orchestrator) executePlan(ctx context.Context, t *task.Task, plan strat
 						replan = res.ReplanReason
 					}
 				}
+				repairs += res.Repairs
 				for _, dep := range dependents[res.ID] {
 					if remaining[dep] > 0 {
 						remaining[dep]--
@@ -464,6 +466,16 @@ func (o *Orchestrator) executePlan(ctx context.Context, t *task.Task, plan strat
 	case <-waitDone:
 	case <-ctx.Done():
 	}
+	// Applied here, on the caller's goroutine, rather than by each worker as
+	// it repairs: workers race the main goroutine's own writes to the task,
+	// and on cancellation this returns while they are still running.
+	mu.Lock()
+	total := repairs
+	mu.Unlock()
+	if total > 0 {
+		t.Repairs += total
+		_ = o.deps.Store.UpdateTask(t)
+	}
 	return outputs, replan, firstErr
 }
 
@@ -472,6 +484,11 @@ type stepResult struct {
 	ID     string
 	Output string
 	Err    error
+	// Repairs this step performed. Reported back rather than written
+	// straight onto the shared task: executeStep runs on a worker
+	// goroutine, and mutating the task there raced the main goroutine's own
+	// status writes (see executePlan).
+	Repairs int
 	// ReplanReason is set when the step's agent called request_replan — it
 	// completed the step, but flagged that the task needs more structure
 	// than the current plan gives it. Empty on every ordinary step.
@@ -537,22 +554,23 @@ func (o *Orchestrator) executeStep(ctx context.Context, t *task.Task, step strat
 	}
 	depContext := formatDepOutputs(step, depOutputs)
 
+	repairs := 0
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if ctx.Err() != nil {
-			return stepResult{ID: step.ID, Err: ctx.Err()}
+			return stepResult{ID: step.ID, Err: ctx.Err(), Repairs: repairs}
 		}
 		ag, err := o.runAgent(ctx, t, role, modelRef, extra, step.Task, depContext, artifacts, budgets)
 		if err == nil {
-			return stepResult{ID: step.ID, Output: ag.LastOutput(), ReplanReason: ag.ReplanReason()}
+			return stepResult{ID: step.ID, Output: ag.LastOutput(), ReplanReason: ag.ReplanReason(), Repairs: repairs}
 		}
 		failure := repair.Classify(repair.StageModel, err)
 		failure.Attempt = attempt + 1
 		plan, perr := o.deps.Repair.Plan(failure, attempt+1, maxAttempts)
 		if perr != nil {
-			return stepResult{ID: step.ID, Err: err}
+			return stepResult{ID: step.ID, Err: err, Repairs: repairs}
 		}
 		if plan.SkipRepair {
-			return stepResult{ID: step.ID, Err: err}
+			return stepResult{ID: step.ID, Err: err, Repairs: repairs}
 		}
 		if plan.Role != "" {
 			role = agent.Role(plan.Role)
@@ -563,13 +581,12 @@ func (o *Orchestrator) executeStep(ctx context.Context, t *task.Task, step strat
 			}
 		}
 		extra = strings.TrimSpace(extra + " " + plan.ExtraInstructions)
-		t.Repairs++
-		_ = o.deps.Store.UpdateTask(t)
+		repairs++
 		o.taskEvent(t, &event.RepairData{
 			Attempt: attempt + 1, Strategy: plan.Strategy, Reason: failure.Error, Changed: plan.Changed,
 		})
 	}
-	return stepResult{ID: step.ID, Err: fmt.Errorf("step %s exceeded repair limit", step.ID)}
+	return stepResult{ID: step.ID, Err: fmt.Errorf("step %s exceeded repair limit", step.ID), Repairs: repairs}
 }
 
 // runAgent creates and runs one agent for the task.

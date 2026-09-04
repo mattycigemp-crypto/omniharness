@@ -219,7 +219,22 @@ func formatEvent(e event.Event) string {
 	case event.ToolCompleted:
 		var d event.ToolFinishedData
 		_ = json.Unmarshal(e.Data, &d)
-		return fmt.Sprintf("tool ok      %s (%s)", d.Tool, formatDuration(d.Duration))
+		// ToolFinishedData carries the outcome in Status; printing "ok" for
+		// every one of them reported policy denials as successes, so a
+		// headless run said work had happened that had not.
+		switch d.Status {
+		case "denied":
+			if d.Error != "" {
+				return fmt.Sprintf("tool denied  %s: %s", d.Tool, truncate(d.Error, 120))
+			}
+			return fmt.Sprintf("tool denied  %s", d.Tool)
+		case "failed":
+			return fmt.Sprintf("tool failed  %s: %s", d.Tool, truncate(d.Error, 120))
+		case "cancelled":
+			return fmt.Sprintf("tool cancel  %s", d.Tool)
+		default:
+			return fmt.Sprintf("tool ok      %s (%s)", d.Tool, formatDuration(d.Duration))
+		}
 	case event.ToolFailed:
 		var d event.ToolFailedData
 		_ = json.Unmarshal(e.Data, &d)

@@ -352,6 +352,22 @@ endpoint that misbehaves.
   task should be surfaced on the run without failing every task run against
   that repository. Outcomes aggregate worst-wins, so a warning never masks a
   real failure.
+- **Workspace confinement judged the path the model actually sent.**
+  policy.Evaluate sees a tool's raw arguments, before the tools layer
+  resolves them, and a model normally sends a relative path. The literal
+  prefix check treated every relative path as an escape, so with a workspace
+  root configured — which the runtime always sets — every write_file that
+  did not spell out an absolute path was blocked. The whole test suite
+  missed it because the fixtures leave WorkspaceRoot empty and never reach
+  that branch; a live run against a real gateway found it in one task.
+  Relative paths are now resolved against the root before the containment
+  check, while a rooted path (including one Windows does not call absolute,
+  such as "/etc/passwd" with no drive letter) is still judged where it
+  points.
+- **A denied tool no longer prints as a success.** Every tool outcome
+  arrives as ToolCompleted with the result in Status; the headless printer
+  ignored Status and said "tool ok" for all of them, so the same live run
+  showed eight policy denials as completed work with no file on disk.
 - **An evaluator never reports a failure it cannot substantiate.** Two
   places used to. A missing toolchain (`go` absent on a machine holding a Go
   repository) surfaced as "build failed: executable file not found" — the
