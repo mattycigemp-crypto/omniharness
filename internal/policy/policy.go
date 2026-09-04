@@ -7,6 +7,7 @@ package policy
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"omniharness/internal/tools"
@@ -222,8 +223,29 @@ func (e *Engine) EvaluateAndExecute(ctx context.Context, r Request) (Decision, e
 }
 
 func outsideWorkspace(p, root string) bool {
-	// Cheap containment check on the literal path. Symlink escapes are
-	// handled by the tools layer's resolvePath; this is defense in depth.
-	root = strings.TrimRight(root, `/\`)
-	return p != root && !strings.HasPrefix(p, root+"/") && !strings.HasPrefix(p, root+`\`)
+	// A relative path is what a model normally emits, and it means "inside
+	// the workspace" — the tools layer resolves it against the root before
+	// touching disk. Judging it by literal prefix marked every relative path
+	// as an escape, so with a workspace root configured (which the runtime
+	// always sets) every write_file that did not spell out an absolute path
+	// was blocked. Resolve first, then ask whether the result escapes.
+	//
+	// Symlink escapes are still handled by the tools layer's resolvePath;
+	// this stays defense in depth against traversal.
+	root = filepath.Clean(root)
+	// Only a genuinely relative path is resolved against the root. A path
+	// that starts with a separator is rooted even where Go does not call it
+	// absolute — on Windows "/etc/passwd" has no drive letter, so IsAbs is
+	// false, and joining it would have quietly relocated a system path into
+	// the workspace and allowed it.
+	rooted := filepath.IsAbs(p) || strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`)
+	if !rooted {
+		p = filepath.Join(root, p)
+	}
+	rel, err := filepath.Rel(root, filepath.Clean(p))
+	if err != nil {
+		// Different volume, or otherwise unrelatable: not inside.
+		return true
+	}
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
