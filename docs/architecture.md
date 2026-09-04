@@ -376,7 +376,10 @@ endpoint that misbehaves.
   can act on. Only consecutive repeats count, which is what makes it safe:
   re-running `go test` after an edit has the edit between the two runs, so
   it is never blocked, while two identical calls back to back cannot have
-  observed anything new.
+  observed anything new. Measured against the live gateway on the same task,
+  before and after: the unguarded run executed twenty-odd consecutive
+  `write_file` calls, one every ~16s, until the budget ended it; the guarded
+  run executed two and then stopped writing, with the file correct on disk.
 - **A denied tool no longer prints as a success.** Every tool outcome
   arrives as ToolCompleted with the result in Status; the headless printer
   ignored Status and said "tool ok" for all of them, so the same live run
