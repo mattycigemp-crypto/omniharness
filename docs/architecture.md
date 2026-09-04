@@ -306,7 +306,21 @@ endpoint that misbehaves.
   `RiskLow`, present only when memory is configured) lets an agent persist a
   convention, gotcha, or decision keyed by workspace + a slot name (reusing a
   slot overwrites it — an upsert, not a list); the orchestrator recalls
-  everything remembered once per agent construction.
+  what is relevant once per agent construction.
+- **Recall is ranked and capped, not wholesale** (`memory.Relevant`).
+  Every note ever remembered used to go into every agent's system prompt on
+  every task — fine at five notes, actively harmful at fifty, and paid for
+  on every model call of every step. Notes are now ranked against the task's
+  own prompt and capped (`memory.DefaultRecallLimit`), and when anything is
+  held back the prompt says so rather than silently forgetting it. The
+  ranking is lexical — shared terms, with a note's `kind` weighted higher —
+  and deliberately not embedding-based: vector databases are an explicit
+  anti-goal (§11), and a local, dependency-free ranking that is obviously
+  right most of the time beats a semantic one needing an embedding endpoint,
+  a store and a migration to be right slightly more often. Because the
+  scoring is crude it never lets a low score exclude a note while capacity
+  remains; notes that share no vocabulary with the task fill the rest of the
+  cap in their existing order.
 - **A step's own output now reaches the steps that depend on it**
   (`internal/orchestrator/orchestrator.go`, `formatDepOutputs`).
   `strategy.Step.Depends` only ever controlled scheduling order — an "impl"
