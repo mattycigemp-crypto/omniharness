@@ -380,6 +380,25 @@ endpoint that misbehaves.
   before and after: the unguarded run executed twenty-odd consecutive
   `write_file` calls, one every ~16s, until the budget ended it; the guarded
   run executed two and then stopped writing, with the file correct on disk.
+- **Nor is a wander that never repeats itself consecutively.** The same guarded
+  run then went somewhere the consecutive rule cannot reach: the repair agent
+  alternated `list_dir` and `find_files` for eight minutes. Reading its
+  transcript, 25 calls returned three distinct results between them — the same
+  directory listing nine times, the same two globs six and four times, plus a
+  repeated argument error and a repeated policy denial — and no two adjacent
+  calls were ever identical. So the guard also counts call/result pairs across
+  the whole run: a third identical result is replaced with an observation
+  saying the model already has it, and ten calls in a row that return nothing
+  new stop the run. Keying on the result is what makes this safe, and it is an
+  empirical test rather than a positional one: re-running `go test` after an
+  edit produces different output, so it is never a repeat, and repeats
+  interleaved with genuine progress reset the streak and never stop a run that
+  is getting somewhere.
+- **What the wander was actually trying to do** is worth recording, because it
+  was not confusion: its first act was `shell: cat hello.txt`, to check the
+  file it had been asked to verify, and policy denied it. Everything after was
+  a search for another way to see the same thing. `read_file` was allowed the
+  whole time and never tried.
 - **A denied tool no longer prints as a success.** Every tool outcome
   arrives as ToolCompleted with the result in Status; the headless printer
   ignored Status and said "tool ok" for all of them, so the same live run

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,5 +123,116 @@ func TestRepeatTrackerResetsPerRun(t *testing.T) {
 	}
 	if ag.repeats.count != 1 {
 		t.Fatalf("tracker not reset: %+v", ag.repeats)
+	}
+}
+
+// The alternating wander watched live: a repair agent making read-only calls
+// that between them return three distinct results, over and over. It never
+// repeats itself consecutively, so the consecutive rule alone never fires.
+func TestAgentStopsAnAlternatingWander(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644)
+	// Two calls, alternating forever. The fake repeats its last step, so the
+	// pair of steps below is what the run would do without a guard.
+	fake := testutil.NewFakeOmniRoute(t,
+		testutil.FakeStep{ToolCalls: []gateway.ToolCall{
+			testutil.ToolCall("c1", "list_dir", `{"path":"."}`),
+			testutil.ToolCall("c2", "read_file", `{"path":"a.txt"}`),
+		}},
+	)
+	deps := testDeps(t, fake, dir)
+	deps.MaxIterations = 100
+	ag, err := runAgent(t, deps, task.Spec{Prompt: "check the workspace"}, RoleImplementer)
+	if err == nil {
+		t.Fatal("wandering agent returned no error")
+	}
+	if !strings.Contains(err.Error(), "nothing that had not already been seen") {
+		t.Fatalf("err = %v, want a stale-result stall", err)
+	}
+	if ag.Status != task.StatusFailed {
+		t.Fatalf("status = %s", ag.Status)
+	}
+	// It is stopped for learning nothing, not for repeating itself: no two
+	// consecutive calls are ever identical here.
+	calls, _ := deps.Store.ToolCalls("sess1")
+	if len(calls) > staleStreakStopAt+4 {
+		t.Fatalf("ran %d calls before stopping, want ~%d", len(calls), staleStreakStopAt)
+	}
+}
+
+// A call that returns something different each time is progress, however
+// repetitive it looks. This is the `go test` after an edit case.
+func TestAgentAllowsARepeatedCallWhoseResultChanges(t *testing.T) {
+	dir := t.TempDir()
+	var steps []testutil.FakeStep
+	for i := 0; i < 12; i++ {
+		steps = append(steps, testutil.FakeStep{ToolCalls: []gateway.ToolCall{
+			// Same tool, and each write changes what the next read returns.
+			testutil.ToolCall("w", "write_file", fmt.Sprintf(`{"path":"n.txt","content":"%d"}`, i)),
+			testutil.ToolCall("r", "read_file", `{"path":"n.txt"}`),
+		}})
+	}
+	steps = append(steps, testutil.FakeStep{Content: "done"})
+	fake := testutil.NewFakeOmniRoute(t, steps...)
+	deps := testDeps(t, fake, dir)
+	deps.MaxIterations = 100
+	ag, err := runAgent(t, deps, task.Spec{Prompt: "count"}, RoleImplementer)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if ag.Status != task.StatusCompleted {
+		t.Fatalf("status = %s", ag.Status)
+	}
+	calls, _ := deps.Store.ToolCalls("sess1")
+	if len(calls) != 24 {
+		t.Fatalf("executed %d calls, want all 24", len(calls))
+	}
+	// The read_file call is byte-identical every time; only its result moves.
+	// The model must be given each real result, never told it already has it.
+	var reads int
+	for _, m := range ag.Transcript {
+		if m.Role != "tool" || m.Name != "read_file" {
+			continue
+		}
+		reads++
+		if strings.Contains(m.Content, "same result as before") {
+			t.Fatalf("read %d was suppressed as stale though its result changed: %q", reads, m.Content)
+		}
+	}
+	if reads != 12 {
+		t.Fatalf("got %d read results, want 12", reads)
+	}
+}
+
+// A run that keeps re-checking one thing while genuinely making progress must
+// finish. The repeats here far exceed the stop threshold in total; what saves
+// the run is that novel results keep arriving between them.
+func TestAgentAllowsRepeatsInterleavedWithProgress(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "fixed.txt"), []byte("never changes"), 0o644)
+	var steps []testutil.FakeStep
+	for i := 0; i < 20; i++ {
+		steps = append(steps, testutil.FakeStep{ToolCalls: []gateway.ToolCall{
+			// Identical every iteration, over a file that never changes, so
+			// this call really does return the same bytes 20 times.
+			testutil.ToolCall("l", "read_file", `{"path":"fixed.txt"}`),
+			// Real progress: a file that did not exist before.
+			testutil.ToolCall("w", "write_file", fmt.Sprintf(`{"path":"f%d.txt","content":"%d"}`, i, i)),
+		}})
+	}
+	steps = append(steps, testutil.FakeStep{Content: "done"})
+	fake := testutil.NewFakeOmniRoute(t, steps...)
+	deps := testDeps(t, fake, dir)
+	deps.MaxIterations = 100
+	ag, err := runAgent(t, deps, task.Spec{Prompt: "build up a directory"}, RoleImplementer)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if ag.Status != task.StatusCompleted {
+		t.Fatalf("status = %s", ag.Status)
+	}
+	calls, _ := deps.Store.ToolCalls("sess1")
+	if len(calls) != 40 {
+		t.Fatalf("executed %d calls, want all 40", len(calls))
 	}
 }

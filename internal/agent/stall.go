@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
@@ -27,12 +29,34 @@ const (
 	// repeatStopAt is the run at which the agent gives up. Reached only when
 	// the model ignores the nudge several times over.
 	repeatStopAt = 6
+	// staleSeenAt is how many times one call may return an identical result
+	// before the model is told it already has that answer.
+	staleSeenAt = 3
+	// staleStreakStopAt is how many tool calls in a row may return nothing new
+	// before the agent gives up. Deliberately generous: an agent re-reading
+	// files it has already seen in order to summarise them is doing something
+	// slightly wasteful, not stalling, and must not be cut off.
+	staleStreakStopAt = 10
 )
 
-// repeatTracker remembers the current run of identical tool calls.
+// repeatTracker remembers the current run of identical tool calls, and every
+// call/result pair the run has already seen.
+//
+// The consecutive rule alone is not enough. A model that alternates two
+// read-only calls never repeats itself consecutively and so never trips it,
+// while learning exactly as little: watched live, a repair agent made 25 calls
+// that between them returned three distinct results, byte for byte, until the
+// budget ended the run. Keying on the result as well makes the "has anything
+// changed?" question empirical rather than positional — and it is what keeps
+// the guard safe, because a `go test` re-run after an edit produces different
+// output and so is never a repeat.
 type repeatTracker struct {
 	last  string
 	count int
+	// seen counts call/result pairs; stale is the current run of calls that
+	// returned something the run had already been told.
+	seen  map[string]int
+	stale int
 }
 
 // observe records a call and decides what to do with it. It returns a
@@ -75,4 +99,39 @@ func fingerprint(tc gateway.ToolCall) string {
 		}
 	}
 	return tc.Function.Name + "\x00" + raw
+}
+
+// record files the result of a call that ran, and reports what to do about it.
+// A nudge replaces the observation when the model has already been given this
+// exact answer; stop means nothing new has come back for long enough that the
+// run is going nowhere.
+func (r *repeatTracker) record(tc gateway.ToolCall, obs string) (nudge string, stop bool) {
+	if r.seen == nil {
+		r.seen = map[string]int{}
+	}
+	sum := sha256.Sum256([]byte(obs))
+	key := fingerprint(tc) + "\x00" + hex.EncodeToString(sum[:8])
+	r.seen[key]++
+	n := r.seen[key]
+	if n == 1 {
+		r.stale = 0
+		return "", false
+	}
+	r.stale++
+	if r.stale >= staleStreakStopAt {
+		return "", true
+	}
+	if n >= staleSeenAt {
+		return fmt.Sprintf(
+			"same result as before: this %s call has now returned identical output %d times, "+
+				"and that output is already above in this conversation. Nothing has changed. "+
+				"Use what you already have — take a different action, or give your final answer.",
+			tc.Function.Name, n), false
+	}
+	return "", false
+}
+
+// staleReason describes a run that stopped learning anything.
+func (r *repeatTracker) staleReason() string {
+	return fmt.Sprintf("stalled: %d tool calls in a row returned nothing that had not already been seen", r.stale)
 }

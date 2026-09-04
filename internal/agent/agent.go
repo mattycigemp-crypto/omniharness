@@ -463,6 +463,15 @@ func (a *Agent) Run(ctx context.Context) error {
 			obs := nudge
 			if obs == "" {
 				obs = a.executeToolCall(runCtx, tc, roleCfg)
+				stale, exhausted := a.repeats.record(tc, obs)
+				if exhausted {
+					reason := a.repeats.staleReason()
+					a.setLifecycle(LifecycleFailed, task.StatusFailed, reason)
+					return fmt.Errorf("%s", reason)
+				}
+				if stale != "" {
+					obs = stale
+				}
 			}
 			if runCtx.Err() != nil {
 				a.setLifecycle(LifecycleCancelled, task.StatusCancelled, "cancelled")
