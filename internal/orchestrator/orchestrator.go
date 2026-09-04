@@ -307,7 +307,7 @@ func (o *Orchestrator) requestTaskApproval(ctx context.Context, t *task.Task) (g
 // for composer.Input.ProjectInstructions. No Memory configured, an empty
 // store, or a read error all resolve to nil — recall is best-effort, never
 // a reason to fail a task or block on a slow store.
-func (o *Orchestrator) recallProjectInstructions() []string {
+func (o *Orchestrator) recallProjectInstructions(t *task.Task) []string {
 	if o.deps.Memory == nil {
 		return nil
 	}
@@ -315,9 +315,21 @@ func (o *Orchestrator) recallProjectInstructions() []string {
 	if err != nil || len(rows) == 0 {
 		return nil
 	}
-	out := make([]string, 0, len(rows))
-	for _, m := range rows {
+	// Ranked and capped against this task rather than dumped wholesale:
+	// every note ever remembered used to go into every agent's prompt on
+	// every task, which buries the relevant one and is paid for on every
+	// model call. See memory.Relevant for why the ranking is lexical.
+	selected, truncated := memory.Relevant(rows, t.Spec.Prompt, memory.DefaultRecallLimit)
+	out := make([]string, 0, len(selected)+1)
+	for _, m := range selected {
 		out = append(out, fmt.Sprintf("[%s] %s", m.Kind, m.Content))
+	}
+	if truncated {
+		// Say that something was held back. A note an agent deliberately
+		// remembered, silently never shown again, is a worse failure than a
+		// slightly longer prompt.
+		out = append(out, fmt.Sprintf("(%d notes remembered for this project; the %d most relevant to this task are shown)",
+			len(rows), len(selected)))
 	}
 	return out
 }
@@ -581,7 +593,7 @@ func (o *Orchestrator) runAgent(ctx context.Context, t *task.Task, role agent.Ro
 		Roles:               o.deps.Roles,
 		Workspace:           o.deps.Workspace,
 		Budget:              budgets,
-		ProjectInstructions: o.recallProjectInstructions(),
+		ProjectInstructions: o.recallProjectInstructions(t),
 	}
 	ag := agent.New(deps, t.SessionID, t.ID, role, modelRef, spec, t.Profile)
 	if err := ag.Run(ctx); err != nil {

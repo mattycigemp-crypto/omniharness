@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1094,5 +1095,81 @@ func TestReplanRequestRestructuresAndCompletes(t *testing.T) {
 		case <-deadline:
 			t.Fatal("no repair event carried the replan reason")
 		}
+	}
+}
+
+// Recall used to put every note ever remembered into every agent's prompt.
+// With more notes than the cap, the prompt must carry the ones that share
+// terms with this task — and must say plainly that others were held back,
+// because a note an agent deliberately remembered and never sees again is a
+// worse failure than a slightly longer prompt.
+func TestRecallRanksNotesAgainstTheTaskAndSaysWhatItHeldBack(t *testing.T) {
+	dir := t.TempDir()
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	// One clearly on-topic note, and enough noise to force the cap.
+	if err := store.PutMemory(dir, "readme-style", "README headings use sentence case"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < memory.DefaultRecallLimit+4; i++ {
+		if err := store.PutMemory(dir, fmt.Sprintf("noise%d", i), "unrelated note about deployment pipelines"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "done"})
+	o, _, _ := newOrchestrator(t, fake, dir)
+	o.deps.Memory = memory.Project(store)
+
+	if _, err := runTask(t, o, "s1", task.Spec{Prompt: "Fix the typo in README.md.", CWD: dir}); err != nil {
+		t.Fatal(err)
+	}
+	req := fake.LastRequest()
+	if req == nil || len(req.Messages) == 0 {
+		t.Fatal("no chat request captured")
+	}
+	sys := req.Messages[0].Content
+
+	if !strings.Contains(sys, "README headings use sentence case") {
+		t.Errorf("the note sharing terms with the task was not recalled:\n%s", sys)
+	}
+	if !strings.Contains(sys, "notes remembered for this project") {
+		t.Errorf("held-back notes were dropped silently:\n%s", sys)
+	}
+	// The cap must actually bound what lands in the prompt.
+	if n := strings.Count(sys, "[noise"); n > memory.DefaultRecallLimit {
+		t.Errorf("prompt carried %d noise notes, want at most the %d cap", n, memory.DefaultRecallLimit)
+	}
+}
+
+// Under the cap, nothing is held back and no note about truncation appears.
+func TestRecallSaysNothingAboutTruncationWhenItFits(t *testing.T) {
+	dir := t.TempDir()
+	store, err := session.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.PutMemory(dir, "convention", "use tabs, not spaces"); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := testutil.NewFakeOmniRoute(t, testutil.FakeStep{Content: "done"})
+	o, _, _ := newOrchestrator(t, fake, dir)
+	o.deps.Memory = memory.Project(store)
+
+	if _, err := runTask(t, o, "s1", task.Spec{Prompt: "Fix the typo in README.md.", CWD: dir}); err != nil {
+		t.Fatal(err)
+	}
+	sys := fake.LastRequest().Messages[0].Content
+	if !strings.Contains(sys, "use tabs, not spaces") {
+		t.Errorf("the only note was not recalled:\n%s", sys)
+	}
+	if strings.Contains(sys, "notes remembered for this project") {
+		t.Errorf("claimed to hold notes back when everything fit:\n%s", sys)
 	}
 }
