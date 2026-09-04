@@ -353,3 +353,167 @@ func TestAcceptanceCriteriaSelectedForAnyDomainWhenPresent(t *testing.T) {
 		t.Fatalf("selected the evaluator with no criteria to report: %v", names)
 	}
 }
+
+func TestCargoEvaluatorsSkipWithoutCargoToml(t *testing.T) {
+	dir := t.TempDir()
+	for _, e := range []Evaluator{&CargoBuildEvaluator{}, &CargoTestEvaluator{}} {
+		outcome, detail, err := e.Evaluate(context.Background(), Request{CWD: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if outcome != NeedsReview {
+			t.Errorf("%s: outcome = %s (%s), want NeedsReview for a non-Rust workspace", e.Name(), outcome, detail)
+		}
+	}
+}
+
+// A Rust repo on a machine with no cargo installed is not a broken result.
+func TestCargoEvaluatorsSkipWithoutTheToolchain(t *testing.T) {
+	if _, err := exec.LookPath("cargo"); err == nil {
+		t.Skip("cargo is installed; this covers the machine that lacks it")
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte("[package]\nname = \"x\"\n"), 0o644)
+	outcome, detail, err := (&CargoBuildEvaluator{}).Evaluate(context.Background(), Request{CWD: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != NeedsReview {
+		t.Fatalf("outcome = %s (%s), want NeedsReview when cargo is absent", outcome, detail)
+	}
+	if !strings.Contains(detail, "cargo not installed") {
+		t.Errorf("detail = %q, want it to name the missing toolchain", detail)
+	}
+}
+
+func TestPytestSkipsWithoutPythonMarkers(t *testing.T) {
+	outcome, detail, err := (&PytestEvaluator{}).Evaluate(context.Background(), Request{CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != NeedsReview {
+		t.Fatalf("outcome = %s (%s), want NeedsReview for a non-Python workspace", outcome, detail)
+	}
+}
+
+// Every marker must count — a project with only requirements.txt is still a
+// Python project, and gets past the marker gate to the toolchain check.
+func TestPytestRecognisesEveryProjectMarker(t *testing.T) {
+	for _, marker := range pythonMarkers {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, marker), []byte("\n"), 0o644)
+		_, detail, err := (&PytestEvaluator{}).Evaluate(context.Background(), Request{CWD: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(detail, "no Python project markers") {
+			t.Errorf("%s did not mark the directory as a Python project: %s", marker, detail)
+		}
+	}
+}
+
+// pytest exits 5 when it collected no tests. That is "nothing to check", not
+// a failing suite: a project with no tests yet has not broken anything.
+func TestPytestNoTestsCollectedIsNotAFailure(t *testing.T) {
+	if _, err := exec.LookPath("pytest"); err != nil {
+		t.Skip("pytest not available")
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[project]\nname = \"x\"\n"), 0o644)
+	outcome, detail, err := (&PytestEvaluator{}).Evaluate(context.Background(), Request{CWD: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome == Fail {
+		t.Fatalf("an empty test suite must not fail: %s", detail)
+	}
+}
+
+func TestGoVetSkipsWithoutGoMod(t *testing.T) {
+	outcome, detail, err := (&GoVetEvaluator{}).Evaluate(context.Background(), Request{CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != NeedsReview {
+		t.Fatalf("outcome = %s (%s), want NeedsReview without a go.mod", outcome, detail)
+	}
+}
+
+// A vet finding is a warning on the run, not a failed task: the finding may
+// predate the task entirely, and failing every run against a repo that
+// already had one would make the check worse than useless.
+func TestGoVetFindingWarnsRatherThanFails(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not available")
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module vetmod\n\ngo 1.21\n"), 0o644)
+	// Printf with a mismatched verb — a classic vet finding that still compiles.
+	os.WriteFile(filepath.Join(dir, "main.go"),
+		[]byte("package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Printf(\"%d\", \"not a number\") }\n"), 0o644)
+
+	outcome, detail, err := (&GoVetEvaluator{}).Evaluate(context.Background(), Request{CWD: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != PassWithWarnings {
+		t.Fatalf("outcome = %s (%s), want PASS_WITH_WARNINGS — a lint finding must not fail the task", outcome, detail)
+	}
+
+	// Clean code reports a clean pass, so the warning above means something.
+	os.WriteFile(filepath.Join(dir, "main.go"),
+		[]byte("package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Printf(\"%s\", \"fine\") }\n"), 0o644)
+	outcome, detail, _ = (&GoVetEvaluator{}).Evaluate(context.Background(), Request{CWD: dir})
+	if outcome != Pass {
+		t.Fatalf("outcome = %s (%s), want Pass for clean code", outcome, detail)
+	}
+}
+
+func TestNpmLintSkipsWithoutALintScript(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"x","scripts":{"test":"echo ok"}}`), 0o644)
+	outcome, detail, err := (&NpmLintEvaluator{}).Evaluate(context.Background(), Request{CWD: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != NeedsReview {
+		t.Fatalf("outcome = %s (%s), want NeedsReview with no lint script", outcome, detail)
+	}
+}
+
+func TestNpmLintFindingWarnsRatherThanFails(t *testing.T) {
+	if _, err := exec.LookPath("npm"); err != nil {
+		t.Skip("npm not available")
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "package.json"),
+		[]byte(`{"name":"x","scripts":{"lint":"node -e \"process.exit(1)\""}}`), 0o644)
+	outcome, detail, err := (&NpmLintEvaluator{}).Evaluate(context.Background(), Request{CWD: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != PassWithWarnings {
+		t.Fatalf("outcome = %s (%s), want PASS_WITH_WARNINGS", outcome, detail)
+	}
+}
+
+// Every new evaluator is offered to software tasks, so an ecosystem the
+// harness has a check for is never silently unverified.
+func TestSoftwareTasksSelectEveryEcosystemEvaluator(t *testing.T) {
+	r := NewRegistry()
+	if err := r.RegisterDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, e := range r.ForTask(task.Profile{Domain: task.DomainSoftware, ModifiesFiles: true}) {
+		names[e.Name()] = true
+	}
+	for _, want := range []string{
+		"go-build", "go-test", "npm-build", "npm-test",
+		"cargo-build", "cargo-test", "pytest", "go-vet", "npm-lint", "diff-check",
+	} {
+		if !names[want] {
+			t.Errorf("software task did not select %q: %v", want, names)
+		}
+	}
+}

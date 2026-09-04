@@ -7,6 +7,7 @@ package evaluate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -96,6 +97,27 @@ func (r *Registry) ForTask(p task.Profile) []Evaluator {
 		if e, ok := r.evaluators["npm-test"]; ok {
 			out = append(out, e)
 		}
+		// Rust and Python, same pattern again: offered to every software
+		// task, each one checking for its own project marker (and its own
+		// toolchain) rather than the harness guessing the ecosystem.
+		if e, ok := r.evaluators["cargo-build"]; ok {
+			out = append(out, e)
+		}
+		if e, ok := r.evaluators["cargo-test"]; ok {
+			out = append(out, e)
+		}
+		if e, ok := r.evaluators["pytest"]; ok {
+			out = append(out, e)
+		}
+		// Lint-class checks. These report PASS_WITH_WARNINGS rather than
+		// FAIL, so a finding is surfaced on the run without failing a task
+		// that may not have caused it.
+		if e, ok := r.evaluators["go-vet"]; ok {
+			out = append(out, e)
+		}
+		if e, ok := r.evaluators["npm-lint"]; ok {
+			out = append(out, e)
+		}
 		if e, ok := r.evaluators["diff-check"]; ok && p.ModifiesFiles {
 			out = append(out, e)
 		}
@@ -122,6 +144,11 @@ func (r *Registry) RegisterDefaults() error {
 		&GoTestEvaluator{},
 		&NpmBuildEvaluator{},
 		&NpmTestEvaluator{},
+		&CargoBuildEvaluator{},
+		&CargoTestEvaluator{},
+		&PytestEvaluator{},
+		&GoVetEvaluator{},
+		&NpmLintEvaluator{},
 		&AcceptanceCriteriaEvaluator{},
 		&DiffCheckEvaluator{},
 		&EvidenceEvaluator{},
@@ -350,4 +377,134 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "\n…[truncated]"
+}
+
+// exitCode extracts a command's exit status, or -1 when the error is not an
+// exit status at all (the binary was missing, the context was cancelled).
+func exitCode(err error) int {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return -1
+}
+
+// CargoBuildEvaluator runs `cargo build` for a Rust workspace. Skips when
+// there is no Cargo.toml, and when cargo itself is not installed — a Rust
+// repo on a machine without the toolchain is not a broken result, the same
+// way a workspace with no Cargo.toml is not one.
+type CargoBuildEvaluator struct{}
+
+func (e *CargoBuildEvaluator) Name() string { return "cargo-build" }
+
+func (e *CargoBuildEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, string, error) {
+	if _, err := os.Stat(filepath.Join(r.CWD, "Cargo.toml")); err != nil {
+		return NeedsReview, "no Cargo.toml — cargo build check skipped", nil
+	}
+	if _, err := exec.LookPath("cargo"); err != nil {
+		return NeedsReview, "cargo not installed — build check skipped", nil
+	}
+	out, err := runCmd(ctx, r.CWD, "cargo", "build")
+	if err != nil {
+		return Fail, "cargo build failed:\n" + truncate(out, 4000), nil
+	}
+	return Pass, "cargo build ok", nil
+}
+
+// CargoTestEvaluator runs `cargo test` for a Rust workspace.
+type CargoTestEvaluator struct{}
+
+func (e *CargoTestEvaluator) Name() string { return "cargo-test" }
+
+func (e *CargoTestEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, string, error) {
+	if _, err := os.Stat(filepath.Join(r.CWD, "Cargo.toml")); err != nil {
+		return NeedsReview, "no Cargo.toml — cargo test check skipped", nil
+	}
+	if _, err := exec.LookPath("cargo"); err != nil {
+		return NeedsReview, "cargo not installed — test check skipped", nil
+	}
+	out, err := runCmd(ctx, r.CWD, "cargo", "test")
+	if err != nil {
+		return Fail, "cargo tests failed:\n" + truncate(out, 4000), nil
+	}
+	return Pass, "cargo tests pass", nil
+}
+
+// pythonMarkers are the files that identify a Python project root.
+var pythonMarkers = []string{"pyproject.toml", "setup.py", "setup.cfg", "requirements.txt"}
+
+// PytestEvaluator runs pytest for a Python workspace. Skips when nothing
+// marks the directory as a Python project and when pytest is not installed.
+// Exit status 5 is pytest's "no tests were collected", which is not a
+// failing suite — a project that has no tests yet has not broken anything.
+type PytestEvaluator struct{}
+
+func (e *PytestEvaluator) Name() string { return "pytest" }
+
+func (e *PytestEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, string, error) {
+	marked := false
+	for _, m := range pythonMarkers {
+		if _, err := os.Stat(filepath.Join(r.CWD, m)); err == nil {
+			marked = true
+			break
+		}
+	}
+	if !marked {
+		return NeedsReview, "no Python project markers — pytest check skipped", nil
+	}
+	if _, err := exec.LookPath("pytest"); err != nil {
+		return NeedsReview, "pytest not installed — test check skipped", nil
+	}
+	out, err := runCmd(ctx, r.CWD, "pytest", "-q")
+	if err != nil {
+		if exitCode(err) == 5 {
+			return NeedsReview, "pytest collected no tests — nothing to check", nil
+		}
+		return Fail, "pytest failed:\n" + truncate(out, 4000), nil
+	}
+	return Pass, "pytest passed", nil
+}
+
+// GoVetEvaluator runs `go vet ./...`. Unlike the build and test evaluators,
+// findings here report PASS_WITH_WARNINGS rather than FAIL: vet reports
+// suspicious constructs, which are worth surfacing on the run but are not by
+// themselves evidence that the task's own result is wrong — and a repository
+// that already had a vet finding before the task started would otherwise
+// fail every task run against it.
+type GoVetEvaluator struct{}
+
+func (e *GoVetEvaluator) Name() string { return "go-vet" }
+
+func (e *GoVetEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, string, error) {
+	if _, err := os.Stat(filepath.Join(r.CWD, "go.mod")); err != nil {
+		return NeedsReview, "no go.mod — vet check skipped", nil
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		return NeedsReview, "go not installed — vet check skipped", nil
+	}
+	out, err := runCmd(ctx, r.CWD, "go", "vet", "./...")
+	if err != nil {
+		return PassWithWarnings, "go vet reported findings:\n" + truncate(out, 4000), nil
+	}
+	return Pass, "go vet clean", nil
+}
+
+// NpmLintEvaluator runs `npm run lint` when the project declares that
+// script. Same warning-not-failure reasoning as GoVetEvaluator.
+type NpmLintEvaluator struct{}
+
+func (e *NpmLintEvaluator) Name() string { return "npm-lint" }
+
+func (e *NpmLintEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, string, error) {
+	if _, err := os.Stat(filepath.Join(r.CWD, "package.json")); err != nil {
+		return NeedsReview, "no package.json — npm lint check skipped", nil
+	}
+	if !hasNpmScript(r.CWD, "lint") {
+		return NeedsReview, `no "lint" script in package.json — npm lint check skipped`, nil
+	}
+	out, err := runCmd(ctx, r.CWD, "npm", "run", "lint")
+	if err != nil {
+		return PassWithWarnings, "npm run lint reported findings:\n" + truncate(out, 4000), nil
+	}
+	return Pass, "npm run lint clean", nil
 }
