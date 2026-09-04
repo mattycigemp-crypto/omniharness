@@ -364,6 +364,19 @@ endpoint that misbehaves.
   check, while a rooted path (including one Windows does not call absolute,
   such as "/etc/passwd" with no drive letter) is still judged where it
   points.
+- **A spinning model is stopped instead of left to exhaust the budget.**
+  The agent loop's only exits were a reply with no tool calls, the budget,
+  the iteration ceiling, and cancellation — so a model that kept re-issuing
+  one identical `write_file` never hit any of them, and the same live run
+  burned its whole duration allowance and reported a budget failure for a
+  task that had actually succeeded on the first call. The loop now counts
+  *immediately consecutive* identical calls (name plus canonicalised
+  arguments); the third is answered with an observation saying so rather
+  than executed, and a run that ignores it stops with a stall reason repair
+  can act on. Only consecutive repeats count, which is what makes it safe:
+  re-running `go test` after an edit has the edit between the two runs, so
+  it is never blocked, while two identical calls back to back cannot have
+  observed anything new.
 - **A denied tool no longer prints as a success.** Every tool outcome
   arrives as ToolCompleted with the result in Status; the headless printer
   ignored Status and said "tool ok" for all of them, so the same live run

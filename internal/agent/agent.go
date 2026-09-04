@@ -181,6 +181,9 @@ type Agent struct {
 	// replanReason is set when a replan-marking tool call (request_replan)
 	// runs. Read via ReplanReason(); empty means nothing was requested.
 	replanReason string
+	// repeats guards against the model spinning on one identical tool call;
+	// see stall.go. Reset at the start of every Run.
+	repeats repeatTracker
 
 	deps   Deps
 	mu     sync.Mutex
@@ -359,6 +362,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	roleCfg := a.deps.Roles[a.Role]
 	toolSpecs := a.toolSpecs(roleCfg.ToolAllow)
+	a.repeats = repeatTracker{}
 
 	for iter := 0; iter < a.deps.MaxIterations; iter++ {
 		// Pause checkpoint: block until resumed or cancelled.
@@ -450,7 +454,16 @@ func (a *Agent) Run(ctx context.Context) error {
 			if a.deps.Budget != nil {
 				a.deps.Budget.AddToolCall()
 			}
-			obs := a.executeToolCall(runCtx, tc, roleCfg)
+			nudge, stalled := a.repeats.observe(tc)
+			if stalled {
+				reason := a.repeats.reason(tc.Function.Name)
+				a.setLifecycle(LifecycleFailed, task.StatusFailed, reason)
+				return fmt.Errorf("%s", reason)
+			}
+			obs := nudge
+			if obs == "" {
+				obs = a.executeToolCall(runCtx, tc, roleCfg)
+			}
 			if runCtx.Err() != nil {
 				a.setLifecycle(LifecycleCancelled, task.StatusCancelled, "cancelled")
 				return context.Canceled
