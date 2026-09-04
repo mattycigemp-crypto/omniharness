@@ -325,7 +325,20 @@ endpoint that misbehaves.
   machinery a verification failure uses, skipping the debugger-first
   sequence build/test/evaluate failures get — there is nothing to
   reproduce — and bounded by the same `MaxTaskRepairs` limit.
-- **Verification is no longer Go-only.** `NpmBuildEvaluator` /
+- **Verification covers Go, Node, Rust and Python, plus lint.** Alongside
+  the Go pair: `npm-build`/`npm-test`, `cargo-build`/`cargo-test`, `pytest`,
+  and two lint-class checks (`go-vet`, `npm-lint`). Every one is offered to
+  every software task and self-skips — on its own project marker (`go.mod`,
+  `package.json`, `Cargo.toml`, `pyproject.toml` and friends), on the script
+  it needs, and on its own toolchain being installed — so an ecosystem the
+  harness cannot check reports NEEDS_REVIEW rather than a failure. Two
+  details that are judgment, not mechanism: pytest's exit status 5 ("no
+  tests collected") is not a failing suite, and the lint checks report
+  PASS_WITH_WARNINGS rather than FAIL, because a finding that predated the
+  task should be surfaced on the run without failing every task run against
+  that repository. Outcomes aggregate worst-wins, so a warning never masks a
+  real failure.
+- The original Go/npm pair: `NpmBuildEvaluator` /
   `NpmTestEvaluator` (`internal/evaluate/evaluate.go`) mirror
   `GoBuildEvaluator`/`GoTestEvaluator`'s own pattern exactly: offered to
   every software task, each self-skips (`NEEDS_REVIEW`, not a failure) when
