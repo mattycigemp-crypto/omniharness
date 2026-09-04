@@ -225,9 +225,16 @@ func TestEvidenceEvaluator(t *testing.T) {
 	if outcome != Pass {
 		t.Fatal("URL should pass evidence check")
 	}
+	// Deliberate contract change: an uncited result warns, it does not fail.
+	// This assertion used to require Fail. A substring scan cannot tell an
+	// unsupported claim from an answer that cites the workspace instead of a
+	// URL, and as a hard failure it drove repair cycles over honest answers
+	// while passing anything containing the word "source". The distinction it
+	// can actually make — references present or not — is still asserted here
+	// and above, so this is not the assertion being relaxed to go green.
 	outcome, _, _ = e.Evaluate(context.Background(), Request{Result: task.Result{Summary: "trust me"}})
-	if outcome != Fail {
-		t.Fatal("uncited research must fail")
+	if outcome != PassWithWarnings {
+		t.Fatal("uncited research must warn")
 	}
 }
 
@@ -515,5 +522,75 @@ func TestSoftwareTasksSelectEveryEcosystemEvaluator(t *testing.T) {
 		if !names[want] {
 			t.Errorf("software task did not select %q: %v", want, names)
 		}
+	}
+}
+
+// A missing toolchain is the operator's environment, not a broken result.
+// go-build on a machine without Go used to report FAIL ("executable file
+// not found"), which failed every task run against a Go repo on that
+// machine. Every toolchain-backed evaluator must skip instead.
+func TestEvaluatorsSkipWhenTheToolchainIsMissing(t *testing.T) {
+	realLookPath := lookPath
+	lookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { lookPath = realLookPath })
+
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module m\n\ngo 1.21\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte("[package]\nname = \"x\"\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[project]\nname = \"x\"\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "package.json"),
+		[]byte(`{"name":"x","scripts":{"build":"true","test":"true","lint":"true"}}`), 0o644)
+
+	for _, e := range []Evaluator{
+		&GoBuildEvaluator{}, &GoTestEvaluator{}, &GoVetEvaluator{},
+		&NpmBuildEvaluator{}, &NpmTestEvaluator{},
+		&CargoBuildEvaluator{}, &CargoTestEvaluator{}, &PytestEvaluator{},
+	} {
+		outcome, detail, err := e.Evaluate(context.Background(), Request{CWD: dir})
+		if err != nil {
+			t.Errorf("%s: %v", e.Name(), err)
+			continue
+		}
+		if outcome != NeedsReview {
+			t.Errorf("%s: outcome = %s (%s), want NeedsReview when its toolchain is absent", e.Name(), outcome, detail)
+		}
+		if !strings.Contains(detail, "not installed") {
+			t.Errorf("%s: detail = %q, want it to name the missing toolchain", e.Name(), detail)
+		}
+	}
+}
+
+// The evidence check is a substring scan. It cannot tell an unsupported
+// claim from a well-supported answer that cites the workspace rather than a
+// URL — which is what research against a local repository produces — so
+// finding nothing must warn rather than fail a task into repair cycles.
+func TestEvidenceMissingCitationsWarnsRatherThanFails(t *testing.T) {
+	e := &EvidenceEvaluator{}
+	r := Request{Result: task.Result{
+		Summary: "The parser lives in internal/parse and is called from the CLI entry point.",
+		Output:  "The parser lives in internal/parse and is called from the CLI entry point.",
+	}}
+	outcome, detail, err := e.Evaluate(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != PassWithWarnings {
+		t.Fatalf("outcome = %s (%s), want PASS_WITH_WARNINGS — a substring scan must not fail a task", outcome, detail)
+	}
+	if !strings.Contains(detail, "cannot tell") {
+		t.Errorf("detail = %q, want it to be honest about what the scan cannot determine", detail)
+	}
+}
+
+// A cited answer still passes cleanly, so the warning above means something.
+func TestEvidenceWithCitationsStillPasses(t *testing.T) {
+	e := &EvidenceEvaluator{}
+	r := Request{Result: task.Result{Output: "See https://go.dev/doc for the details."}}
+	outcome, detail, err := e.Evaluate(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != Pass {
+		t.Fatalf("outcome = %s (%s), want Pass when references are present", outcome, detail)
 	}
 }
