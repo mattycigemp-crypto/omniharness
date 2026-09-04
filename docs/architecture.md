@@ -352,6 +352,18 @@ endpoint that misbehaves.
   task should be surfaced on the run without failing every task run against
   that repository. Outcomes aggregate worst-wins, so a warning never masks a
   real failure.
+- **An evaluator never reports a failure it cannot substantiate.** Two
+  places used to. A missing toolchain (`go` absent on a machine holding a Go
+  repository) surfaced as "build failed: executable file not found" — the
+  operator's environment reported as a broken result, on every task. Every
+  toolchain-backed evaluator now skips instead. And the research evidence
+  check, a substring scan for URLs and citation markers, returned a hard
+  FAIL when it found none: that failed honest answers citing the workspace
+  rather than the web (what local research produces) into real repair spend,
+  while passing anything containing the word "source". It now warns and says
+  what it cannot determine. This is the same rule the acceptance-criteria
+  evaluator is built on: a fabricated verdict is worse than an honest
+  "nobody checked".
 - The original Go/npm pair: `NpmBuildEvaluator` /
   `NpmTestEvaluator` (`internal/evaluate/evaluate.go`) mirror
   `GoBuildEvaluator`/`GoTestEvaluator`'s own pattern exactly: offered to

@@ -160,6 +160,10 @@ func (r *Registry) RegisterDefaults() error {
 	return nil
 }
 
+// lookPath resolves an executable. It is a variable so tests can exercise
+// the "toolchain is not installed" path on a machine that has the toolchain.
+var lookPath = exec.LookPath
+
 // runCmd runs a command with a timeout and captures output. The command never
 // inherits credential environment variables.
 func runCmd(ctx context.Context, dir, name string, args ...string) (string, error) {
@@ -187,6 +191,9 @@ func (e *GoBuildEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, st
 	if _, err := os.Stat(filepath.Join(r.CWD, "go.mod")); err != nil {
 		return NeedsReview, "no go.mod — build check skipped", nil
 	}
+	if _, err := lookPath("go"); err != nil {
+		return NeedsReview, "go not installed — build check skipped", nil
+	}
 	out, err := runCmd(ctx, r.CWD, "go", "build", "./...")
 	if err != nil {
 		return Fail, "build failed:\n" + truncate(out, 4000), nil
@@ -202,6 +209,9 @@ func (e *GoTestEvaluator) Name() string { return "go-test" }
 func (e *GoTestEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, string, error) {
 	if _, err := os.Stat(filepath.Join(r.CWD, "go.mod")); err != nil {
 		return NeedsReview, "no go.mod — test check skipped", nil
+	}
+	if _, err := lookPath("go"); err != nil {
+		return NeedsReview, "go not installed — test check skipped", nil
 	}
 	out, err := runCmd(ctx, r.CWD, "go", "test", "./...")
 	if err != nil {
@@ -244,6 +254,9 @@ func (e *NpmBuildEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, s
 	if !hasNpmScript(r.CWD, "build") {
 		return NeedsReview, `no "build" script in package.json — npm build check skipped`, nil
 	}
+	if _, err := lookPath("npm"); err != nil {
+		return NeedsReview, "npm not installed — build check skipped", nil
+	}
 	out, err := runCmd(ctx, r.CWD, "npm", "run", "build")
 	if err != nil {
 		return Fail, "npm run build failed:\n" + truncate(out, 4000), nil
@@ -264,6 +277,9 @@ func (e *NpmTestEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, st
 	}
 	if !hasNpmScript(r.CWD, "test") {
 		return NeedsReview, `no "test" script in package.json — npm test check skipped`, nil
+	}
+	if _, err := lookPath("npm"); err != nil {
+		return NeedsReview, "npm not installed — test check skipped", nil
 	}
 	out, err := runCmd(ctx, r.CWD, "npm", "test")
 	if err != nil {
@@ -359,7 +375,16 @@ func sameDir(a, b string) bool {
 	return a == b
 }
 
-// EvidenceEvaluator checks research results carry source evidence.
+// EvidenceEvaluator looks for reference markers in a research result.
+//
+// Finding none reports PASS_WITH_WARNINGS, not FAIL. This is a substring
+// scan, and a substring scan cannot tell an unsupported claim from a
+// well-supported answer that happens to cite the workspace rather than a
+// URL — which is exactly what research against a local repository produces.
+// As a hard failure it did two bad things at once: it failed honest answers,
+// driving real repair spend over a non-problem, while passing any answer
+// that used the word "source" anywhere. A check that is trivially satisfied
+// but not trivially passed honestly is worse than an explicit warning.
 type EvidenceEvaluator struct{}
 
 func (e *EvidenceEvaluator) Name() string { return "evidence" }
@@ -369,7 +394,7 @@ func (e *EvidenceEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, s
 	if strings.Contains(text, "http://") || strings.Contains(text, "https://") || strings.Contains(text, "[1]") || strings.Contains(text, "source") {
 		return Pass, "evidence references present", nil
 	}
-	return Fail, "research result lacks source references or citations", nil
+	return PassWithWarnings, "no source references or citations found — this scan cannot tell whether this answer needed any", nil
 }
 
 func truncate(s string, n int) string {
@@ -401,7 +426,7 @@ func (e *CargoBuildEvaluator) Evaluate(ctx context.Context, r Request) (Outcome,
 	if _, err := os.Stat(filepath.Join(r.CWD, "Cargo.toml")); err != nil {
 		return NeedsReview, "no Cargo.toml — cargo build check skipped", nil
 	}
-	if _, err := exec.LookPath("cargo"); err != nil {
+	if _, err := lookPath("cargo"); err != nil {
 		return NeedsReview, "cargo not installed — build check skipped", nil
 	}
 	out, err := runCmd(ctx, r.CWD, "cargo", "build")
@@ -420,7 +445,7 @@ func (e *CargoTestEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, 
 	if _, err := os.Stat(filepath.Join(r.CWD, "Cargo.toml")); err != nil {
 		return NeedsReview, "no Cargo.toml — cargo test check skipped", nil
 	}
-	if _, err := exec.LookPath("cargo"); err != nil {
+	if _, err := lookPath("cargo"); err != nil {
 		return NeedsReview, "cargo not installed — test check skipped", nil
 	}
 	out, err := runCmd(ctx, r.CWD, "cargo", "test")
@@ -452,7 +477,7 @@ func (e *PytestEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, str
 	if !marked {
 		return NeedsReview, "no Python project markers — pytest check skipped", nil
 	}
-	if _, err := exec.LookPath("pytest"); err != nil {
+	if _, err := lookPath("pytest"); err != nil {
 		return NeedsReview, "pytest not installed — test check skipped", nil
 	}
 	out, err := runCmd(ctx, r.CWD, "pytest", "-q")
@@ -479,7 +504,7 @@ func (e *GoVetEvaluator) Evaluate(ctx context.Context, r Request) (Outcome, stri
 	if _, err := os.Stat(filepath.Join(r.CWD, "go.mod")); err != nil {
 		return NeedsReview, "no go.mod — vet check skipped", nil
 	}
-	if _, err := exec.LookPath("go"); err != nil {
+	if _, err := lookPath("go"); err != nil {
 		return NeedsReview, "go not installed — vet check skipped", nil
 	}
 	out, err := runCmd(ctx, r.CWD, "go", "vet", "./...")
